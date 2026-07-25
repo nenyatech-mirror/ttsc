@@ -244,7 +244,7 @@ export async function transformTtsc(
         // A file the plugin declared volatile must never be served from the
         // cache: its output depends on non-file inputs, so the input-hash
         // snapshot cannot prove freshness. Fall through to a fresh transform.
-        !isVolatileFile({
+        !isVolatileFile(envelopeDerivation(cached), {
           file,
           projectRoot: cached.projectRoot,
           result: cached.result,
@@ -308,7 +308,9 @@ export async function transformTtsc(
     });
     notifyWatchInputs(hooks, { file, projectRoot, result, temporaryTsconfig });
     markCachedSourceServed(cached, file);
-    if (isVolatileFile({ file, projectRoot, result })) {
+    if (
+      isVolatileFile(envelopeDerivation(cached), { file, projectRoot, result })
+    ) {
       hooks?.markVolatile?.();
     }
     return createTransformResult(source, code);
@@ -378,6 +380,208 @@ function evictGeneration(
 }
 
 /**
+ * Per-envelope derivation state: every index the per-delivery paths need, built
+ * at most once and shared by all deliveries of one compiler result.
+ *
+ * Building the direct-edge index, the candidate entries, the declared-file
+ * identity sets, or the output/dependency key indexes per delivery costs
+ * O(envelope) `pathIdentityKey` computations per module — and each of those
+ * costs real `existsSync`/`realpathSync.native` syscalls on macOS
+ * ({@link pathIdentityKey}). A graph-bearing envelope (typia >= 13.1.19) turned
+ * that into O(modules x edges) syscalls per build, which is the
+ * samchon/ttsc#1007 stall. All deliveries of one generation share this state,
+ * so a delivery pays only its own reachability closure with memoized
+ * identities.
+ *
+ * Every index is lazy: a host that never wires `addWatchFile` and never misses
+ * a project-relative key pays nothing beyond the volatile/completeness
+ * membership sets, which are themselves built on first predicate use.
+ *
+ * Freshness matches the generation contract: every derivable path is a recorded
+ * project or external input, so persistent-mode validation already proves those
+ * paths unchanged on every non-build-scoped hit, and any change invalidates the
+ * generation — and this state with it. The `WeakMap` key is the envelope object
+ * itself, so the state dies when the generation does.
+ */
+interface TtscEnvelopeDerivation {
+  /** Memoized {@link pathIdentityKey} results, keyed by the exact input. */
+  readonly identities: Map<string, string>;
+  /**
+   * Lazily built reference-graph indexes, `undefined` until the first
+   * watch-input derivation. A host without an `addWatchFile` hook never pays
+   * the O(edges) build.
+   */
+  graph?: TtscEnvelopeGraphIndexes;
+  /**
+   * Lazily collected identities of the envelope's `volatile` member files,
+   * `undefined` until the first volatility predicate.
+   */
+  volatileFiles?: Set<string>;
+  /**
+   * Lazily collected identities of the envelope's `dependenciesComplete` member
+   * files, `undefined` until the first completeness predicate.
+   */
+  dependenciesComplete?: Set<string>;
+  /**
+   * Lazily built identity -> output source index of the `typescript` map (first
+   * match wins, mirroring the historical scan). `undefined` until the first
+   * project-relative key miss.
+   */
+  outputIndex?: Map<string, string>;
+  /**
+   * Lazily built identity -> `dependencies` entries index (first match wins,
+   * mirroring the historical scan). `undefined` until the first key miss.
+   */
+  dependencyIndex?: Map<string, unknown>;
+  /** Per-file memo of the final derived watch-input list. */
+  readonly watchInputs: Map<string, string[]>;
+}
+
+/** Reference-graph indexes shared by every watch-input derivation. */
+interface TtscEnvelopeGraphIndexes {
+  /** Identity of each direct-edge source -> its resolved absolute targets. */
+  readonly edges: Map<string, string[]>;
+  /** Identity of each direct-edge source -> its absolute spelling. */
+  readonly spellings: Map<string, string>;
+  /** Resolution-candidate entries in envelope order, sources pre-identified. */
+  readonly candidates: { source: string; files: string[] }[];
+  /** Resolved absolute `graph.globals` and `graph.configs` members. */
+  readonly globals: string[];
+  readonly configs: string[];
+}
+
+/**
+ * Derivation states keyed by the compiler result object. One result object is
+ * produced by one compile against one project root, so the root captured at
+ * build time is the only root the state ever sees.
+ */
+const ENVELOPE_DERIVATIONS = new WeakMap<
+  ITtscCompilerTransformation,
+  TtscEnvelopeDerivation
+>();
+
+/** Return the derivation state of `props.result`, building it on first use. */
+function envelopeDerivation(props: {
+  projectRoot: string;
+  result: ITtscCompilerTransformation;
+}): TtscEnvelopeDerivation {
+  const existing = ENVELOPE_DERIVATIONS.get(props.result);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created: TtscEnvelopeDerivation = {
+    identities: new Map(),
+    watchInputs: new Map(),
+  };
+  ENVELOPE_DERIVATIONS.set(props.result, created);
+  return created;
+}
+
+/**
+ * Build the reference-graph indexes of one envelope on first watch-input
+ * derivation. Malformed sections are dropped member by member, mirroring the
+ * historical per-delivery scan.
+ */
+function envelopeGraphIndexes(
+  state: TtscEnvelopeDerivation,
+  props: {
+    projectRoot: string;
+    result: ITtscCompilerTransformation;
+  },
+): TtscEnvelopeGraphIndexes {
+  if (state.graph !== undefined) {
+    return state.graph;
+  }
+  const built: TtscEnvelopeGraphIndexes = {
+    edges: new Map(),
+    spellings: new Map(),
+    candidates: [],
+    globals: [],
+    configs: [],
+  };
+  const graph =
+    props.result.type === "exception" ? undefined : props.result.graph;
+  if (graph !== undefined) {
+    for (const [source, targets] of Object.entries(graph.edges ?? {})) {
+      if (!Array.isArray(targets)) {
+        continue;
+      }
+      const absolute = path.resolve(props.projectRoot, source);
+      const identity = derivationIdentity(state, absolute);
+      built.spellings.set(identity, absolute);
+      const entries = built.edges.get(identity) ?? [];
+      entries.push(
+        ...targets
+          .filter(
+            (target): target is string =>
+              typeof target === "string" && target.length !== 0,
+          )
+          .map((target) => path.resolve(props.projectRoot, target)),
+      );
+      built.edges.set(identity, entries);
+    }
+    built.globals.push(...selectListedFiles(props.projectRoot, graph.globals));
+    built.configs.push(...selectListedFiles(props.projectRoot, graph.configs));
+    for (const [source, candidates] of Object.entries(graph.candidates ?? {})) {
+      if (!Array.isArray(candidates)) {
+        continue;
+      }
+      built.candidates.push({
+        source: derivationIdentity(
+          state,
+          path.resolve(props.projectRoot, source),
+        ),
+        files: selectListedFiles(props.projectRoot, candidates),
+      });
+    }
+  }
+  state.graph = built;
+  return built;
+}
+
+/**
+ * {@link pathIdentityKey} memoized inside one envelope's derivation state.
+ * Callers always pass already-resolved absolute paths, so the input string is a
+ * stable memo key.
+ */
+function derivationIdentity(
+  state: TtscEnvelopeDerivation,
+  file: string,
+): string {
+  const existing = state.identities.get(file);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const identity = pathIdentityKey(file);
+  state.identities.set(file, identity);
+  return identity;
+}
+
+/**
+ * Fold one envelope member list (`volatile`, `dependenciesComplete`) into an
+ * identity set. Members are keyed like `typescript`, so a project-relative and
+ * an absolute spelling of the same file share one identity; a malformed member
+ * is ignored rather than fatal.
+ */
+function collectDeclaredIdentities(
+  state: TtscEnvelopeDerivation,
+  projectRoot: string,
+  listed: unknown,
+): Set<string> {
+  const output = new Set<string>();
+  if (!Array.isArray(listed)) {
+    return output;
+  }
+  for (const entry of listed) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      continue;
+    }
+    output.add(derivationIdentity(state, path.resolve(projectRoot, entry)));
+  }
+  return output;
+}
+
+/**
  * Forward every derived watch input for `file` to the adapter's `addWatchFile`
  * hook: the plugin-reported `dependencies[file]` list unioned with the
  * host-owned reference graph's contribution (`reach(edges, file)`, `globals`,
@@ -425,7 +629,10 @@ function notifyWatchInputs(
  * volatile keeps the baseline: the two declarations contradict, so the
  * conservative one wins.
  *
- * Returns an empty list on exceptions.
+ * The derived list is a pure function of the envelope and the file's filesystem
+ * identity, so it is computed at most once per generation per file: sibling and
+ * repeated deliveries replay the per-envelope memo ({@link envelopeDerivation})
+ * instead of re-walking the graph. Returns an empty list on exceptions.
  */
 function selectWatchInputs(props: {
   file: string;
@@ -433,22 +640,49 @@ function selectWatchInputs(props: {
   result: ITtscCompilerTransformation;
   temporaryTsconfig?: string;
 }): string[] {
+  if (props.result.type === "exception") {
+    return [];
+  }
+  const state = envelopeDerivation(props);
+  const fileIdentity = derivationIdentity(state, props.file);
+  const memoized = state.watchInputs.get(fileIdentity);
+  if (memoized !== undefined) {
+    return memoized;
+  }
+  const derived = deriveWatchInputs(state, props, fileIdentity);
+  state.watchInputs.set(fileIdentity, derived);
+  return derived;
+}
+
+/** Compute one file's watch-input list over the shared per-envelope state. */
+function deriveWatchInputs(
+  state: TtscEnvelopeDerivation,
+  props: {
+    file: string;
+    projectRoot: string;
+    result: ITtscCompilerTransformation;
+    temporaryTsconfig?: string;
+  },
+  fileIdentity: string,
+): string[] {
+  const graph = envelopeGraphIndexes(state, props);
   const output: string[] = [];
   const seen = new Set<string>();
-  const excluded = new Set(
-    props.temporaryTsconfig === undefined
-      ? [pathIdentityKey(props.file)]
-      : [pathIdentityKey(props.file), pathIdentityKey(props.temporaryTsconfig)],
-  );
+  const excluded = new Set([fileIdentity]);
+  if (props.temporaryTsconfig !== undefined) {
+    excluded.add(derivationIdentity(state, props.temporaryTsconfig));
+  }
   for (const absolute of [
     ...selectFileDependencies(props),
-    ...selectGraphInputs({
+    ...selectGraphInputs(graph, state, {
       ...props,
-      complete: declaresCompleteDependencies(props) && !isVolatileFile(props),
+      complete:
+        declaresCompleteDependencies(state, props) &&
+        !isVolatileFile(state, props),
     }),
-    ...selectResolutionCandidateInputs(props),
+    ...selectResolutionCandidateInputs(graph, state, props),
   ]) {
-    const identity = pathIdentityKey(absolute);
+    const identity = derivationIdentity(state, absolute);
     if (excluded.has(identity) || seen.has(identity)) {
       continue;
     }
@@ -463,35 +697,37 @@ function selectWatchInputs(props: {
  * module reachable from `file`. They remain host-owned even when a plugin
  * declares `dependenciesComplete`: plugin code cannot vouch for a compiler
  * resolution change that occurs without any plugin input changing.
+ *
+ * Candidate entries and their source identities come from the shared
+ * per-envelope state, so one delivery scans only the candidates themselves
+ * instead of re-resolving every candidate source.
  */
-function selectResolutionCandidateInputs(props: {
-  file: string;
-  projectRoot: string;
-  result: ITtscCompilerTransformation;
-}): string[] {
-  if (props.result.type === "exception") {
-    return [];
-  }
-  const graph = props.result.graph;
-  if (graph === undefined || graph.candidates === undefined) {
+function selectResolutionCandidateInputs(
+  graph: TtscEnvelopeGraphIndexes,
+  state: TtscEnvelopeDerivation,
+  props: {
+    file: string;
+    projectRoot: string;
+    result: ITtscCompilerTransformation;
+  },
+): string[] {
+  if (
+    props.result.type === "exception" ||
+    props.result.graph?.candidates === undefined
+  ) {
     return [];
   }
   const reachable = new Set(
-    selectReachableSources(props.projectRoot, props.file, graph).map(
-      pathIdentityKey,
+    selectReachableSources(graph, state, props.file).map((source) =>
+      derivationIdentity(state, source),
     ),
   );
   const output: string[] = [];
-  for (const [source, candidates] of Object.entries(graph.candidates)) {
-    if (
-      !reachable.has(
-        pathIdentityKey(path.resolve(props.projectRoot, source)),
-      ) ||
-      !Array.isArray(candidates)
-    ) {
+  for (const entry of graph.candidates) {
+    if (!reachable.has(entry.source)) {
       continue;
     }
-    output.push(...selectListedFiles(props.projectRoot, candidates));
+    output.push(...entry.files);
   }
   return output;
 }
@@ -510,62 +746,47 @@ function selectResolutionCandidateInputs(props: {
  * `dependencies[file]` list the complete replacement for them. Returns an empty
  * list on exceptions or without a graph.
  */
-function selectGraphInputs(props: {
-  complete: boolean;
-  file: string;
-  projectRoot: string;
-  result: ITtscCompilerTransformation;
-}): string[] {
-  if (props.result.type === "exception") {
-    return [];
-  }
-  const graph = props.result.graph;
-  if (graph === undefined) {
+function selectGraphInputs(
+  graph: TtscEnvelopeGraphIndexes,
+  state: TtscEnvelopeDerivation,
+  props: {
+    complete: boolean;
+    file: string;
+    projectRoot: string;
+    result: ITtscCompilerTransformation;
+  },
+): string[] {
+  if (props.result.type === "exception" || props.result.graph === undefined) {
     return [];
   }
   const output: string[] = [];
   if (!props.complete) {
-    output.push(...selectReachableEdges(props.projectRoot, props.file, graph));
-    output.push(...selectListedFiles(props.projectRoot, graph.globals));
+    output.push(...selectReachableEdges(graph, state, props.file));
+    output.push(...graph.globals);
   }
-  output.push(...selectListedFiles(props.projectRoot, graph.configs));
+  output.push(...graph.configs);
   return output;
 }
 
 /**
  * Walk the reachability closure of the graph's direct `edges` from `file`,
  * returning the absolute path of every file reached (the starting file itself
- * excluded, even when a cycle points back at it).
+ * excluded, even when a cycle points back at it). Reads the shared per-envelope
+ * edge index instead of rebuilding it per delivery.
  */
 function selectReachableEdges(
-  projectRoot: string,
+  graph: TtscEnvelopeGraphIndexes,
+  state: TtscEnvelopeDerivation,
   file: string,
-  graph: ITtscCompilerTransformation.IReferenceGraph,
 ): string[] {
-  const edges = new Map<string, string[]>();
-  for (const [source, targets] of Object.entries(graph.edges ?? {})) {
-    if (!Array.isArray(targets)) {
-      continue;
-    }
-    const identity = pathIdentityKey(path.resolve(projectRoot, source));
-    const entries = edges.get(identity) ?? [];
-    entries.push(
-      ...targets
-        .filter(
-          (target): target is string =>
-            typeof target === "string" && target.length !== 0,
-        )
-        .map((target) => path.resolve(projectRoot, target)),
-    );
-    edges.set(identity, entries);
-  }
   const output: string[] = [];
-  const visited = new Set<string>([pathIdentityKey(file)]);
+  const visited = new Set<string>([derivationIdentity(state, file)]);
   const queue = [file];
   while (queue.length !== 0) {
     const current = queue.pop()!;
-    for (const target of edges.get(pathIdentityKey(current)) ?? []) {
-      const identity = pathIdentityKey(target);
+    for (const target of graph.edges.get(derivationIdentity(state, current)) ??
+      []) {
+      const identity = derivationIdentity(state, target);
       if (visited.has(identity)) {
         continue;
       }
@@ -583,43 +804,24 @@ function selectReachableEdges(
  * than targets, so this is intentionally distinct from selectReachableEdges.
  */
 function selectReachableSources(
-  projectRoot: string,
+  graph: TtscEnvelopeGraphIndexes,
+  state: TtscEnvelopeDerivation,
   file: string,
-  graph: ITtscCompilerTransformation.IReferenceGraph,
 ): string[] {
-  const edges = new Map<string, string[]>();
-  const spellings = new Map<string, string>();
-  for (const [source, targets] of Object.entries(graph.edges ?? {})) {
-    if (!Array.isArray(targets)) {
-      continue;
-    }
-    const absolute = path.resolve(projectRoot, source);
-    const identity = pathIdentityKey(absolute);
-    spellings.set(identity, absolute);
-    const entries = edges.get(identity) ?? [];
-    entries.push(
-      ...targets
-        .filter(
-          (target): target is string =>
-            typeof target === "string" && target.length !== 0,
-        )
-        .map((target) => path.resolve(projectRoot, target)),
-    );
-    edges.set(identity, entries);
-  }
   const output = [file];
-  const visited = new Set<string>([pathIdentityKey(file)]);
+  const visited = new Set<string>([derivationIdentity(state, file)]);
   const queue = [file];
   while (queue.length !== 0) {
     const current = queue.pop()!;
-    for (const target of edges.get(pathIdentityKey(current)) ?? []) {
-      const identity = pathIdentityKey(target);
+    for (const target of graph.edges.get(derivationIdentity(state, current)) ??
+      []) {
+      const identity = derivationIdentity(state, target);
       if (visited.has(identity)) {
         continue;
       }
       visited.add(identity);
       queue.push(target);
-      output.push(spellings.get(identity) ?? target);
+      output.push(graph.spellings.get(identity) ?? target);
     }
   }
   return output;
@@ -647,17 +849,26 @@ function selectListedFiles(projectRoot: string, listed: unknown): string[] {
 /**
  * Report whether the plugin declared `file` volatile: its output depends on
  * non-file inputs (environment, time, network), so neither the project
- * transform cache nor a bundler's persistent cache may replay it.
+ * transform cache nor a bundler's persistent cache may replay it. Reads the
+ * per-envelope identity set instead of rescanning the member list.
  */
-function isVolatileFile(props: {
-  file: string;
-  projectRoot: string;
-  result: ITtscCompilerTransformation;
-}): boolean {
+function isVolatileFile(
+  state: TtscEnvelopeDerivation,
+  props: {
+    file: string;
+    projectRoot: string;
+    result: ITtscCompilerTransformation;
+  },
+): boolean {
   if (props.result.type === "exception") {
     return false;
   }
-  return declaresFile(props.result.volatile, props);
+  const declared = (state.volatileFiles ??= collectDeclaredIdentities(
+    state,
+    props.projectRoot,
+    props.result.volatile,
+  ));
+  return declared.has(derivationIdentity(state, props.file));
 }
 
 /**
@@ -666,44 +877,30 @@ function isVolatileFile(props: {
  * itself and the universal config chain. Callers must still keep the baseline
  * for a file the same envelope declared volatile.
  */
-function declaresCompleteDependencies(props: {
-  file: string;
-  projectRoot: string;
-  result: ITtscCompilerTransformation;
-}): boolean {
+function declaresCompleteDependencies(
+  state: TtscEnvelopeDerivation,
+  props: {
+    file: string;
+    projectRoot: string;
+    result: ITtscCompilerTransformation;
+  },
+): boolean {
   if (props.result.type === "exception") {
     return false;
   }
-  return declaresFile(props.result.dependenciesComplete, props);
-}
-
-/**
- * Report whether one of the envelope's transformed-file lists (`volatile`,
- * `dependenciesComplete`) names `file`. Members are keyed like `typescript`, so
- * a project-relative and an absolute spelling of the same file both match; a
- * malformed member is ignored rather than fatal.
- */
-function declaresFile(
-  listed: unknown,
-  props: { file: string; projectRoot: string },
-): boolean {
-  if (!Array.isArray(listed)) {
-    return false;
-  }
-  return listed.some(
-    (entry) =>
-      typeof entry === "string" &&
-      entry.length !== 0 &&
-      pathIdentityKey(path.resolve(props.projectRoot, entry)) ===
-        pathIdentityKey(props.file),
-  );
+  const declared = (state.dependenciesComplete ??= collectDeclaredIdentities(
+    state,
+    props.projectRoot,
+    props.result.dependenciesComplete,
+  ));
+  return declared.has(derivationIdentity(state, props.file));
 }
 
 /**
  * Extract the absolute, deduplicated dependency list for a single file from the
  * compiler result. Mirrors {@link selectTransformedSource}'s key lookup: fast
- * project-relative match first, then a resolve-based scan. Returns an empty
- * list on exceptions or when the plugin reported nothing.
+ * project-relative match first, then a per-envelope identity index. Returns an
+ * empty list on exceptions or when the plugin reported nothing.
  */
 function selectFileDependencies(props: {
   file: string;
@@ -719,35 +916,59 @@ function selectFileDependencies(props: {
   }
   const key = toProjectKey(props.projectRoot, props.file);
   let entries = dependencies[key];
+  const state = envelopeDerivation(props);
   if (entries === undefined) {
-    for (const [candidate, candidateEntries] of Object.entries(dependencies)) {
-      if (
-        pathIdentityKey(path.resolve(props.projectRoot, candidate)) ===
-        pathIdentityKey(props.file)
-      ) {
-        entries = candidateEntries;
-        break;
-      }
-    }
+    const index = (state.dependencyIndex ??= createEnvelopeKeyIndex(
+      state,
+      props.projectRoot,
+      dependencies,
+    ));
+    entries = index.get(derivationIdentity(state, props.file)) as
+      | string[]
+      | undefined;
   }
   if (!Array.isArray(entries)) {
     return [];
   }
   const output: string[] = [];
   const seen = new Set<string>();
+  const fileIdentity = derivationIdentity(state, props.file);
   for (const entry of entries) {
     if (typeof entry !== "string" || entry.length === 0) {
       continue;
     }
     const absolute = path.resolve(props.projectRoot, entry);
-    const identity = pathIdentityKey(absolute);
-    if (identity === pathIdentityKey(props.file) || seen.has(identity)) {
+    const identity = derivationIdentity(state, absolute);
+    if (identity === fileIdentity || seen.has(identity)) {
       continue;
     }
     seen.add(identity);
     output.push(absolute);
   }
   return output;
+}
+
+/**
+ * Build a first-match identity index over one envelope key map (`typescript`,
+ * `dependencies`), mirroring the historical per-delivery scan that returned the
+ * first entry whose resolved key matched by filesystem identity.
+ */
+function createEnvelopeKeyIndex<T>(
+  state: TtscEnvelopeDerivation,
+  projectRoot: string,
+  keyed: Record<string, T>,
+): Map<string, T> {
+  const index = new Map<string, T>();
+  for (const [candidate, value] of Object.entries(keyed)) {
+    const identity = derivationIdentity(
+      state,
+      path.resolve(projectRoot, candidate),
+    );
+    if (!index.has(identity)) {
+      index.set(identity, value);
+    }
+  }
+  return index;
 }
 
 /**
@@ -1479,14 +1700,17 @@ function selectTransformedSource(props: {
   if (direct !== undefined) {
     return direct;
   }
-  // Slow path: resolve each candidate to an absolute path for comparison.
-  for (const [candidate, source] of Object.entries(props.result.typescript)) {
-    if (
-      pathIdentityKey(path.resolve(props.projectRoot, candidate)) ===
-      pathIdentityKey(props.file)
-    ) {
-      return source;
-    }
+  // Slow path: the first-match identity index of the envelope's `typescript`
+  // keys, built once per generation instead of scanned per delivery.
+  const state = envelopeDerivation(props);
+  const index = (state.outputIndex ??= createEnvelopeKeyIndex(
+    state,
+    props.projectRoot,
+    props.result.typescript,
+  ));
+  const source = index.get(derivationIdentity(state, props.file));
+  if (source !== undefined) {
+    return source;
   }
   throw new Error(`ttsc transform did not return output for ${props.file}`);
 }

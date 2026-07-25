@@ -3,12 +3,15 @@
 This experiment drives the **real** `@ttsc/unplugin` Rollup plugin object over a synthetic project of `N` TypeScript files and measures, per simulated build:
 
 - **plugin runs** — how many times the whole project is re-transformed (native plugin spawns). A correct per-build cache transforms the project **once**.
-- **`fs.readFileSync` calls / bytes** — the file-system work the adapter performs while serving the `N` modules. A correct cache walks the tree a constant number of times; the current code re-hashes the entire project on every module.
+- **`fs.readFileSync` calls / bytes** — the file-system work the adapter performs while serving the `N` modules. A correct cache walks the tree a constant number of times per build.
+- **fs identity probes** — the `existsSync`/`realpathSync.native` call volume the macOS `pathIdentityKey` branch would pay, counted under a simulated `process.platform = "darwin"` so it is observable on any host. Correct watch-input derivation pays it once per distinct graph path per generation, not once per module delivery.
 
-The guarded invariant is **`plugin runs == 1`**: a build must transform the whole project exactly once and serve every other module from the per-build cache. The harness exits non-zero if any build exceeds one transform.
+The guarded invariants are **`plugin runs == 1`** and, for the graph scenario, **bounded probes per module** — the harness exits non-zero when either breaks.
 
 - **Scenario A — output keys under the project root.** The cache hits, so the project is transformed once. (`reads` still grow with `N`: validating a cache hit re-hashes the project to detect a sibling-file change — bounded work that the existing invalidation contract requires.)
 - **Scenario B — one output key outside the validator's directory walk** (a `node_modules/**` path, exactly what the native host emits for program dependencies). Before the fix the store-time and validate-time hash key sets diverged, the cache _never_ hit, and the whole project was re-transformed once per module (`plugin runs == N`); now the cache hits and `plugin runs == 1`.
+- **Scenario C — a graph-bearing envelope (the typia >= 13.1.19 shape).** The sidecar stamps `graph` (every module edges to its siblings plus `K` external `node_modules` declarations, and one missing resolution candidate) and per-file `dependencies`. Before the #1007 fix every cache-hit delivery re-walked the whole graph: probes per module grew linearly with the edge count (6.7k/12k/22.8k probes per module at E=2.6k/5.1k/10.1k, ~76-95 s for 99 deliveries), the O(modules x edges) syscall storm behind the #970 residual stall on macOS. The gate is 64 probes per module; the fixed code derives once per generation and stays flat regardless of `E`.
+- **Scenario D — the same envelope without a build boundary** (the Vite development server's persistent-validation mode). Measurement only: it quantifies the deliberate per-delivery complete-input validation against a large external input set. The path is linear and is the #980 freshness contract, so no invariant gate applies.
 
 The adapter source is bundled on the fly with esbuild (with `ttsc` and `unplugin` kept external), so the production code path runs unmodified — no rebuilt `lib` required.
 
