@@ -13,10 +13,18 @@ import (
 // after the factory call, otherwise only the local keys survive and inherited
 // rules or format options disappear.
 //
-// 1. Write a shared `.ts` config with rules and format options.
-// 2. Write an async package config that dynamically imports and spreads it.
-// 3. Assert shared rules and format options survive beside the local ignores.
+//  1. Write a shared `.ts` config with rules and format options.
+//  2. Write a logging async package config that dynamically imports and spreads
+//     it, proving stdout cannot corrupt the private result channel.
+//  3. Assert shared rules and format options survive beside the local ignores.
+//  4. Assert the executable config and imported helper are both published as
+//     config paths, then change only the helper and observe fresh rules.
 func TestLoadRuleConfigTypeScriptFactoryMergesReturnedDefaultWrapper(t *testing.T) {
+  // This case has reported a config's own import missing from the published
+  // paths on Windows, where the temporary directory carries a short component.
+  // Ask the loader to report the graph it built, so a failure names the URLs it
+  // resolved instead of only the dependencies that survived them.
+  t.Setenv("TTSC_LINT_DEBUG_CONFIG_GRAPH", "1")
   dir := t.TempDir()
   writeFile(t, filepath.Join(dir, "tsconfig.json"), "{}")
   writeFile(t, filepath.Join(dir, "shared-lint.config.ts"), `export default {
@@ -26,6 +34,7 @@ func TestLoadRuleConfigTypeScriptFactoryMergesReturnedDefaultWrapper(t *testing.
   },
 };`)
   writeFile(t, filepath.Join(dir, "ttsc-lint.config.ts"), `export default async () => {
+  console.log("loading TypeScript lint config");
   const shared = await import("./shared-lint.config.ts");
   return {
     ...shared,
@@ -63,5 +72,41 @@ func TestLoadRuleConfigTypeScriptFactoryMergesReturnedDefaultWrapper(t *testing.
   }
   if opts.Prefer != "never" {
     t.Fatalf("prefer want \"never\" from shared format, got %q", opts.Prefer)
+  }
+
+  paths := resolver.(interface{ ConfigPaths() []string }).ConfigPaths()
+  for _, expected := range []string{
+    filepath.Join(dir, "ttsc-lint.config.ts"),
+    filepath.Join(dir, "shared-lint.config.ts"),
+  } {
+    found := false
+    for _, actual := range paths {
+      if filepath.Clean(actual) == filepath.Clean(expected) {
+        found = true
+        break
+      }
+    }
+    if !found {
+      t.Fatalf("ConfigPaths omitted %s from %v", expected, paths)
+    }
+  }
+
+  writeFile(t, filepath.Join(dir, "shared-lint.config.ts"), `export default {
+  format: { semi: false },
+  rules: {
+    "no-debugger": "warning",
+  },
+};`)
+  refreshed, err := LoadConfigResolver(&PluginEntry{
+    Config: map[string]any{
+      "configFile": "./ttsc-lint.config.ts",
+    },
+  }, dir, "tsconfig.json")
+  if err != nil {
+    t.Fatalf("LoadConfigResolver after helper edit: %v", err)
+  }
+  if got := refreshed.ResolveRules(filepath.Join(dir, "src", "main.ts")).
+    Rules.Severity("no-debugger"); got != SeverityWarn {
+    t.Fatalf("helper-only edit stayed cached: want warning, got %v", got)
   }
 }
