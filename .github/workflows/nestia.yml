@@ -90,10 +90,18 @@ jobs:
           name: ttsc-tarballs
           path: experimental/tarballs
 
-      - name: Clone nestia
-        run: |
-          rm -rf experimental/nestia
-          git clone --depth=1 --branch master https://github.com/samchon/nestia experimental/nestia
+      # Keep this integration gate attributable to ttsc. nestia master became
+      # red in its own sdk lane after this revision (PR #1594, openapi_v2), so a
+      # moving clone made every ttsc change inherit an unrelated upstream
+      # failure. Advance the pin only to a revision with a reviewed green full
+      # suite; 3b27e69b is the merge of nestia #1593 and its complete test run
+      # 29959327169 passed.
+      - name: Check out verified nestia integration revision
+        uses: actions/checkout@v4
+        with:
+          repository: samchon/nestia
+          ref: 3b27e69b69dea3f102315042dce87c18d81be74a
+          path: experimental/nestia
 
       - name: Use local ttsc tarballs
         working-directory: experimental/nestia
