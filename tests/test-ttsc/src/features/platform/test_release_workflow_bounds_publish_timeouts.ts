@@ -22,12 +22,46 @@ export const test_release_workflow_bounds_publish_timeouts = () => {
   // Timeout keys live on uncommented lines by construction; dropping comments
   // keeps prose about timeouts from counting as the key itself.
   const lines = source.split(/\r?\n/).filter((line) => !/^\s*#/.test(line));
+  assertReleaseTimeouts(lines);
+
+  // A same-named mapping outside `jobs` must never satisfy a job assertion.
+  const shadowed = [...lines];
+  const jobsStart = shadowed.findIndex((line) => line === "jobs:");
+  const releaseStart = shadowed.findIndex(
+    (line, index) => index > jobsStart && line === "  release:",
+  );
+  const releaseTimeout = shadowed.findIndex(
+    (line, index) => index > releaseStart && line === "    timeout-minutes: 15",
+  );
+  assert.notEqual(jobsStart, -1);
+  assert.notEqual(releaseStart, -1);
+  assert.notEqual(releaseTimeout, -1);
+  shadowed.splice(releaseTimeout, 1);
+  shadowed.splice(
+    jobsStart,
+    0,
+    "shadow:",
+    "  release:",
+    "    timeout-minutes: 15",
+  );
+  assert.throws(
+    () => assertReleaseTimeouts(shadowed),
+    /release job must own exactly timeout-minutes: 15/,
+  );
+
+  // A later top-level mapping and its children are not release jobs.
+  assertReleaseTimeouts([...lines, "postlude:", "  phantom:"]);
+};
+
+function assertReleaseTimeouts(lines: string[]): void {
+  const jobs = selectYamlMapping(lines, "jobs:", 0);
+  const publish = selectYamlMapping(jobs, "publish:", 2);
 
   for (const [step, budget] of [
     ["Publish VS Code Marketplace extension", 10],
     ["Publish to npm", 20],
   ] as Array<[string, number]>) {
-    const block = selectYamlMapping(lines, `- name: ${step}`, 6);
+    const block = selectYamlMapping(publish, `- name: ${step}`, 6);
     assert.deepEqual(
       block.filter((line) => /^ {8}timeout-minutes:/.test(line)),
       [`        timeout-minutes: ${budget}`],
@@ -41,7 +75,7 @@ export const test_release_workflow_bounds_publish_timeouts = () => {
     ["vscode-smoke", 15],
     ["release", 15],
   ] as Array<[string, number]>) {
-    const block = selectYamlMapping(lines, `${job}:`, 2);
+    const block = selectYamlMapping(jobs, `${job}:`, 2);
     assert.deepEqual(
       block.filter((line) => /^ {4}timeout-minutes:/.test(line)),
       [`    timeout-minutes: ${budget}`],
@@ -49,8 +83,7 @@ export const test_release_workflow_bounds_publish_timeouts = () => {
     );
   }
 
-  const jobNames = lines
-    .slice(lines.findIndex((line) => line === "jobs:") + 1)
+  const jobNames = jobs
     .filter((line) => /^ {2}\S[^:]*:\r?$/.test(line))
     .map((line) => line.trim().slice(0, -1));
   assert.deepEqual(jobNames, [
@@ -59,7 +92,7 @@ export const test_release_workflow_bounds_publish_timeouts = () => {
     "vscode-smoke",
     "release",
   ]);
-};
+}
 
 /**
  * Select one YAML mapping whose header has exactly `indent` leading spaces. The
