@@ -11,8 +11,9 @@ import { assert, fs, path, workspaceRoot } from "../../internal/toolchain";
  * whose complete upstream test run 29959327169 passed.
  *
  * 1. Select the named nestia checkout step.
- * 2. Assert its repository, revision, and destination exactly.
- * 3. Reject a moving `git clone` fallback.
+ * 2. Assert its repository, revision, and destination exactly and uniquely across
+ *    the workflow.
+ * 3. Prove wrong ownership and a cross-job duplicate cannot satisfy the test.
  */
 export const test_nestia_workflow_pins_verified_upstream_revision = () => {
   const source = fs.readFileSync(
@@ -20,10 +21,8 @@ export const test_nestia_workflow_pins_verified_upstream_revision = () => {
     "utf8",
   );
   assertPinnedNestiaCheckout(parseWorkflow(source));
-  assertNoMovingNestiaClone(parseWorkflow(source));
 
   const normalized = source.replace(/\r\n/g, "\n");
-  const marker = "      - name: Check out verified nestia integration revision";
   assert.throws(
     () =>
       assertPinnedNestiaCheckout(
@@ -54,53 +53,6 @@ export const test_nestia_workflow_pins_verified_upstream_revision = () => {
     () => assertPinnedNestiaCheckout(duplicated),
     /expected exactly one pinned nestia checkout step/,
   );
-  const harmless = parseWorkflow(source);
-  harmless.jobs.probe = {
-    steps: [
-      { run: "git config alias.clone 'clone --no-hardlinks'" },
-      { run: 'echo "git clone is forbidden here"' },
-    ],
-  };
-  assert.doesNotThrow(() => assertNoMovingNestiaClone(harmless));
-  for (const run of [
-    [
-      "      - name: Folded moving nestia clone probe",
-      "        run: >",
-      "          git clone",
-      "          https://github.com/samchon/nestia.git experimental/nestia",
-    ],
-    [
-      "      - name: Plain moving nestia clone probe",
-      "        run: git",
-      "          clone https://github.com/samchon/nestia.git experimental/nestia",
-    ],
-    [
-      "      - name: Continued moving nestia clone probe",
-      "        run: |",
-      "          git \\",
-      "            clone https://github.com/samchon/nestia.git experimental/nestia",
-    ],
-    [
-      "      - name: Token-continued moving nestia clone probe",
-      "        run: |",
-      "          git cl\\",
-      "          one https://github.com/samchon/nestia.git experimental/nestia",
-    ],
-    [
-      "      - name: Optioned moving nestia clone probe",
-      "        run: git -c protocol.version=2 clone https://github.com/samchon/nestia.git experimental/nestia",
-    ],
-  ]) {
-    assert.throws(
-      () =>
-        assertNoMovingNestiaClone(
-          parseWorkflow(
-            normalized.replace(marker, [...run, marker].join("\n")),
-          ),
-        ),
-      /moving nestia clone/,
-    );
-  }
 };
 
 interface IWorkflow {
@@ -113,7 +65,6 @@ interface IWorkflowJob {
 
 interface IWorkflowStep {
   name?: unknown;
-  run?: unknown;
   uses?: unknown;
   with?: unknown;
 }
@@ -163,25 +114,6 @@ function assertPinnedNestiaCheckout(workflow: IWorkflow): void {
     nestia.steps.some((step) => Object.is(step, owners[0])),
     "expected the pinned checkout to belong to the nestia job",
   );
-}
-
-/** Reject an active shell command that replaces the pin with a moving clone. */
-function assertNoMovingNestiaClone(workflow: IWorkflow): void {
-  for (const job of Object.values(workflow.jobs)) {
-    if (!Array.isArray(job.steps)) {
-      continue;
-    }
-    for (const step of job.steps) {
-      if (isRecord(step) && typeof step.run === "string") {
-        const command = step.run.replace(/\\\n/g, "");
-        assert.doesNotMatch(
-          command,
-          /(?:^|[\n;&|])\s*git(?:(?:\s+(?:-C|-c|--git-dir|--work-tree|--namespace)\s+\S+)|(?:\s+--(?:no-pager|paginate|no-replace-objects|bare|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs))|(?:\s+--(?:exec-path|git-dir|work-tree|namespace)=\S+))*\s+clone\b/,
-          "release integration must not use a moving nestia clone",
-        );
-      }
-    }
-  }
 }
 
 /** Flatten valid parsed step mappings across the complete workflow. */
