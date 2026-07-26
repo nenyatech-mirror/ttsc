@@ -97,9 +97,10 @@ func (binding *projectBinding) Revalidate() error {
     return nil
   }
   return fmt.Errorf(
-    "project blocked logical=%s physical=%s invocation=%s lifecycle=%s explicit=%s origin=%s sources=%d",
+    "project blocked logical=%s physical=%s logicalRoot=%s invocation=%s lifecycle=%s explicit=%s origin=%s sources=%d",
     binding.identity.LogicalConfigPath,
     binding.identity.PhysicalConfigPath,
+    binding.identity.LogicalProjectRoot,
     binding.identity.InvocationCwd,
     binding.identity.LifecycleID,
     binding.identity.ExplicitProjectRoot,
@@ -315,7 +316,10 @@ module.exports = {
     fs.writeFileSync(secondFile, "export const second = 2;\n");
     const configURI = pathToFileURL(logicalConfig).href;
     const client = TtscserverClient.startLauncher(logicalRoot, {
-      env: { TTSC_CACHE_DIR: SHARED_PLUGIN_CACHE_DIR },
+      env: {
+        TTSC_CACHE_DIR: SHARED_PLUGIN_CACHE_DIR,
+        TTSC_PLUGIN_CONFIG_DIR: "",
+      },
     });
     try {
       await initializeTtscserverClient(client, logicalRoot);
@@ -343,6 +347,29 @@ module.exports = {
           (diagnostic) => diagnostic.code === "guard/project",
         ).length,
         1,
+      );
+      const lspProjectDiagnostic = failedParams.diagnostics?.find(
+        (diagnostic) => diagnostic.code === "guard/project",
+      );
+      assert.equal(
+        lspProjectDiagnostic?.message?.includes(`logical=${logicalConfig}`),
+        true,
+      );
+      assert.equal(
+        lspProjectDiagnostic?.message?.includes(`physical=${physicalConfig}`),
+        true,
+      );
+      assert.equal(
+        lspProjectDiagnostic?.message?.includes(`logicalRoot=${logicalRoot}`),
+        true,
+      );
+      assert.equal(
+        lspProjectDiagnostic?.message?.includes(`invocation=${logicalRoot}`),
+        true,
+      );
+      assert.equal(
+        lspProjectDiagnostic?.message?.includes("explicit= origin= sources="),
+        true,
       );
 
       fs.writeFileSync(guardState, "clean\n");

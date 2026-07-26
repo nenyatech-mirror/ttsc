@@ -92,22 +92,22 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Trace LSP messages between VS Code and ttscserver."
+          "description": "Trace LSP messages between VS Code and ttscserver when the ttsc (trace) output channel log level is Trace."
         }
       }
     }
   },
   "scripts": {
-    "build": "rimraf lib dist && node build/build.cjs"
+    "build": "tsc --noEmit && rimraf lib dist && node build/build.cjs"
   },
   "devDependencies": {
     "@types/node": "catalog:utils",
     "@types/vscode": "^1.94.0",
-    "@vscode/vsce": "^3.6.1",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.25.12",
     "rimraf": "catalog:utils",
     "ttsc": "workspace:*",
     "typescript": "catalog:typescript",
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.1.0"
   }
 }

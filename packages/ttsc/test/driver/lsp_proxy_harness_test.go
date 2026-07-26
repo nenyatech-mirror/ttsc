@@ -3,6 +3,7 @@ package driver_test
 import (
   "context"
   "errors"
+  "fmt"
   "io"
   "net/url"
   "os"
@@ -12,6 +13,11 @@ import (
   "time"
 
   "github.com/samchon/ttsc/packages/ttsc/driver"
+)
+
+const (
+  proxyHarnessFrameTimeout    = 10 * time.Second
+  proxyHarnessShutdownTimeout = 3 * time.Second
 )
 
 // proxyHarness wires the byte-level LSP proxy onto in-memory pipes so
@@ -25,6 +31,8 @@ type proxyHarness struct {
   cancel context.CancelFunc
 
   editorInW    *io.PipeWriter
+  editorOutR   *io.PipeReader
+  upstreamInR  *io.PipeReader
   upstreamOutW *io.PipeWriter
 
   editorOutFR  *driver.FrameReader
@@ -62,6 +70,8 @@ func newProxyHarnessWithOptions(t *testing.T, source driver.PluginSource, opts d
     proxy:        proxy,
     cancel:       cancel,
     editorInW:    edInW,
+    editorOutR:   edOutR,
+    upstreamInR:  upInR,
     upstreamOutW: upOutW,
     editorOutFR:  driver.NewFrameReader(edOutR),
     upstreamInFR: driver.NewFrameReader(upInR),
@@ -79,7 +89,9 @@ func newProxyHarnessWithOptions(t *testing.T, source driver.PluginSource, opts d
     upOutR.Close()
   }()
   t.Cleanup(func() {
-    h.shutdown()
+    if err := h.shutdown(); err != nil && !t.Failed() {
+      t.Errorf("proxy.Run shutdown: %v", err)
+    }
   })
   return h
 }
@@ -90,9 +102,20 @@ func newProxyHarnessWithOptions(t *testing.T, source driver.PluginSource, opts d
 func (h *proxyHarness) shutdown() error {
   _ = h.editorInW.Close()
   _ = h.upstreamOutW.Close()
+  // A failed assertion can leave the proxy blocked writing to an output pipe
+  // that the test stopped reading. Only force-close readers on that already
+  // failed path; a healthy test must prove that proxy.Run drains normally.
+  if h.t.Failed() {
+    _ = h.editorOutR.Close()
+    _ = h.upstreamInR.Close()
+  }
+  forced := false
   select {
   case <-h.runDone:
-  case <-time.After(3 * time.Second):
+  case <-time.After(proxyHarnessShutdownTimeout):
+    forced = true
+    _ = h.editorOutR.Close()
+    _ = h.upstreamInR.Close()
     h.cancel()
     select {
     case <-h.runDone:
@@ -100,8 +123,24 @@ func (h *proxyHarness) shutdown() error {
       h.t.Fatal("proxy.Run did not return after cancel")
     }
   }
+  h.cancel()
+  _ = h.editorOutR.Close()
+  _ = h.upstreamInR.Close()
   h.runErrMu.Lock()
   defer h.runErrMu.Unlock()
+  if forced {
+    if h.runErr != nil {
+      return fmt.Errorf(
+        "proxy.Run did not drain within %s: %w",
+        proxyHarnessShutdownTimeout,
+        h.runErr,
+      )
+    }
+    return fmt.Errorf(
+      "proxy.Run did not drain within %s",
+      proxyHarnessShutdownTimeout,
+    )
+  }
   return h.runErr
 }
 
@@ -124,7 +163,7 @@ func (h *proxyHarness) sendUpstream(body []byte) {
 
 // recvUpstream returns the next frame the proxy forwarded to the
 // upstream tsgo server (i.e. an editor->server message after the proxy's
-// intercepts). Times out after two seconds to keep failing tests fast.
+// intercepts). Uses a bounded wait so a missing frame fails deterministically.
 func (h *proxyHarness) recvUpstream() []byte {
   h.t.Helper()
   return h.readWithTimeout(h.upstreamInFR, "upstream")
@@ -153,8 +192,12 @@ func (h *proxyHarness) readWithTimeout(fr *driver.FrameReader, label string) []b
       h.t.Fatalf("%s frame read: %v", label, r.err)
     }
     return r.body
-  case <-time.After(2 * time.Second):
-    h.t.Fatalf("%s frame did not arrive in 2s", label)
+  case <-time.After(proxyHarnessFrameTimeout):
+    h.t.Fatalf(
+      "%s frame did not arrive in %s",
+      label,
+      proxyHarnessFrameTimeout,
+    )
     return nil
   }
 }

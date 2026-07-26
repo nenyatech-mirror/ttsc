@@ -36,6 +36,7 @@ type WatchTopologyOptions = Pick<
 type WatchTopologyCallbacks = {
   onError(location: string, error: unknown): void;
   onInputChange(change: WatchInputChange): void;
+  onProjectInputWatchUnavailable?(roots: readonly string[]): void;
   onProjectInputWatchRoots?(roots: readonly string[]): void;
   onTopologyChange(): void;
 };
@@ -99,10 +100,17 @@ export class WatchTopology {
     reloadFiles: [],
     root: "",
   };
+  private projectInputRecoveryScheduled = false;
   private projectInputRejectedWatchRoots = new Set<string>();
+  private projectInputRequiredWatchRoots = new Map<string, string>();
+  private projectInputUnobservedWatchRoots = new Map<string, string>();
   private projectInputWatchRoots = new Map<string, string>();
   private projectInputWatchers = new Map<string, fs.FSWatcher>();
   private projectInputLinkWatchers = new Map<string, fs.FSWatcher>();
+  private projectInputCompilerOutputOverlaps = new WeakMap<
+    ProjectInputPathIdentityContext,
+    Map<string, boolean>
+  >();
   private reloadFiles = new Map<string, string>();
 
   public constructor(
@@ -262,6 +270,7 @@ export class WatchTopology {
           },
         ),
       (location, error) => this.callbacks.onError(location, error),
+      () => this.closed === false,
     );
   }
 
@@ -345,6 +354,7 @@ export class WatchTopology {
           },
         ),
       (location, error) => this.callbacks.onError(location, error),
+      () => this.closed === false,
     );
   }
 
@@ -419,6 +429,7 @@ export class WatchTopology {
           },
         ),
       (location, error) => this.callbacks.onError(location, error),
+      () => this.closed === false,
     );
   }
 
@@ -426,6 +437,7 @@ export class WatchTopology {
     if (this.closed) return;
     const identities = createProjectInputPathIdentityContext();
     const desired = new Map<string, string>();
+    const required = new Map<string, string>();
     for (const file of this.projectInputDeclarations("file")) {
       if (this.isProjectInputCompilerOutput(file, identities)) continue;
       const location = this.projectInputWatchRoot(
@@ -433,9 +445,13 @@ export class WatchTopology {
         file,
         path.dirname(file),
       );
-      if (location !== undefined) {
-        this.retainProjectInputWatchRoot(desired, identities, location);
-      }
+      this.retainProjectInputWatchRoot(
+        required,
+        desired,
+        identities,
+        location,
+        path.dirname(file),
+      );
     }
     for (const glob of this.projectInputDeclarations("glob")) {
       const root = literalGlobRoot(glob);
@@ -443,9 +459,13 @@ export class WatchTopology {
         continue;
       }
       const location = this.projectInputWatchRoot("glob", glob, root);
-      if (location !== undefined) {
-        this.retainProjectInputWatchRoot(desired, identities, location);
-      }
+      this.retainProjectInputWatchRoot(
+        required,
+        desired,
+        identities,
+        location,
+        root,
+      );
     }
     for (const file of this.projectInputDeclarations("reload")) {
       if (this.isProjectInputCompilerOutput(file, identities)) continue;
@@ -454,9 +474,13 @@ export class WatchTopology {
         file,
         path.dirname(file),
       );
-      if (location !== undefined) {
-        this.retainProjectInputWatchRoot(desired, identities, location);
-      }
+      this.retainProjectInputWatchRoot(
+        required,
+        desired,
+        identities,
+        location,
+        path.dirname(file),
+      );
     }
     for (const directory of this.projectInputDeclarations("reload-directory")) {
       if (this.isProjectInputCompilerOutputDirectory(directory, identities)) {
@@ -467,9 +491,13 @@ export class WatchTopology {
         directory,
         directory,
       );
-      if (location !== undefined) {
-        this.retainProjectInputWatchRoot(desired, identities, location);
-      }
+      this.retainProjectInputWatchRoot(
+        required,
+        desired,
+        identities,
+        location,
+        directory,
+      );
     }
     const active = new Map<string, string>();
     for (const location of projectInputActiveWatchDirectories(
@@ -479,6 +507,7 @@ export class WatchTopology {
       const identity = identities.resolve(location);
       active.set(identity.key, identity.path);
     }
+    this.projectInputRequiredWatchRoots = required;
     syncWatchers(
       this.projectInputWatchers,
       active,
@@ -499,14 +528,21 @@ export class WatchTopology {
         const firstFailure = !this.projectInputRejectedWatchRoots.has(key);
         this.projectInputRejectedWatchRoots.add(key);
         this.callbacks.onError(location, error);
-        if (firstFailure) {
-          queueMicrotask(() => this.syncProjectInputWatchers());
+        if (firstFailure && !this.closed) {
+          this.scheduleProjectInputWatcherRecovery();
         }
       },
+      () => this.closed === false,
     );
+    if (this.closed) return;
+    if (!this.projectInputRecoveryScheduled) {
+      this.reportUnobservedProjectInputWatchRoots(required);
+    }
     this.syncProjectInputLinkWatchers(identities);
     this.callbacks.onProjectInputWatchRoots?.(
-      [...this.projectInputWatchers.keys()].sort(),
+      [...this.projectInputWatchers.keys()]
+        .map((key) => active.get(key) ?? identities.resolve(key).path)
+        .sort(),
     );
   }
 
@@ -557,6 +593,7 @@ export class WatchTopology {
           },
         ),
       (location, error) => this.callbacks.onError(location, error),
+      () => this.closed === false,
     );
   }
 
@@ -582,10 +619,15 @@ export class WatchTopology {
   }
 
   private retainProjectInputWatchRoot(
+    required: Map<string, string>,
     desired: Map<string, string>,
     identities: ProjectInputPathIdentityContext,
-    location: string,
+    location: string | undefined,
+    target: string,
   ): void {
+    const requiredIdentity = identities.resolve(location ?? target);
+    required.set(requiredIdentity.key, requiredIdentity.path);
+    if (location === undefined) return;
     const available = projectInputAvailableWatchDirectory(
       location,
       this.projectInputRejectedWatchRoots,
@@ -595,6 +637,63 @@ export class WatchTopology {
     if (available === undefined) return;
     const identity = identities.resolve(available);
     desired.set(identity.key, identity.path);
+  }
+
+  /**
+   * Retry a failed root on the next reconciliation instead of retiring it for
+   * the session.
+   *
+   * This immediate recovery pass still honors the rejected root so it can
+   * install a safe ancestor where one exists. Only the recovery fixpoint
+   * reports a genuinely uncovered lane; transient gaps between fallback
+   * candidates are not user-visible. The rejection then expires. A later
+   * compiler refresh or an unchanged project-input republication can retry the
+   * original root, while a permanently failing backend costs at most one
+   * attempt per sync.
+   */
+  private scheduleProjectInputWatcherRecovery(): void {
+    if (this.projectInputRecoveryScheduled) return;
+    this.projectInputRecoveryScheduled = true;
+    queueMicrotask(() => {
+      try {
+        let previousRejectionCount = -1;
+        while (
+          this.closed === false &&
+          previousRejectionCount !== this.projectInputRejectedWatchRoots.size
+        ) {
+          previousRejectionCount = this.projectInputRejectedWatchRoots.size;
+          this.syncProjectInputWatchers();
+        }
+      } finally {
+        this.projectInputRejectedWatchRoots.clear();
+        this.projectInputRecoveryScheduled = false;
+        if (!this.closed) {
+          this.reportUnobservedProjectInputWatchRoots(
+            this.projectInputRequiredWatchRoots,
+          );
+        }
+      }
+    });
+  }
+
+  /** Report only newly uncovered project-input roots as an observation loss. */
+  private reportUnobservedProjectInputWatchRoots(
+    required: ReadonlyMap<string, string>,
+  ): void {
+    const active = [...this.projectInputWatchers.keys()];
+    const unavailable = new Map(
+      [...required].filter(([key]) =>
+        active.every((root) => !isProjectInputPathIdentityWithin(root, key)),
+      ),
+    );
+    const newlyUnavailable = [...unavailable]
+      .filter(([key]) => !this.projectInputUnobservedWatchRoots.has(key))
+      .map(([, location]) => location)
+      .sort();
+    this.projectInputUnobservedWatchRoots = unavailable;
+    if (newlyUnavailable.length !== 0) {
+      this.callbacks.onProjectInputWatchUnavailable?.(newlyUnavailable);
+    }
   }
 
   /**
@@ -894,7 +993,13 @@ export class WatchTopology {
     identities: ProjectInputPathIdentityContext,
   ): boolean {
     const root = this.projectInputs.root;
+    let overlaps = this.projectInputCompilerOutputOverlaps.get(identities);
+    if (overlaps === undefined) {
+      overlaps = new Map();
+      this.projectInputCompilerOutputOverlaps.set(identities, overlaps);
+    }
     return [...this.outputs.values()].some((output) => {
+      if (!identities.isWithin(output, location)) return false;
       // An output directory that is the project itself, or holds it, is not a
       // place where only build products live -- the sources are there too. A
       // project emitting in place declares exactly that, and honouring it
@@ -903,7 +1008,15 @@ export class WatchTopology {
       // is the safe side here: a product that gets watched costs an extra
       // rebuild, while an input that does not is never seen again.
       if (root !== "" && identities.isWithin(output, root)) return false;
-      return identities.isWithin(output, location);
+      let overlapsCompilerInput = overlaps.get(output);
+      if (overlapsCompilerInput === undefined) {
+        overlapsCompilerInput = [...this.files.values()].some((input) =>
+          identities.isWithin(output, input),
+        );
+        overlaps.set(output, overlapsCompilerInput);
+      }
+      if (overlapsCompilerInput) return false;
+      return true;
     });
   }
 
@@ -1035,7 +1148,7 @@ function resolveWatchTopology(
       addPaths(outputFiles, compilerOutputs.files);
       addPaths(
         outputFiles,
-        inferAdjacentCompilerOutputs(project, options, compilerInputs),
+        inferPerSourceCompilerOutputs(project, options, compilerInputs),
       );
       addPaths(outputs, compilerOutputs.directories);
       addPaths(files, compilerInputs);
@@ -1144,13 +1257,16 @@ function listCompilerInputs(
       `ttsc: failed to list compiler inputs: ${result.error.message}`,
     );
   }
-  const outputs = resolveCompilerOutputs(project, options);
+  // `--listFilesOnly` is the authority for compiler inputs. A path may also be
+  // a predicted product of another input, but that collision does not revoke
+  // its Program membership—especially while the compiler is reporting an
+  // overwrite diagnostic. Product inference is used only to classify future
+  // filesystem events, never to subtract from the compiler's answer.
   const inputs = outputText(result.stdout)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => path.isAbsolute(line))
-    .map((line) => path.resolve(line))
-    .filter((file) => isCompilerOutput(file, outputs) === false);
+    .map((line) => path.resolve(line));
   if (result.status !== 0 && inputs.length === 0) {
     throw new Error(
       `ttsc: failed to list compiler inputs:\n${outputText(result.stderr) || outputText(result.stdout)}`,
@@ -1175,17 +1291,6 @@ function resolveCompilerOutputs(
   if (emit.declaration && emit.declarationDir !== undefined) {
     directories.add(emit.declarationDir);
   }
-  if (emit.outFile !== undefined) {
-    if (emit.javascript) {
-      files.add(emit.outFile);
-      if (emit.sourceMap) files.add(`${emit.outFile}.map`);
-    }
-    if (emit.declaration) {
-      const declaration = replaceOutputExtension(emit.outFile, ".d.ts");
-      files.add(declaration);
-      if (emit.declarationMap) files.add(`${declaration}.map`);
-    }
-  }
   if (emit.incremental) {
     files.add(defaultTsBuildInfoFile(project, emit));
   }
@@ -1195,54 +1300,82 @@ function resolveCompilerOutputs(
   };
 }
 
-function inferAdjacentCompilerOutputs(
+function inferPerSourceCompilerOutputs(
   project: ITtscParsedProjectConfig,
   options: WatchTopologyOptions,
   inputs: readonly string[],
 ): string[] {
   const emit = effectiveCompilerEmit(project, options);
   const outputs = new Set<string>();
+  // TypeScript-Go 7 requires an explicit rootDir when output layout would
+  // otherwise need inference. While reporting TS5011 it still emits relative
+  // to the config directory, so the watch model must use that same recovery
+  // layout rather than the legacy common-source-directory rule.
+  const sourceRoot = emit.rootDir ?? project.root;
   for (const input of inputs) {
     const extension = path.extname(input).toLowerCase();
-    if (!isCompilerEmittableSourceExtension(extension)) {
-      continue;
-    }
     if (/\.d\.(?:ts|mts|cts)$/i.test(input)) continue;
     const stem = input.slice(0, -extension.length);
+    const mappedStem = (
+      directory: string | undefined,
+      adjacentWhenOutside: boolean,
+    ): string | undefined => {
+      if (directory === undefined) return stem;
+      if (!isPathWithin(sourceRoot, input)) {
+        return adjacentWhenOutside ? stem : undefined;
+      }
+      return path.resolve(directory, path.relative(sourceRoot, stem));
+    };
+    if (extension === ".json") {
+      if (
+        emit.javascript &&
+        emit.resolveJsonModule &&
+        emit.outDir !== undefined
+      ) {
+        const jsonStem = mappedStem(emit.outDir, false);
+        if (jsonStem !== undefined) outputs.add(`${jsonStem}.json`);
+      }
+      continue;
+    }
+    if (!isCompilerEmittableSourceExtension(extension)) continue;
     if (
       emit.javascript &&
-      emit.outDir === undefined &&
-      emit.outFile === undefined &&
-      (!isJavaScriptSourceExtension(extension) ||
+      (emit.outDir !== undefined ||
+        !isJavaScriptSourceExtension(extension) ||
         (extension === ".jsx" && emit.jsx !== "preserve"))
     ) {
       const javascriptExtension =
-        extension === ".mts"
+        extension === ".mts" || extension === ".mjs"
           ? ".mjs"
-          : extension === ".cts"
+          : extension === ".cts" || extension === ".cjs"
             ? ".cjs"
-            : extension === ".tsx" && emit.jsx === "preserve"
+            : (extension === ".tsx" || extension === ".jsx") &&
+                emit.jsx === "preserve"
               ? ".jsx"
               : ".js";
-      const javascript = stem + javascriptExtension;
-      outputs.add(javascript);
-      if (emit.sourceMap) outputs.add(`${javascript}.map`);
+      const javascriptStem = mappedStem(emit.outDir, true);
+      if (javascriptStem !== undefined) {
+        const javascript = javascriptStem + javascriptExtension;
+        outputs.add(javascript);
+        if (emit.sourceMap) outputs.add(`${javascript}.map`);
+      }
     }
-    if (
-      emit.declaration &&
-      emit.outDir === undefined &&
-      emit.declarationDir === undefined &&
-      emit.outFile === undefined
-    ) {
+    if (emit.declaration) {
       const declarationExtension =
         extension === ".mts" || extension === ".mjs"
           ? ".d.mts"
           : extension === ".cts" || extension === ".cjs"
             ? ".d.cts"
             : ".d.ts";
-      const declaration = stem + declarationExtension;
-      outputs.add(declaration);
-      if (emit.declarationMap) outputs.add(`${declaration}.map`);
+      const declarationStem = mappedStem(
+        emit.declarationDir ?? emit.outDir,
+        true,
+      );
+      if (declarationStem !== undefined) {
+        const declaration = declarationStem + declarationExtension;
+        outputs.add(declaration);
+        if (emit.declarationMap) outputs.add(`${declaration}.map`);
+      }
     }
   }
   return [...outputs];
@@ -1273,7 +1406,7 @@ type EffectiveCompilerEmit = {
   javascript: boolean;
   jsx?: unknown;
   outDir?: string;
-  outFile?: string;
+  resolveJsonModule: boolean;
   rootDir?: string;
   sourceMap: boolean;
   tsBuildInfoFile?: string;
@@ -1327,7 +1460,6 @@ function effectiveCompilerEmit(
     passthrough,
     "--declarationDir",
   );
-  const cliOutFile = passthroughPathOption(passthrough, "--outFile");
   const cliRootDir = passthroughPathOption(passthrough, "--rootDir");
   const cliTsBuildInfoFile = passthroughPathOption(
     passthrough,
@@ -1335,13 +1467,14 @@ function effectiveCompilerEmit(
   );
   const jsx =
     passthroughStringOption(passthrough, "--jsx") ?? compilerOptions.jsx;
+  const compilerCwd = project.root;
   return {
     declaration,
     declarationDir:
       cliDeclarationDir === null
         ? undefined
         : cliDeclarationDir !== undefined
-          ? path.resolve(options.cwd, cliDeclarationDir)
+          ? path.resolve(compilerCwd, cliDeclarationDir)
           : typeof compilerOptions.declarationDir === "string"
             ? path.resolve(compilerOptions.declarationDir)
             : undefined,
@@ -1352,25 +1485,20 @@ function effectiveCompilerEmit(
       cliOutDir === null
         ? undefined
         : cliOutDir !== undefined
-          ? path.resolve(options.cwd, cliOutDir)
+          ? path.resolve(compilerCwd, cliOutDir)
           : options.outDir !== undefined
             ? path.resolve(options.cwd, options.outDir)
             : typeof compilerOptions.outDir === "string"
               ? path.resolve(compilerOptions.outDir)
               : undefined,
-    outFile:
-      cliOutFile === null
-        ? undefined
-        : cliOutFile !== undefined
-          ? path.resolve(options.cwd, cliOutFile)
-          : typeof compilerOptions.outFile === "string"
-            ? path.resolve(compilerOptions.outFile)
-            : undefined,
+    resolveJsonModule:
+      passthroughBooleanOption(passthrough, "--resolveJsonModule") ??
+      compilerOptions.resolveJsonModule === true,
     rootDir:
       cliRootDir === null
         ? undefined
         : cliRootDir !== undefined
-          ? path.resolve(options.cwd, cliRootDir)
+          ? path.resolve(compilerCwd, cliRootDir)
           : typeof compilerOptions.rootDir === "string"
             ? path.resolve(compilerOptions.rootDir)
             : undefined,
@@ -1379,7 +1507,7 @@ function effectiveCompilerEmit(
       cliTsBuildInfoFile === null
         ? undefined
         : cliTsBuildInfoFile !== undefined
-          ? path.resolve(options.cwd, cliTsBuildInfoFile)
+          ? path.resolve(compilerCwd, cliTsBuildInfoFile)
           : typeof compilerOptions.tsBuildInfoFile === "string"
             ? path.resolve(compilerOptions.tsBuildInfoFile)
             : undefined,
@@ -1458,16 +1586,6 @@ function passthroughOptionMatches(token: string, name: string): boolean {
   return resolveFlagSpec(token)?.name === resolveFlagSpec(name)?.name;
 }
 
-function isCompilerOutput(
-  file: string,
-  outputs: { directories: readonly string[]; files: readonly string[] },
-): boolean {
-  return (
-    outputs.files.some((output) => pathKey(output) === pathKey(file)) ||
-    outputs.directories.some((directory) => isPathWithin(directory, file))
-  );
-}
-
 function collectTopologyDirectories(
   files: Iterable<string>,
   roots: readonly string[],
@@ -1544,9 +1662,14 @@ export function syncWatchers<T extends SynchronizedWatcher>(
   desired: ReadonlyMap<string, string>,
   create: (location: string, key: string) => T,
   onError: (location: string, error: unknown) => void,
+  shouldContinue: () => boolean = () => true,
 ): boolean {
   let complete = true;
   for (const [key, location] of desired) {
+    if (!shouldContinue()) {
+      complete = false;
+      break;
+    }
     if (watchers.has(key)) continue;
     try {
       const watcher = create(location, key);

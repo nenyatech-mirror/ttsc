@@ -9,8 +9,9 @@ import {
   positiveIntegerOption,
   projectOptions,
 } from "./launcherArgs";
+import { parseDump } from "./model/loadGraph";
 import { ensureExecutable } from "./nativeExecutable";
-import { type RawDump, reduce } from "./reduce";
+import { reduce } from "./reduce";
 import { resolveGraphBinary } from "./resolveGraphBinary";
 
 interface ViewOptions {
@@ -83,12 +84,15 @@ export function runView(argv: readonly string[]): number | void {
     return dump.status ?? 1;
   }
 
-  let raw: RawDump;
+  let raw: ReturnType<typeof parseDump>;
   try {
-    raw = JSON.parse(dump.stdout) as RawDump;
-  } catch (err) {
+    raw = parseDump(dump.stdout);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(
-      `@ttsc/graph: could not parse the graph dump: ${String(err)}\n`,
+      message.startsWith("@ttsc/graph:")
+        ? `${message}\n`
+        : `@ttsc/graph: could not validate the graph dump: ${message}\n`,
     );
     return 1;
   }
@@ -127,10 +131,30 @@ export function runView(argv: readonly string[]): number | void {
     }
   });
 
+  let endpoint = `127.0.0.1:${opts.port}`;
+  let failed = false;
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (failed) return;
+    failed = true;
+    const detail =
+      typeof error.code === "string"
+        ? `${error.code}: ${error.message}`
+        : error.message;
+    process.stderr.write(
+      `@ttsc/graph: could not serve the 3D viewer at ${endpoint} (${detail}).\n`,
+    );
+    process.exitCode = 1;
+    if (server.listening) {
+      server.close();
+      server.closeAllConnections?.();
+    }
+  });
   server.listen(opts.port, "127.0.0.1", () => {
+    if (failed) return;
     const address = server.address();
     const port =
       typeof address === "object" && address ? address.port : opts.port;
+    endpoint = `127.0.0.1:${port}`;
     const url = `http://127.0.0.1:${port}/`;
     const counts = payload.counts;
     process.stderr.write(

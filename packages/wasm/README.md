@@ -100,9 +100,12 @@ The `version`, `commit`, and `date` variables in `host/host.go` are all overrida
 ```ts
 import { bootTtsc } from "@ttsc/wasm";
 
+const controller = new AbortController();
 const { api, host } = await bootTtsc({
   wasmUrl: "/your.wasm",
   apiName: "yourApi",
+  signal: controller.signal,
+  timeoutMs: 60_000,
 });
 
 host.writeFile("/work/tsconfig.json", '{"compilerOptions":{"strict":true}}');
@@ -111,6 +114,10 @@ host.writeFile("/work/src/index.ts", "export const x: number = 1;");
 const result = await api.build({ cwd: "/work" });
 console.log(result.result); // JSON: { diagnostics, output }
 ```
+
+`timeoutMs` defaults to 60 seconds and covers serialization behind an earlier boot, fetch, instantiation, and the Go readiness signal. A caller abort or deadline cancels the shared in-flight boot. Failures before `go.run` clear cache and callback state so a later call can retry. `importScripts` is synchronous, so cancellation is observed immediately before and after that call but cannot interrupt the script while it evaluates.
+
+Once `go.run` starts, JavaScript cannot terminate the Go wasm runtime. A boot failure from that point throws `BootTtscWorkerTerminationError` with code `TTSC_WASM_WORKER_TERMINATION_REQUIRED`, and later boots for the same `apiName` reject without installing another readiness bridge. Terminate and replace that Worker before retrying.
 
 Booting two wasms with the same `apiName` overwrites the previous global binding; pick a unique `apiName` per binary. `bootTtsc` also installs shared `fs` and `process` globals in its Worker, so use separate Workers when binaries need independent filesystems.
 

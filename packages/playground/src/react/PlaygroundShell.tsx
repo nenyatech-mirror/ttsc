@@ -6,6 +6,7 @@ import {
 } from "lz-string";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { normalizeError } from "../compiler/normalizeError";
 import { BUILT_IN_PLAYGROUND_PACKAGES } from "../npm/BUILT_IN_PLAYGROUND_PACKAGES";
 import { collectExternalPackageNames } from "../npm/collectExternalPackageNames";
 import { installPlaygroundDependencies } from "../npm/installPlaygroundDependencies";
@@ -25,6 +26,12 @@ import { OptionsPanel } from "./OptionsPanel";
 import { ResultViewer } from "./ResultViewer";
 import { SourceEditor } from "./SourceEditor";
 import { createCompilerClient } from "./createCompilerClient";
+import {
+  type IPlaygroundCompilerGeneration,
+  PlaygroundCompilerLifecycle,
+} from "./internal/PlaygroundCompilerLifecycle";
+import { PlaygroundExecutionLifecycle } from "./internal/PlaygroundExecutionLifecycle";
+import { recoverTerminalCompilerWorker } from "./internal/recoverTerminalCompilerWorker";
 
 const DEFAULT_OPTIONS: ITransformOptions = {
   typia: true,
@@ -85,8 +92,9 @@ export function PlaygroundShell({
   const debounce = useRef<number | null>(null);
   const shareToastTimer = useRef<number | null>(null);
   const dependencyProgressTimer = useRef<number | null>(null);
-  const dependencyInstallChain = useRef<Promise<void>>(Promise.resolve());
   const dependencyAbort = useRef<AbortController | null>(null);
+  const compilerLifecycle = useRef(new PlaygroundCompilerLifecycle());
+  const executionLifecycle = useRef(new PlaygroundExecutionLifecycle());
   // Exact mounted identities and active requests. A name-only set cannot
   // validate a later transitive range or distinguish an npm alias target.
   const installedDependencies = useRef<
@@ -103,41 +111,103 @@ export function PlaygroundShell({
   const runtimeDependencyFiles = useRef<Record<string, string>>({});
   const sourceVersion = useRef(0);
   const latestSource = useRef(source);
-  // Race guards: each pipeline (compile/run vs Execute) owns its own epoch.
-  // Sharing one epoch would make a fresh Execute click invalidate an in-
-  // flight compile (and vice versa) and leave the spinner/button flags
-  // stuck because the older pipeline's finally would see a stale epoch.
-  // `updateSource` bumps the COMPILE epoch only — typing aborts a stale
-  // compile but does not interrupt a click-driven Execute.
+  // Compile/run uses an epoch, while Execute uses an abortable lifecycle.
+  // The boundaries stay separate so starting Execute does not invalidate an
+  // in-flight compile. Source and option changes explicitly invalidate both
+  // pipelines because either makes an older result obsolete.
   const compileEpoch = useRef(0);
-  const executeEpoch = useRef(0);
-  // Retry epoch: each Retry click bumps it; only the latest retry's
-  // async block is allowed to write boot state. Prior retries' bodies
-  // bail on epoch mismatch so a fast double-Retry can't leave a stale
-  // `setBootPhase("ready")` chasing a torn-down connection.
-  const retryEpoch = useRef(0);
 
   const mergedExtraLibs = useMemo(
     () => ({ ...staticEditorLibs, ...editorExtraLibs }),
     [staticEditorLibs, editorExtraLibs],
   );
 
+  const clearDependencyGraph = useCallback((publishEditorLibs = true) => {
+    installedDependencies.current = new Map();
+    dependencyRoots.current = new Set();
+    runtimeDependencyFiles.current = {};
+    if (publishEditorLibs) setEditorExtraLibs({});
+  }, []);
+
+  const invalidateCompilerGeneration = useCallback(
+    (
+      reason: string,
+      expected?: IPlaygroundCompilerGeneration,
+      publishState: boolean = true,
+    ): IPlaygroundCompilerGeneration | undefined => {
+      const replacement =
+        expected === undefined
+          ? compilerLifecycle.current.invalidate()
+          : compilerLifecycle.current.invalidateIfCurrent(expected);
+      if (replacement === undefined) return undefined;
+
+      compileEpoch.current++;
+      executionLifecycle.current.invalidate(reason);
+      const abort = dependencyAbort.current;
+      dependencyAbort.current = null;
+      abort?.abort(createAbortError(reason));
+      if (dependencyProgressTimer.current !== null) {
+        window.clearTimeout(dependencyProgressTimer.current);
+        dependencyProgressTimer.current = null;
+      }
+      clearDependencyGraph(publishState);
+      if (publishState) {
+        setDependencyProgress(null);
+        setDependencyPackageNames([]);
+        setRunning(false);
+        setExecuting(false);
+        setBundleError(null);
+        setBootError(null);
+        setBootPhase("booting");
+      }
+      return replacement;
+    },
+    [clearDependencyGraph],
+  );
+
+  const recoverTerminalWorker = useCallback(
+    (
+      error: unknown,
+      generation: IPlaygroundCompilerGeneration,
+    ): Promise<boolean> => {
+      let replacement: IPlaygroundCompilerGeneration | undefined;
+      return recoverTerminalCompilerWorker(error, {
+        claim: () => {
+          replacement = invalidateCompilerGeneration(
+            "compiler Worker replacement required",
+            generation,
+          );
+          return replacement !== undefined;
+        },
+        reset: client.reset,
+        fail: (terminalError) => {
+          if (replacement?.isCurrent() !== true) return;
+          setBootError(terminalError);
+          setBootPhase("failed");
+        },
+      });
+    },
+    [client, invalidateCompilerGeneration],
+  );
+
   const updateSource = useCallback((next: string) => {
     sourceVersion.current++;
     latestSource.current = next;
-    // Bump BOTH epochs: typing must abort an in-flight compile (the
-    // result would be stale) AND an in-flight Execute (the bundled code
-    // would not match what's on screen). Without bumping executeEpoch,
-    // an Execute whose dependency install was aborted by this typing
-    // would silently treat the abort as success and bundle against an
-    // incomplete MemFS — emitting JS for packages the user just edited
-    // away from, or failing in confusing ways.
+    // Typing invalidates both the compile result and any click-driven Execute.
     compileEpoch.current++;
-    executeEpoch.current++;
+    executionLifecycle.current.invalidate("source changed");
     dependencyAbort.current?.abort(createAbortError("source changed"));
+    setExecuting(false);
     setDependencyProgress(null);
     setDependencyPackageNames([]);
     setSource(next);
+  }, []);
+
+  const updateOptions = useCallback((next: ITransformOptions) => {
+    compileEpoch.current++;
+    executionLifecycle.current.invalidate("compiler options changed");
+    setExecuting(false);
+    setOptions(next);
   }, []);
 
   // ── Decode source from URL on mount ──
@@ -153,16 +223,33 @@ export function PlaygroundShell({
     }
   }, [updateSource]);
 
+  // Establish a generation boundary before any boot work starts. Cleanup
+  // fences every callback that captured the old client before resetting it.
+  useEffect(() => {
+    invalidateCompilerGeneration("compiler client changed");
+    return () => {
+      // Internal recovery may have replaced the generation captured at setup,
+      // but every such replacement still belongs to this client.
+      invalidateCompilerGeneration(
+        "compiler client disposed",
+        undefined,
+        false,
+      );
+      void client.reset();
+    };
+  }, [client, invalidateCompilerGeneration]);
+
   // ── Eagerly boot the worker so first compile is instant ──
   useEffect(() => {
     let cancelled = false;
+    const generation = compilerLifecycle.current.capture();
     setBootPhase("booting");
     createCompilerService().then(
       () => {
-        if (!cancelled) setBootPhase("ready");
+        if (!cancelled && generation.isCurrent()) setBootPhase("ready");
       },
       (err: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && generation.isCurrent()) {
           setBootError(err);
           setBootPhase("failed");
         }
@@ -178,127 +265,165 @@ export function PlaygroundShell({
       input: string,
       version: number = sourceVersion.current,
     ): Promise<unknown | null> => {
-      const task = dependencyInstallChain.current.then(async () => {
-        const firstPassPackageNames = collectExternalPackageNames(
-          input,
-          preinstalledPackages,
-        );
-        if (
-          dependencyRootDelta(firstPassPackageNames, dependencyRoots.current)
-            .changed === false
-        )
-          return null;
+      const result = await compilerLifecycle.current.enqueue(
+        async (generation): Promise<unknown | null> => {
+          const isCurrent = (): boolean =>
+            generation.isCurrent() && sourceVersion.current === version;
+          const resetWorker = (): Promise<boolean> =>
+            compilerLifecycle.current.resetWorkerIfCurrent(
+              generation,
+              client.reset,
+              clearDependencyGraph,
+            );
+          if (!isCurrent()) return null;
 
-        await wait(DEPENDENCY_INSTALL_QUIET_MS);
-        if (sourceVersion.current !== version) return null;
-
-        const packageNames = collectExternalPackageNames(
-          latestSource.current,
-          preinstalledPackages,
-        );
-        const delta = dependencyRootDelta(
-          packageNames,
-          dependencyRoots.current,
-        );
-        if (!delta.changed) return null;
-        const replacing = delta.removed.length !== 0;
-        const requested = replacing ? packageNames : delta.added;
-
-        if (dependencyProgressTimer.current !== null) {
-          window.clearTimeout(dependencyProgressTimer.current);
-          dependencyProgressTimer.current = null;
-        }
-        setDependencyPackageNames(requested);
-        const abort = new AbortController();
-        dependencyAbort.current = abort;
-        let workerMutated = false;
-        try {
-          const installed = await installPlaygroundDependencies(requested, {
-            installedDependencies: replacing
-              ? []
-              : installedDependencies.current.values(),
-            ignoredPackages: preinstalledPackages,
-            signal: abort.signal,
-            onProgress: setDependencyProgress,
-          });
-          if (sourceVersion.current !== version) return null;
-
-          if (replacing) {
-            workerMutated = true;
-            await client.reset();
-            installedDependencies.current = new Map();
-            dependencyRoots.current = new Set();
-            runtimeDependencyFiles.current = {};
-            setEditorExtraLibs({});
-          }
-          if (Object.keys(installed.compilerFiles).length > 0) {
-            const service = await createCompilerService();
-            workerMutated = true;
-            await service.installDependencies({
-              files: installed.compilerFiles,
-              packages: installed.packages.map(({ name, version }) => ({
-                name,
-                version,
-              })),
-            });
-          }
-          installedDependencies.current = new Map(
-            installed.resolvedDependencies.map(
-              (dependency) => [dependency.name, dependency] as const,
-            ),
+          const firstPassPackageNames = collectExternalPackageNames(
+            input,
+            preinstalledPackages,
           );
-          dependencyRoots.current = new Set(packageNames);
-          setEditorExtraLibs((previous) =>
-            replacing
-              ? installed.editorLibs
-              : { ...previous, ...installed.editorLibs },
-          );
-          runtimeDependencyFiles.current = replacing
-            ? installed.runtimeFiles
-            : {
-                ...runtimeDependencyFiles.current,
-                ...installed.runtimeFiles,
-              };
-          dependencyProgressTimer.current = window.setTimeout(() => {
-            setDependencyProgress(null);
-            setDependencyPackageNames([]);
-            dependencyProgressTimer.current = null;
-          }, 350);
-          return null;
-        } catch (error) {
-          if (workerMutated) {
-            await client.reset();
-            installedDependencies.current = new Map();
-            dependencyRoots.current = new Set();
-            runtimeDependencyFiles.current = {};
-            setEditorExtraLibs({});
-          }
-          if (isAbortError(error)) {
-            setDependencyProgress(null);
-            setDependencyPackageNames([]);
+          if (
+            dependencyRootDelta(firstPassPackageNames, dependencyRoots.current)
+              .changed === false
+          )
             return null;
-          }
-          setDependencyProgress({
-            phase: "error",
-            packageName: requested[0],
-            completed: 0,
-            total: requested.length,
-            message: describeUnknownError(error),
-          });
-          dependencyProgressTimer.current = window.setTimeout(() => {
-            setDependencyProgress(null);
-            setDependencyPackageNames([]);
+
+          await wait(DEPENDENCY_INSTALL_QUIET_MS);
+          if (!isCurrent()) return null;
+
+          const packageNames = collectExternalPackageNames(
+            latestSource.current,
+            preinstalledPackages,
+          );
+          const delta = dependencyRootDelta(
+            packageNames,
+            dependencyRoots.current,
+          );
+          if (!delta.changed) return null;
+          const replacing = delta.removed.length !== 0;
+          const requested = replacing ? packageNames : delta.added;
+
+          if (dependencyProgressTimer.current !== null) {
+            window.clearTimeout(dependencyProgressTimer.current);
             dependencyProgressTimer.current = null;
-          }, 2400);
-          return error;
-        } finally {
-          if (dependencyAbort.current === abort) dependencyAbort.current = null;
-        }
-      });
-      dependencyInstallChain.current = task.then(() => {});
-      return task;
+          }
+          if (!isCurrent()) return null;
+          setDependencyPackageNames(requested);
+          const abort = new AbortController();
+          dependencyAbort.current = abort;
+          let workerMutated = false;
+          try {
+            const installed = await installPlaygroundDependencies(requested, {
+              installedDependencies: replacing
+                ? []
+                : installedDependencies.current.values(),
+              ignoredPackages: preinstalledPackages,
+              signal: abort.signal,
+              onProgress: (progress) => {
+                if (isCurrent()) setDependencyProgress(progress);
+              },
+            });
+            if (!isCurrent()) return null;
+
+            if (replacing) {
+              workerMutated = true;
+              if (!(await resetWorker())) return null;
+              if (!isCurrent()) return null;
+            }
+            if (Object.keys(installed.compilerFiles).length > 0) {
+              if (!isCurrent()) return null;
+              const service = await createCompilerService();
+              if (!isCurrent()) return null;
+              workerMutated = true;
+              const installedForSource =
+                await compilerLifecycle.current.mutateWorkerIfCurrent(
+                  generation,
+                  () => sourceVersion.current === version,
+                  () =>
+                    service.installDependencies({
+                      files: installed.compilerFiles,
+                      packages: installed.packages.map(({ name, version }) => ({
+                        name,
+                        version,
+                      })),
+                    }),
+                  client.reset,
+                  clearDependencyGraph,
+                );
+              if (!installedForSource) return null;
+            }
+            installedDependencies.current = new Map(
+              installed.resolvedDependencies.map(
+                (dependency) => [dependency.name, dependency] as const,
+              ),
+            );
+            dependencyRoots.current = new Set(packageNames);
+            setEditorExtraLibs((previous) =>
+              replacing
+                ? installed.editorLibs
+                : { ...previous, ...installed.editorLibs },
+            );
+            runtimeDependencyFiles.current = replacing
+              ? installed.runtimeFiles
+              : {
+                  ...runtimeDependencyFiles.current,
+                  ...installed.runtimeFiles,
+                };
+            const progressTimer = window.setTimeout(() => {
+              if (
+                dependencyProgressTimer.current === progressTimer &&
+                generation.isCurrent()
+              ) {
+                setDependencyProgress(null);
+                setDependencyPackageNames([]);
+                dependencyProgressTimer.current = null;
+              }
+            }, 350);
+            dependencyProgressTimer.current = progressTimer;
+            return null;
+          } catch (error) {
+            if (!generation.isCurrent()) return null;
+            if (workerMutated) {
+              if (!(await resetWorker())) return null;
+            }
+            if (!isCurrent()) return null;
+            if (isAbortError(error)) {
+              setDependencyProgress(null);
+              setDependencyPackageNames([]);
+              return null;
+            }
+            setDependencyProgress({
+              phase: "error",
+              packageName: requested[0],
+              completed: 0,
+              total: requested.length,
+              message: describeUnknownError(error),
+            });
+            const progressTimer = window.setTimeout(() => {
+              if (
+                dependencyProgressTimer.current === progressTimer &&
+                generation.isCurrent()
+              ) {
+                setDependencyProgress(null);
+                setDependencyPackageNames([]);
+                dependencyProgressTimer.current = null;
+              }
+            }, 2400);
+            dependencyProgressTimer.current = progressTimer;
+            return error;
+          } finally {
+            if (dependencyAbort.current === abort)
+              dependencyAbort.current = null;
+          }
+        },
+      );
+      return result ?? null;
     },
-    [client, createCompilerService, preinstalledPackages],
+    [
+      clearDependencyGraph,
+      client,
+      createCompilerService,
+      preinstalledPackages,
+    ],
   );
 
   // ── Run compile when source / options change ──
@@ -311,39 +436,48 @@ export function PlaygroundShell({
   const run = useCallback(
     async (input: string, opts: ITransformOptions, version: number) => {
       const epoch = ++compileEpoch.current;
+      const generation = compilerLifecycle.current.capture();
       setRunning(true);
       try {
         const dependencyError = await installDependenciesForSource(
           input,
           version,
         );
-        if (compileEpoch.current !== epoch) return;
+        if (compileEpoch.current !== epoch || !generation.isCurrent()) return;
         if (dependencyError) {
+          if (await recoverTerminalWorker(dependencyError, generation)) return;
           setResult({
             type: "error",
             target: "javascript",
-            value: normalizeClientError(dependencyError),
+            value: normalizeError(dependencyError),
           });
           // Keep prior lintDiagnostics intact — a dependency-install blip
           // shouldn't wipe the user's most recent successful lint output.
           return;
         }
         const service = await createCompilerService();
+        if (compileEpoch.current !== epoch || !generation.isCurrent()) return;
         const next = await service.compile({
           source: input,
           options: opts,
         });
-        if (compileEpoch.current !== epoch) return;
+        if (compileEpoch.current !== epoch || !generation.isCurrent()) return;
+        if (
+          next.type === "error" &&
+          (await recoverTerminalWorker(next.value, generation))
+        )
+          return;
         setResult(next);
         if (opts.lint !== false) {
           const lint = await service.lint({ source: input, options: opts });
-          if (compileEpoch.current !== epoch) return;
+          if (compileEpoch.current !== epoch || !generation.isCurrent()) return;
           setLintDiagnostics(lint.diagnostics);
         } else {
           setLintDiagnostics([]);
         }
       } catch (err) {
-        if (compileEpoch.current !== epoch) return;
+        if (compileEpoch.current !== epoch || !generation.isCurrent()) return;
+        if (await recoverTerminalWorker(err, generation)) return;
         // Surface the error in the diagnostics pane via an error result —
         // a transient compile/lint/install rejection (tgrid timeout,
         // message-channel disconnect) must NOT tear the playground into
@@ -352,7 +486,7 @@ export function PlaygroundShell({
         setResult({
           type: "error",
           target: "javascript",
-          value: normalizeClientError(err),
+          value: normalizeError(err),
         });
         // Leave lintDiagnostics alone — clearing them on a transient
         // compile blip would wipe the user's last good lint output.
@@ -360,13 +494,16 @@ export function PlaygroundShell({
         // Only the winning epoch clears the flag. Older pipelines that
         // returned early on an epoch mismatch must NOT clear running, or
         // a fresh in-flight compile would show "ready" while it's still
-        // working. compileEpoch is bumped only by updateSource and by the
-        // next run() — Execute uses its own executeEpoch — so this guard
-        // does not stick the spinner across pipeline boundaries.
+        // working. Execute has its own lifecycle, so it cannot stick this
+        // spinner across pipeline boundaries.
         if (compileEpoch.current === epoch) setRunning(false);
       }
     },
-    [createCompilerService, installDependenciesForSource],
+    [
+      createCompilerService,
+      installDependenciesForSource,
+      recoverTerminalWorker,
+    ],
   );
 
   useEffect(() => {
@@ -413,27 +550,10 @@ export function PlaygroundShell({
       if (dependencyProgressTimer.current !== null)
         window.clearTimeout(dependencyProgressTimer.current);
       dependencyAbort.current?.abort(createAbortError("playground unmounted"));
+      executionLifecycle.current.invalidate("playground unmounted");
     },
     [],
   );
-
-  // Tear down the Worker (+ its wasm instance) when the component
-  // unmounts or workerUrl changes. Without this an SPA navigation away
-  // from the playground leaks one Worker per mount; a workerUrl swap
-  // leaks the previous Worker forever.
-  //
-  // Reset the dependency graph too. Its exact versions, requests, roots, and
-  // runtime files describe only the worker generation that is being closed.
-  //
-  useEffect(() => {
-    setEditorExtraLibs({});
-    return () => {
-      void client.reset();
-      installedDependencies.current = new Map();
-      dependencyRoots.current = new Set();
-      runtimeDependencyFiles.current = {};
-    };
-  }, [client]);
 
   const onPickExample = useCallback(
     (id: string) => {
@@ -453,10 +573,8 @@ export function PlaygroundShell({
 
   const onExecute = useCallback(async () => {
     if (!executeBundle) return;
-    // Bump the executeEpoch so a second Execute click invalidates the
-    // in-flight Execute. compileEpoch is unaffected — the user can edit
-    // the source mid-Execute without the running compile being torn down.
-    const epoch = ++executeEpoch.current;
+    const attempt = executionLifecycle.current.begin();
+    const generation = compilerLifecycle.current.capture();
     setExecuting(true);
     setBundleError(null);
     // Clear the previous run's console output up front. Without this the
@@ -467,7 +585,7 @@ export function PlaygroundShell({
     setConsoleMessages([]);
     const messages: IConsoleMessage[] = [];
     const push = (type: IConsoleMessage["type"], args: unknown[]) => {
-      if (executeEpoch.current !== epoch) return;
+      if (!attempt.isCurrent() || !generation.isCurrent()) return;
       messages.push({ type, value: args });
       setConsoleMessages([...messages]);
     };
@@ -484,18 +602,21 @@ export function PlaygroundShell({
         currentSource,
         currentVersion,
       );
-      if (executeEpoch.current !== epoch) return;
+      if (!attempt.isCurrent() || !generation.isCurrent()) return;
       if (dependencyError) {
+        if (await recoverTerminalWorker(dependencyError, generation)) return;
         push("error", [dependencyError]);
         return;
       }
       const service = await createCompilerService();
+      if (!attempt.isCurrent() || !generation.isCurrent()) return;
       const compiled = await service.bundle({
         source: currentSource,
         options,
       });
-      if (executeEpoch.current !== epoch) return;
+      if (!attempt.isCurrent() || !generation.isCurrent()) return;
       if (compiled.type === "error") {
+        if (await recoverTerminalWorker(compiled.value, generation)) return;
         const message =
           typeof compiled.value === "string"
             ? compiled.value
@@ -519,18 +640,18 @@ export function PlaygroundShell({
         await executeBundle(code, {
           console: sandboxConsole,
           runtimeFiles: runtimeDependencyFiles.current,
+          signal: attempt.signal,
         });
+        if (!generation.isCurrent()) return;
       } catch (error) {
         push("error", [error]);
       }
     } catch (error) {
-      if (executeEpoch.current !== epoch) return;
+      if (!attempt.isCurrent() || !generation.isCurrent()) return;
+      if (await recoverTerminalWorker(error, generation)) return;
       push("error", [error]);
     } finally {
-      // Only the winning epoch clears the flag — same rationale as
-      // compileEpoch above. With a separate executeEpoch this is robust
-      // against concurrent click + edit interleavings.
-      if (executeEpoch.current === epoch) setExecuting(false);
+      if (attempt.finish()) setExecuting(false);
     }
     // `source` is intentionally NOT a dep: the body snapshots
     // `latestSource.current` (always fresh ref) rather than reading the
@@ -542,6 +663,7 @@ export function PlaygroundShell({
     executeBundle,
     installDependenciesForSource,
     options,
+    recoverTerminalWorker,
   ]);
 
   const allDiagnostics = useMemo(() => {
@@ -616,22 +738,21 @@ export function PlaygroundShell({
         </pre>
         <button
           onClick={() => {
-            // Each click bumps retryEpoch; only the latest retry's body
-            // writes boot state. A double-click cancels the prior retry's
-            // pending writes so it can't flip bootPhase to "ready"
-            // against a connection the new retry has already torn down.
-            const epoch = ++retryEpoch.current;
+            const failedGeneration = compilerLifecycle.current.capture();
+            const retryGeneration = invalidateCompilerGeneration(
+              "compiler retry requested",
+              failedGeneration,
+            );
+            if (retryGeneration === undefined) return;
             void (async () => {
               await client.reset();
-              if (retryEpoch.current !== epoch) return;
-              setBootError(null);
-              setBootPhase("booting");
+              if (!retryGeneration.isCurrent()) return;
               try {
                 await createCompilerService();
-                if (retryEpoch.current !== epoch) return;
+                if (!retryGeneration.isCurrent()) return;
                 setBootPhase("ready");
               } catch (err) {
-                if (retryEpoch.current !== epoch) return;
+                if (!retryGeneration.isCurrent()) return;
                 setBootError(err);
                 setBootPhase("failed");
               }
@@ -805,7 +926,7 @@ export function PlaygroundShell({
       {optionsOpen && (
         <OptionsPanel
           options={options}
-          onChange={setOptions}
+          onChange={updateOptions}
           onClose={() => setOptionsOpen(false)}
           toggles={optionToggles}
         />
@@ -830,13 +951,6 @@ function describeUnknownError(error: unknown): string {
   } catch {
     return String(error);
   }
-}
-
-function normalizeClientError(error: unknown): unknown {
-  if (error instanceof Error) {
-    return { name: error.name, message: error.message, stack: error.stack };
-  }
-  return { name: "Error", message: describeUnknownError(error) };
 }
 
 function wait(ms: number): Promise<void> {
