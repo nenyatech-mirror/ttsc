@@ -347,11 +347,11 @@ async function assertFirstModuleDeliveriesDoNotRehashProject(): Promise<void> {
  *
  * Watch-input derivation must pay the graph's identity computations once per
  * generation; after that a delivery costs only its own memoized lookups. The
- * probe counter simulates the macOS `pathIdentityKey` branch (one `existsSync`
- * + one `realpathSync.native` per call) on any host, so the bound holds
- * identically across CI platforms: before the fix every delivery re-walked the
- * whole edge set with two syscalls per path, which scaled O(modules x edges)
- * into the #970 residual stall.
+ * probe counter simulates both filesystem calls made by the macOS
+ * `pathIdentityKey` branch, `existsSync` and `realpathSync.native`, on any
+ * host, so the bound holds identically across CI platforms. Before the fix
+ * every delivery re-walked the whole edge set with two syscalls per path, which
+ * scaled O(modules x edges) into the #970 residual stall.
  */
 async function assertSiblingDeliveriesDoNotReprobeGraph(): Promise<void> {
   const {

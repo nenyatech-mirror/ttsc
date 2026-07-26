@@ -11,8 +11,8 @@ import { assert, fs, path, workspaceRoot } from "../../internal/toolchain";
  * multi-hour silent hold.
  *
  * 1. Read the release workflow and drop its comment lines.
- * 2. Slice the two publish steps and every job block out of the workflow.
- * 3. Assert each publish step's exact budget and one job-level timeout each.
+ * 2. Slice each exact job and publish-step mapping by YAML indentation.
+ * 3. Assert every mapping owns exactly its intended timeout budget.
  */
 export const test_release_workflow_bounds_publish_timeouts = () => {
   const source = fs.readFileSync(
@@ -21,30 +21,68 @@ export const test_release_workflow_bounds_publish_timeouts = () => {
   );
   // Timeout keys live on uncommented lines by construction; dropping comments
   // keeps prose about timeouts from counting as the key itself.
-  const workflow = source
-    .split("\n")
-    .filter((line) => !/^\s*#/.test(line))
-    .join("\n");
+  const lines = source.split(/\r?\n/).filter((line) => !/^\s*#/.test(line));
 
   for (const [step, budget] of [
-    ["Publish VS Code Marketplace extension", "timeout-minutes: 10"],
-    ["Publish to npm", "timeout-minutes: 20"],
-  ] as Array<[string, string]>) {
-    const start = workflow.indexOf(`- name: ${step}`);
-    assert.notEqual(start, -1, `expected to find the ${step} step`);
-    const end = workflow.indexOf("- name:", start + 1);
-    const block = workflow.slice(start, end === -1 ? undefined : end);
-    assert.ok(
-      block.includes(budget),
-      `the ${step} step must declare ${budget}, got:\n${block}`,
+    ["Publish VS Code Marketplace extension", 10],
+    ["Publish to npm", 20],
+  ] as Array<[string, number]>) {
+    const block = selectYamlMapping(lines, `- name: ${step}`, 6);
+    assert.deepEqual(
+      block.filter((line) => /^ {8}timeout-minutes:/.test(line)),
+      [`        timeout-minutes: ${budget}`],
+      `the ${step} step must own exactly timeout-minutes: ${budget}`,
     );
   }
 
-  const jobLevelTimeouts =
-    workflow.match(/^ {4}timeout-minutes: \d+\r?$/gm) ?? [];
-  assert.equal(
-    jobLevelTimeouts.length,
-    4,
-    `every release job must declare one job-level timeout-minutes, found: ${jobLevelTimeouts.join(", ") || "none"}`,
-  );
+  for (const [job, budget] of [
+    ["publish", 60],
+    ["wasm-smoke", 15],
+    ["vscode-smoke", 15],
+    ["release", 15],
+  ] as Array<[string, number]>) {
+    const block = selectYamlMapping(lines, `${job}:`, 2);
+    assert.deepEqual(
+      block.filter((line) => /^ {4}timeout-minutes:/.test(line)),
+      [`    timeout-minutes: ${budget}`],
+      `the ${job} job must own exactly timeout-minutes: ${budget}`,
+    );
+  }
+
+  const jobNames = lines
+    .slice(lines.findIndex((line) => line === "jobs:") + 1)
+    .filter((line) => /^ {2}\S[^:]*:\r?$/.test(line))
+    .map((line) => line.trim().slice(0, -1));
+  assert.deepEqual(jobNames, [
+    "publish",
+    "wasm-smoke",
+    "vscode-smoke",
+    "release",
+  ]);
 };
+
+/**
+ * Select one YAML mapping whose header has exactly `indent` leading spaces. The
+ * block ends at the next non-empty line at the same or a shallower level.
+ */
+function selectYamlMapping(
+  lines: string[],
+  header: string,
+  indent: number,
+): string[] {
+  const prefix = " ".repeat(indent);
+  const start = lines.findIndex((line) => line === `${prefix}${header}`);
+  assert.notEqual(start, -1, `expected to find ${header}`);
+  let end = start + 1;
+  while (end < lines.length) {
+    const line = lines[end]!;
+    if (
+      line.trim().length !== 0 &&
+      line.length - line.trimStart().length <= indent
+    ) {
+      break;
+    }
+    end += 1;
+  }
+  return lines.slice(start + 1, end);
+}
