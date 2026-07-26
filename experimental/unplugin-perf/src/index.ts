@@ -57,13 +57,49 @@ async function main(): Promise<void> {
     );
   }
 
+  console.log(
+    "\nScenario C — graph-bearing envelope (typia >= 13.1.19 shape):",
+  );
+  console.log(
+    "  invariant: plugin runs == 1 and macOS fs probes stay bounded per module;",
+  );
+  console.log(
+    "  per-delivery watch-input derivation must not re-walk the whole graph\n",
+  );
+  for (const graphFanout of [25, 50, 100]) {
+    recordFailure(
+      failures,
+      await measureGraphBuild(adapter, {
+        count: 100,
+        emitExternalKey: false,
+        graphFanout,
+      }),
+    );
+  }
+
+  console.log(
+    "\nScenario D — graph envelope without a build boundary (Vite serve):",
+  );
+  console.log(
+    "  measurement only: per-module complete-validation cost with a large",
+  );
+  console.log("  external input set (no invariant gate)\n");
+  await measureServeValidation(adapter, {
+    count: 50,
+    emitExternalKey: false,
+    graphFanout: 100,
+  });
+
   if (failures.length !== 0) {
     console.error(
-      `\nFAIL: the per-build cache re-transformed the project more than once:\n  ${failures.join("\n  ")}`,
+      `\nFAIL: a scenario violated its invariant:\n  ${failures.join("\n  ")}`,
     );
     process.exit(1);
   }
-  console.log("\nOK: every build ran exactly one whole-project transform.");
+  console.log(
+    "\nOK: every build ran exactly one whole-project transform and watch-input" +
+      " derivation stayed bounded per module.",
+  );
 }
 
 function recordFailure(failures: string[], failure: string | undefined): void {
@@ -123,6 +159,13 @@ function requireFromUnplugin(specifier: string): unknown {
 interface MeasureOptions {
   count: number;
   emitExternalKey: boolean;
+  /**
+   * Number of external `node_modules/dep{j}/index.d.ts` targets each module's
+   * graph edges and consulted-dependency list carry. Zero keeps the envelope
+   * graph-free (the typia 13.1.1 shape); a positive value stamps the
+   * graph-bearing shape typia >= 13.1.19 produces.
+   */
+  graphFanout?: number;
 }
 
 async function measure(
@@ -163,6 +206,163 @@ async function measure(
   return pluginRuns === 1
     ? undefined
     : `scenario ${scenario} N=${options.count}: pluginRuns=${pluginRuns} (expected 1)`;
+}
+
+/**
+ * An fs probe pair (`existsSync` + `realpathSync.native`) is what one
+ * `pathIdentityKey` call costs on macOS. A bounded watch-input derivation pays
+ * that once per distinct graph path per generation, so the amortized budget
+ * below is per module: well above the fixed point, far below the
+ * O(edges)-per-delivery defect this scenario reproduces.
+ */
+const GRAPH_PROBES_PER_MODULE_BUDGET = 64;
+
+/**
+ * Drive a build-scoped run over a graph-bearing envelope and count the fs
+ * probes a macOS host would pay for watch-input derivation. The first module
+ * delivery compiles (and therefore needs the real platform for the native
+ * spawn); the remaining deliveries are pure cache hits, so `process.platform`
+ * is flipped to `darwin` only for them, making the per-delivery probe volume of
+ * the macOS `pathIdentityKey` branch observable on any host.
+ */
+async function measureGraphBuild(
+  adapter: Adapter,
+  options: MeasureOptions,
+): Promise<string | undefined> {
+  const project = createProject(options);
+  const plugin = adapter.rollup({
+    project: path.join(project, "tsconfig.json"),
+  });
+  const runLog = path.join(project, ".plugin-runs");
+
+  await runBuild(plugin, project, runLog);
+
+  const modules = projectModules(project);
+  const context = {
+    addWatchFile: () => undefined,
+    error: (message: unknown) => {
+      throw message instanceof Error ? message : new Error(String(message));
+    },
+  };
+  fs.writeFileSync(runLog, "");
+  process.env.PLUGIN_RUN_LOG = runLog;
+  await plugin.buildStart.call(context);
+  const [first, ...rest] = modules;
+  await plugin.transform.call(context, fs.readFileSync(first!, "utf8"), first!);
+
+  const probes = instrumentFsProbes();
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  const started = process.hrtime.bigint();
+  try {
+    for (const id of rest) {
+      await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+    }
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    probes.restore();
+  }
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+  const pluginRuns = fs.existsSync(runLog)
+    ? fs.readFileSync(runLog, "utf8").length
+    : 0;
+  const edges = options.count * (options.graphFanout ?? 0) + options.count - 1;
+  const probesPerModule = probes.calls / rest.length;
+  console.log(
+    `  N=${String(options.count).padStart(3)}  ` +
+      `E=${String(edges).padStart(6)}  ` +
+      `pluginRuns=${String(pluginRuns).padStart(3)}  ` +
+      `probes=${String(probes.calls).padStart(9)}  ` +
+      `probes/file=${probesPerModule.toFixed(1).padStart(9)}  ` +
+      `${elapsedMs.toFixed(0).padStart(7)}ms`,
+  );
+
+  if (pluginRuns !== 1) {
+    return `scenario C N=${options.count} K=${options.graphFanout}: pluginRuns=${pluginRuns} (expected 1)`;
+  }
+  return probesPerModule <= GRAPH_PROBES_PER_MODULE_BUDGET
+    ? undefined
+    : `scenario C N=${options.count} K=${options.graphFanout}: probes/file=${probesPerModule.toFixed(1)} exceeds the bounded-derivation budget of ${GRAPH_PROBES_PER_MODULE_BUDGET} (per-delivery derivation re-walks the whole graph)`;
+}
+
+/**
+ * Measure the serve-mode path: with no `buildStart` boundary the cache stays in
+ * persistent-validation mode, so every delivered module re-walks the project
+ * and re-reads the recorded external input set. Measurement only — the path is
+ * the deliberate #980 freshness contract; this quantifies how the graph
+ * envelope's external set multiplies it.
+ */
+async function measureServeValidation(
+  adapter: Adapter,
+  options: MeasureOptions,
+): Promise<void> {
+  const project = createProject(options);
+  const plugin = adapter.rollup({
+    project: path.join(project, "tsconfig.json"),
+  });
+  const runLog = path.join(project, ".plugin-runs");
+  const context = {
+    addWatchFile: () => undefined,
+    error: (message: unknown) => {
+      throw message instanceof Error ? message : new Error(String(message));
+    },
+  };
+
+  // No buildStart anywhere: the cache never becomes build-scoped, which is
+  // exactly the state Vite's development server leaves it in.
+  process.env.PLUGIN_RUN_LOG = runLog;
+  const modules = projectModules(project);
+  for (const id of modules) {
+    await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+  }
+
+  const counter = instrumentReadFileSync();
+  const started = process.hrtime.bigint();
+  for (const id of modules) {
+    await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+  }
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  counter.restore();
+
+  console.log(
+    `  N=${String(options.count).padStart(3)}  ` +
+      `externals=${String(options.graphFanout ?? 0).padStart(4)}  ` +
+      `reads=${String(counter.calls).padStart(8)}  ` +
+      `reads/file=${(counter.calls / options.count).toFixed(1).padStart(8)}  ` +
+      `${elapsedMs.toFixed(0).padStart(7)}ms`,
+  );
+}
+
+/**
+ * Wrap the two fs calls the macOS `pathIdentityKey` branch pays per call
+ * (`existsSync` and `realpathSync.native`) with pass-through counters.
+ */
+function instrumentFsProbes(): { calls: number; restore: () => void } {
+  const counter = { calls: 0, restore: () => undefined };
+  const originalExists = fs.existsSync;
+  const originalRealpath = fs.realpathSync.native;
+  (fs as { existsSync: typeof fs.existsSync }).existsSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.existsSync>
+  ) {
+    counter.calls += 1;
+    return originalExists.apply(this, args as never);
+  } as typeof fs.existsSync;
+  (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
+    function (
+      this: unknown,
+      ...args: Parameters<typeof fs.realpathSync.native>
+    ) {
+      counter.calls += 1;
+      return originalRealpath.apply(this, args as never);
+    } as typeof fs.realpathSync.native;
+  counter.restore = () => {
+    (fs as { existsSync: typeof fs.existsSync }).existsSync = originalExists;
+    (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
+      originalRealpath;
+  };
+  return counter;
 }
 
 /**
@@ -280,8 +480,23 @@ function createProject(options: MeasureOptions): string {
     fs.mkdirSync(depDir, { recursive: true });
     fs.writeFileSync(path.join(depDir, "index.d.ts"), "export {};\n", "utf8");
   }
+  const graphFanout = options.graphFanout ?? 0;
+  if (graphFanout > 0) {
+    // The graph envelope's external targets must exist: the store-time
+    // snapshot hashes every recorded external input.
+    for (let index = 0; index < graphFanout; index += 1) {
+      const depDir = path.join(project, "node_modules", `dep${index}`);
+      fs.mkdirSync(depDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(depDir, "index.d.ts"),
+        `export declare const dep${index}: number;\n`,
+        "utf8",
+      );
+    }
+  }
   // The Go sidecar keys its extra output entry only when asked.
   process.env.TTSC_PERF_EMIT_EXTERNAL = options.emitExternalKey ? "1" : "0";
+  process.env.TTSC_PERF_GRAPH_FANOUT = String(graphFanout);
   return project;
 }
 
@@ -310,11 +525,22 @@ function writeGoPlugin(project: string): void {
       '  "fmt"',
       '  "os"',
       '  "path/filepath"',
+      '  "sort"',
+      '  "strconv"',
       '  "strings"',
       ")",
       "",
+      "type referenceGraph struct {",
+      '  Edges      map[string][]string `json:"edges"`',
+      '  Globals    []string            `json:"globals"`',
+      '  Configs    []string            `json:"configs"`',
+      '  Candidates map[string][]string `json:"candidates,omitempty"`',
+      "}",
+      "",
       "type transformResult struct {",
-      '  TypeScript map[string]string `json:"typescript"`',
+      '  TypeScript   map[string]string   `json:"typescript"`',
+      '  Dependencies map[string][]string `json:"dependencies,omitempty"`',
+      '  Graph        *referenceGraph     `json:"graph,omitempty"`',
       "}",
       "",
       "func main() { os.Exit(run(os.Args[1:])) }",
@@ -353,17 +579,54 @@ function writeGoPlugin(project: string): void {
       '  srcDir := filepath.Join(root, "src")',
       "  entries, err := os.ReadDir(srcDir)",
       "  if err != nil { fmt.Fprintln(os.Stderr, err); return 2 }",
+      "  names := []string{}",
       "  for _, e := range entries {",
       '    if e.IsDir() || !strings.HasSuffix(e.Name(), ".ts") { continue }',
-      "    data, err := os.ReadFile(filepath.Join(srcDir, e.Name()))",
+      "    names = append(names, e.Name())",
+      "  }",
+      "  sort.Strings(names)",
+      "  for _, name := range names {",
+      "    data, err := os.ReadFile(filepath.Join(srcDir, name))",
       "    if err != nil { fmt.Fprintln(os.Stderr, err); return 2 }",
-      '    ts["src/"+e.Name()] = string(data)',
+      '    ts["src/"+name] = string(data)',
       "  }",
       '  if os.Getenv("TTSC_PERF_EMIT_EXTERNAL") == "1" {',
       '    ts["node_modules/dep/index.d.ts"] = "export {};\\n"',
       "  }",
       "",
-      "  data, _ := json.Marshal(transformResult{TypeScript: ts})",
+      "  result := transformResult{TypeScript: ts}",
+      '  fanout, _ := strconv.Atoi(os.Getenv("TTSC_PERF_GRAPH_FANOUT"))',
+      "  if fanout > 0 {",
+      "    externals := make([]string, 0, fanout)",
+      "    for j := 0; j < fanout; j++ {",
+      '      externals = append(externals, fmt.Sprintf("node_modules/dep%d/index.d.ts", j))',
+      "    }",
+      "    edges := map[string][]string{}",
+      "    deps := map[string][]string{}",
+      "    candidates := map[string][]string{}",
+      "    for i, name := range names {",
+      '      key := "src/" + name',
+      "      targets := []string{}",
+      "      if i+1 < len(names) {",
+      '        targets = append(targets, "src/"+names[i+1])',
+      "      }",
+      "      targets = append(targets, externals...)",
+      "      edges[key] = targets",
+      "      deps[key] = externals",
+      "      // A missing superseding probe, mirroring an unsuccessful",
+      "      // module-resolution candidate the compiler records.",
+      '      candidates[key] = []string{fmt.Sprintf("node_modules/dep%d/index.ts", i%fanout)}',
+      "    }",
+      "    result.Dependencies = deps",
+      "    result.Graph = &referenceGraph{",
+      "      Edges:      edges,",
+      "      Globals:    []string{},",
+      '      Configs:    []string{"tsconfig.json"},',
+      "      Candidates: candidates,",
+      "    }",
+      "  }",
+      "",
+      "  data, _ := json.Marshal(result)",
       "  fmt.Fprintln(os.Stdout, string(data))",
       "  return 0",
       "}",

@@ -15,11 +15,15 @@ import path from "node:path";
  * `emitExternalKey` makes the fixture transform emit one output entry keyed
  * outside the project's directory walk (a `node_modules/**` path), reproducing
  * what the native host does for program dependencies (`node_modules`
- * declarations, sibling-package sources).
+ * declarations, sibling-package sources). `graphFanout` makes the fixture stamp
+ * a reference-graph envelope where every module edges to every sibling plus
+ * that many planted `node_modules/dep{j}/index.d.ts` declarations — the shape
+ * typia >= 13.1.19 produces.
  */
 interface ICacheProjectOptions {
   emitExternalKey?: boolean;
   fileCount?: number;
+  graphFanout?: number;
 }
 
 // Build the Go fixture once per process; transformTtsc shells out to it.
@@ -338,6 +342,116 @@ async function assertFirstModuleDeliveriesDoNotRehashProject(): Promise<void> {
 }
 
 /**
+ * Asserts samchon/ttsc#1007: cache-hit sibling deliveries of one graph-bearing
+ * generation do not re-probe the filesystem per module.
+ *
+ * Watch-input derivation must pay the graph's identity computations once per
+ * generation; after that a delivery costs only its own memoized lookups. The
+ * probe counter simulates both filesystem calls made by the macOS
+ * `pathIdentityKey` branch, `existsSync` and `realpathSync.native`, on any
+ * host, so the bound holds identically across CI platforms. Before the fix
+ * every delivery re-walked the whole edge set with two syscalls per path, which
+ * scaled O(modules x edges) into the #970 residual stall.
+ */
+async function assertSiblingDeliveriesDoNotReprobeGraph(): Promise<void> {
+  const {
+    beginTtscTransformBuild,
+    createTtscTransformCache,
+    resolveOptions,
+    transformTtsc,
+  } = await TestUnpluginRuntime.loadUnpluginApi();
+  const graphFanout = 24;
+  const project = createCacheProject({ fileCount: 6, graphFanout });
+  const modules = projectModules(project.root);
+  const cache = createTtscTransformCache();
+  beginTtscTransformBuild(cache);
+  const options = resolveOptions();
+
+  // The first delivery compiles, so it needs the real platform for the
+  // native spawn; the remaining deliveries are pure cache hits.
+  const watched = new Map<string, string[]>();
+  const deliver = (file: string) =>
+    transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+      {
+        addWatchFile: (input: string) => {
+          const list = watched.get(file) ?? [];
+          list.push(input);
+          watched.set(file, list);
+        },
+      },
+    );
+  await deliver(modules[0]!);
+
+  const probes = countFsIdentityProbes();
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    for (const file of modules.slice(1)) {
+      await deliver(file);
+    }
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    probes.restore();
+  }
+
+  // Derivation parity: each module registers its own reach union, minus
+  // itself, plus the universal config chain.
+  const expected = (file: string) =>
+    [
+      ...modules.filter((other) => other !== file),
+      ...Array.from({ length: graphFanout }, (_, index) =>
+        path.join(project.root, "node_modules", `dep${index}`, "index.d.ts"),
+      ),
+      path.join(project.root, "tsconfig.json"),
+    ].sort();
+  for (const file of modules) {
+    assert.deepEqual([...(watched.get(file) ?? [])].sort(), expected(file));
+  }
+
+  const perDelivery = probes.calls / (modules.length - 1);
+  assert.ok(
+    perDelivery <= 24,
+    `watch derivation re-probed the filesystem ${perDelivery.toFixed(1)} times per delivery (bound: 24)`,
+  );
+}
+
+/**
+ * Wrap the two fs calls the macOS `pathIdentityKey` branch pays per call
+ * (`existsSync` and `realpathSync.native`) with pass-through counters.
+ */
+function countFsIdentityProbes(): { calls: number; restore: () => void } {
+  const counter = { calls: 0, restore: () => undefined };
+  const originalExists = fs.existsSync;
+  const originalRealpath = fs.realpathSync.native;
+  (fs as { existsSync: typeof fs.existsSync }).existsSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.existsSync>
+  ) {
+    counter.calls += 1;
+    return originalExists.apply(this, args as never);
+  } as typeof fs.existsSync;
+  (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
+    function (
+      this: unknown,
+      ...args: Parameters<typeof fs.realpathSync.native>
+    ) {
+      counter.calls += 1;
+      return originalRealpath.apply(this, args as never);
+    } as typeof fs.realpathSync.native;
+  counter.restore = () => {
+    (fs as { existsSync: typeof fs.existsSync }).existsSync = originalExists;
+    (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
+      originalRealpath;
+  };
+  return counter;
+}
+
+/**
  * Asserts a cache with no build-start lifecycle validates every generation hit,
  * including a module that generation has not served before.
  */
@@ -520,6 +634,7 @@ function createCacheProject(options: ICacheProjectOptions): {
               name: "cache-probe",
               runLog,
               emitExternal: options.emitExternalKey === true,
+              graphFanout: options.graphFanout ?? 0,
             },
           ],
         },
@@ -549,6 +664,18 @@ function createCacheProject(options: ICacheProjectOptions): {
     const depDir = path.join(root, "node_modules", "dep");
     fs.mkdirSync(depDir, { recursive: true });
     fs.writeFileSync(path.join(depDir, "index.d.ts"), "export {};\n", "utf8");
+  }
+  const graphFanout = options.graphFanout ?? 0;
+  for (let index = 0; index < graphFanout; index += 1) {
+    // The graph envelope's external targets must exist: the store-time
+    // snapshot hashes every recorded external input.
+    const depDir = path.join(root, "node_modules", `dep${index}`);
+    fs.mkdirSync(depDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(depDir, "index.d.ts"),
+      `export declare const dep${index}: number;\n`,
+      "utf8",
+    );
   }
   writeGoPlugin(root);
   return { root, runLog };
@@ -588,8 +715,15 @@ function writeGoPlugin(root: string): void {
       '  Config map[string]any `json:"config"`',
       "}",
       "",
+      "type graphSection struct {",
+      '  Edges   map[string][]string `json:"edges"`',
+      '  Globals []string            `json:"globals"`',
+      '  Configs []string            `json:"configs"`',
+      "}",
+      "",
       "type transformResult struct {",
       '  TypeScript map[string]string `json:"typescript"`',
+      '  Graph      *graphSection     `json:"graph,omitempty"`',
       "}",
       "",
       "func main() { os.Exit(run(os.Args[1:])) }",
@@ -629,17 +763,43 @@ function writeGoPlugin(root: string): void {
       '  srcDir := filepath.Join(root, "src")',
       "  entries, err := os.ReadDir(srcDir)",
       "  if err != nil { fmt.Fprintln(os.Stderr, err); return 2 }",
+      "  names := []string{}",
       "  for _, e := range entries {",
       '    if e.IsDir() || !strings.HasSuffix(e.Name(), ".ts") { continue }',
-      "    data, err := os.ReadFile(filepath.Join(srcDir, e.Name()))",
+      "    names = append(names, e.Name())",
+      "  }",
+      "  for _, name := range names {",
+      "    data, err := os.ReadFile(filepath.Join(srcDir, name))",
       "    if err != nil { fmt.Fprintln(os.Stderr, err); return 2 }",
-      '    ts["src/"+e.Name()] = strings.ReplaceAll(string(data), "PROBE", "PROBED")',
+      '    ts["src/"+name] = strings.ReplaceAll(string(data), "PROBE", "PROBED")',
       "  }",
       '  if boolValue(cfg, "emitExternal") {',
       '    ts["node_modules/dep/index.d.ts"] = "export {};\\n"',
       "  }",
       "",
-      "  data, _ := json.Marshal(transformResult{TypeScript: ts})",
+      "  result := transformResult{TypeScript: ts}",
+      '  if fanout := int(numberValue(cfg, "graphFanout")); fanout > 0 {',
+      "    externals := make([]string, 0, fanout)",
+      "    for j := 0; j < fanout; j++ {",
+      '      externals = append(externals, fmt.Sprintf("node_modules/dep%d/index.d.ts", j))',
+      "    }",
+      "    edges := map[string][]string{}",
+      "    for _, name := range names {",
+      "      targets := []string{}",
+      "      for _, other := range names {",
+      '        if other != name { targets = append(targets, "src/"+other) }',
+      "      }",
+      "      targets = append(targets, externals...)",
+      '      edges["src/"+name] = targets',
+      "    }",
+      "    result.Graph = &graphSection{",
+      "      Edges:      edges,",
+      "      Globals:    []string{},",
+      '      Configs:    []string{"tsconfig.json"},',
+      "    }",
+      "  }",
+      "",
+      "  data, _ := json.Marshal(result)",
       "  fmt.Fprintln(os.Stdout, string(data))",
       "  return 0",
       "}",
@@ -662,6 +822,11 @@ function writeGoPlugin(root: string): void {
       "  return value",
       "}",
       "",
+      "func numberValue(config map[string]any, key string) float64 {",
+      "  value, _ := config[key].(float64)",
+      "  return value",
+      "}",
+      "",
     ].join("\n"),
     "utf8",
   );
@@ -675,6 +840,7 @@ export {
   assertHostExceptionTransformIsEvictedAndRecovers,
   assertPersistentCacheValidatesAnUnservedModule,
   assertRejectedTransformIsEvictedAndRecovers,
+  assertSiblingDeliveriesDoNotReprobeGraph,
   assertStaleEvictionKeepsNewerGeneration,
   assertStaleMismatchUsesNewerGeneration,
   assertSupersededMatchingGenerationIsNotServed,
