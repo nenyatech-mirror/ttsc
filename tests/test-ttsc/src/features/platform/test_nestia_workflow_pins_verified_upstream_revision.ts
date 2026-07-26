@@ -36,6 +36,24 @@ export const test_nestia_workflow_pins_verified_upstream_revision = () => {
       ),
     /expected the exact pinned nestia checkout mapping/,
   );
+  const duplicated = parseWorkflow(source);
+  duplicated.jobs.probe = {
+    steps: [
+      {
+        name: "Check out verified nestia integration revision",
+        uses: "actions/checkout@v4",
+        with: {
+          repository: "samchon/nestia",
+          ref: "3b27e69b69dea3f102315042dce87c18d81be74a",
+          path: "experimental/nestia",
+        },
+      },
+    ],
+  };
+  assert.throws(
+    () => assertPinnedNestiaCheckout(duplicated),
+    /expected exactly one pinned nestia checkout step/,
+  );
   for (const run of [
     [
       "      - name: Folded moving nestia clone probe",
@@ -47,6 +65,12 @@ export const test_nestia_workflow_pins_verified_upstream_revision = () => {
       "      - name: Plain moving nestia clone probe",
       "        run: git",
       "          clone https://github.com/samchon/nestia.git experimental/nestia",
+    ],
+    [
+      "      - name: Continued moving nestia clone probe",
+      "        run: |",
+      "          git \\",
+      "            clone https://github.com/samchon/nestia.git experimental/nestia",
     ],
   ]) {
     assert.throws(
@@ -100,7 +124,7 @@ function assertPinnedNestiaCheckout(workflow: IWorkflow): void {
       path: "experimental/nestia",
     },
   };
-  const owners = nestia.steps.filter(
+  const owners = selectWorkflowSteps(workflow).filter(
     (step) =>
       step.name === expected.name ||
       (isRecord(step.with) &&
@@ -117,6 +141,10 @@ function assertPinnedNestiaCheckout(workflow: IWorkflow): void {
     expected,
     "expected the exact pinned nestia checkout mapping",
   );
+  assert.ok(
+    nestia.steps.some((step) => Object.is(step, owners[0])),
+    "expected the pinned checkout to belong to the nestia job",
+  );
 }
 
 /** Reject an active shell command that replaces the pin with a moving clone. */
@@ -127,14 +155,22 @@ function assertNoMovingNestiaClone(workflow: IWorkflow): void {
     }
     for (const step of job.steps) {
       if (isRecord(step) && typeof step.run === "string") {
+        const command = step.run.replace(/\\\n\s*/g, " ");
         assert.doesNotMatch(
-          step.run,
-          /\bgit\s+clone\b/,
+          command,
+          /\bgit\b[^\n;&|]*\bclone\b/,
           "release integration must not use a moving nestia clone",
         );
       }
     }
   }
+}
+
+/** Flatten valid parsed step mappings across the complete workflow. */
+function selectWorkflowSteps(workflow: IWorkflow): IWorkflowStep[] {
+  return Object.values(workflow.jobs).flatMap((job) =>
+    Array.isArray(job.steps) ? job.steps.filter(isRecord) : [],
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
