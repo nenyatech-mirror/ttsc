@@ -22,6 +22,7 @@ export const test_nestia_workflow_pins_verified_upstream_revision = () => {
   assert.notEqual(start, -1, "expected the pinned nestia checkout step");
   const next = source.indexOf("\n      - ", start + marker.length);
   const block = source.slice(start, next === -1 ? undefined : next);
+  const blockLines = block.split(/\r?\n/);
 
   for (const expected of [
     "        uses: actions/checkout@v4",
@@ -29,7 +30,14 @@ export const test_nestia_workflow_pins_verified_upstream_revision = () => {
     "          ref: 3b27e69b69dea3f102315042dce87c18d81be74a",
     "          path: experimental/nestia",
   ]) {
-    assert.ok(block.includes(expected), `expected checkout line: ${expected}`);
+    assert.equal(
+      blockLines.filter((line) => line === expected).length,
+      1,
+      `expected exactly one checkout line: ${expected}`,
+    );
   }
-  assert.doesNotMatch(source, /git clone\b[^\n]*samchon\/nestia/);
+  assert.doesNotMatch(
+    source.replace(/\\\r?\n\s*/g, " "),
+    /git clone\b[^\n]*samchon\/nestia/,
+  );
 };
