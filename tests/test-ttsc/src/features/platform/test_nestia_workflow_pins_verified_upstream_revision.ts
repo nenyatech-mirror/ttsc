@@ -1,3 +1,5 @@
+import { parse } from "yaml";
+
 import { assert, fs, path, workspaceRoot } from "../../internal/toolchain";
 
 /**
@@ -17,115 +19,124 @@ export const test_nestia_workflow_pins_verified_upstream_revision = () => {
     path.join(workspaceRoot, ".github", "workflows", "nestia.yml"),
     "utf8",
   );
-  assertPinnedNestiaCheckout(source);
-  assertNoMovingNestiaClone(source);
+  assertPinnedNestiaCheckout(parseWorkflow(source));
+  assertNoMovingNestiaClone(parseWorkflow(source));
 
   const normalized = source.replace(/\r\n/g, "\n");
   const marker = "      - name: Check out verified nestia integration revision";
   assert.throws(
     () =>
       assertPinnedNestiaCheckout(
-        normalized.replace(
-          "        with:\n          repository: samchon/nestia",
-          "        env:\n          repository: samchon/nestia",
+        parseWorkflow(
+          normalized.replace(
+            "        with:\n          repository: samchon/nestia",
+            "        env:\n          repository: samchon/nestia",
+          ),
         ),
       ),
     /expected the exact pinned nestia checkout mapping/,
   );
-  assert.throws(
-    () =>
-      assertNoMovingNestiaClone(
-        normalized.replace(
-          marker,
-          [
-            "      - name: Moving nestia clone probe",
-            "        run: >",
-            "          git clone",
-            "          https://github.com/samchon/nestia.git experimental/nestia",
-            marker,
-          ].join("\n"),
+  for (const run of [
+    [
+      "      - name: Folded moving nestia clone probe",
+      "        run: >",
+      "          git clone",
+      "          https://github.com/samchon/nestia.git experimental/nestia",
+    ],
+    [
+      "      - name: Plain moving nestia clone probe",
+      "        run: git",
+      "          clone https://github.com/samchon/nestia.git experimental/nestia",
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        assertNoMovingNestiaClone(
+          parseWorkflow(
+            normalized.replace(marker, [...run, marker].join("\n")),
+          ),
         ),
-      ),
-    /moving nestia clone/,
-  );
+      /moving nestia clone/,
+    );
+  }
 };
 
+interface IWorkflow {
+  jobs: Record<string, IWorkflowJob>;
+}
+
+interface IWorkflowJob {
+  steps?: IWorkflowStep[];
+}
+
+interface IWorkflowStep {
+  name?: unknown;
+  run?: unknown;
+  uses?: unknown;
+  with?: unknown;
+}
+
+/** Parse a workflow and prove the mappings needed by this regression test. */
+function parseWorkflow(source: string): IWorkflow {
+  const workflow: unknown = parse(source);
+  assert.ok(isRecord(workflow), "expected a workflow mapping");
+  assert.ok(isRecord(workflow.jobs), "expected a jobs mapping");
+  return workflow as unknown as IWorkflow;
+}
+
 /** Assert the complete checkout action input mapping as one owned structure. */
-function assertPinnedNestiaCheckout(source: string): void {
-  const normalized = source.replace(/\r\n/g, "\n");
-  const marker = "      - name: Check out verified nestia integration revision";
+function assertPinnedNestiaCheckout(workflow: IWorkflow): void {
+  const nestia = workflow.jobs.nestia;
+  assert.ok(isRecord(nestia), "expected the nestia job");
+  assert.ok(Array.isArray(nestia.steps), "expected nestia job steps");
+  assert.ok(nestia.steps.every(isRecord), "expected step mappings");
+
+  const expected: IWorkflowStep = {
+    name: "Check out verified nestia integration revision",
+    uses: "actions/checkout@v4",
+    with: {
+      repository: "samchon/nestia",
+      ref: "3b27e69b69dea3f102315042dce87c18d81be74a",
+      path: "experimental/nestia",
+    },
+  };
+  const owners = nestia.steps.filter(
+    (step) =>
+      step.name === expected.name ||
+      (isRecord(step.with) &&
+        (step.with.repository === "samchon/nestia" ||
+          step.with.path === "experimental/nestia")),
+  );
   assert.equal(
-    normalized.split(marker).length - 1,
+    owners.length,
     1,
     "expected exactly one pinned nestia checkout step",
   );
-  const start = normalized.indexOf(marker);
-  const next = normalized.indexOf("\n      - ", start + marker.length);
-  const block = normalized.slice(start, next === -1 ? undefined : next);
-  const expected = [
-    marker,
-    "        uses: actions/checkout@v4",
-    "        with:",
-    "          repository: samchon/nestia",
-    "          ref: 3b27e69b69dea3f102315042dce87c18d81be74a",
-    "          path: experimental/nestia",
-  ].join("\n");
-  assert.equal(
-    block.trimEnd(),
+  assert.deepEqual(
+    owners[0],
     expected,
     "expected the exact pinned nestia checkout mapping",
   );
 }
 
 /** Reject an active shell command that replaces the pin with a moving clone. */
-function assertNoMovingNestiaClone(source: string): void {
-  for (const command of selectWorkflowRunCommands(source)) {
-    assert.doesNotMatch(
-      command,
-      /\bgit\s+clone\b/,
-      "release integration must not use a moving nestia clone",
-    );
+function assertNoMovingNestiaClone(workflow: IWorkflow): void {
+  for (const job of Object.values(workflow.jobs)) {
+    if (!Array.isArray(job.steps)) {
+      continue;
+    }
+    for (const step of job.steps) {
+      if (isRecord(step) && typeof step.run === "string") {
+        assert.doesNotMatch(
+          step.run,
+          /\bgit\s+clone\b/,
+          "release integration must not use a moving nestia clone",
+        );
+      }
+    }
   }
 }
 
-/**
- * Extract GitHub Actions `run:` values, folding `>` blocks and joining shell
- * backslash continuations in `|` blocks the same way the command runner does.
- */
-function selectWorkflowRunCommands(source: string): string[] {
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-  const output: string[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    const match = /^(\s*)(?:-\s+)?run:\s*(.*?)\s*$/.exec(line);
-    if (match === null) {
-      continue;
-    }
-    const indent = match[1]!.length;
-    const value = match[2]!;
-    const indicator = /^[>|]/.exec(value)?.[0];
-    if (indicator === undefined) {
-      output.push(value);
-      continue;
-    }
-
-    const body: string[] = [];
-    while (index + 1 < lines.length) {
-      const next = lines[index + 1]!;
-      if (
-        next.trim().length !== 0 &&
-        next.length - next.trimStart().length <= indent
-      ) {
-        break;
-      }
-      body.push(next);
-      index += 1;
-    }
-    const command =
-      indicator === ">"
-        ? body.map((entry) => entry.trim()).join(" ")
-        : body.join("\n");
-    output.push(command.replace(/\\\n\s*/g, " "));
-  }
-  return output;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
