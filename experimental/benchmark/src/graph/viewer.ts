@@ -1,4 +1,4 @@
-// viewer.mjs — turn a raw @ttsc/graph dump into the reduced JSON the 3D viewer
+// viewer.ts — turn a raw @ttsc/graph dump into the reduced JSON the 3D viewer
 // renders. graphdump (Go) emits every node and edge keyed by absolute realpath;
 // this script makes it web-ready:
 //
@@ -8,21 +8,23 @@
 //      renders as a legible few-thousand-node ontology instead of a hairball
 //
 // The reduce() function is pure and has no Go or filesystem dependency, so it is
-// unit-checkable with `node viewer.mjs --demo`. Producing the real vscode graph
+// unit-checkable with `node --experimental-strip-types src/graph/viewer.ts --demo`. Producing the real vscode graph
 // needs Go and the prepared fixture (see --project), which run on a build host.
 //
 // Usage:
-//   node experimental/benchmark/graph/viewer.mjs --demo
-//   node experimental/benchmark/graph/viewer.mjs --in raw.json --name vscode
-//   node experimental/benchmark/graph/viewer.mjs --project vscode \
+//   node --experimental-strip-types experimental/benchmark/src/graph/viewer.ts --demo
+//   node --experimental-strip-types experimental/benchmark/src/graph/viewer.ts --in raw.json --name vscode
+//   node --experimental-strip-types experimental/benchmark/src/graph/viewer.ts --project vscode \
 //     --root experimental/benchmark/.work/ttsc-benchmark-vscode@ttsc --tsconfig src/tsconfig.json
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { REPOSITORY_ROOT } from "../constants.ts";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
+const REPO_ROOT = REPOSITORY_ROOT;
 const PUBLIC_GRAPH_DIR = path.join(REPO_ROOT, "website", "public", "graph");
 
 // ---------------------------------------------------------------------------

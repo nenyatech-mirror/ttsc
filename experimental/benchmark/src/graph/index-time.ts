@@ -3,7 +3,7 @@
  * Cold index build-time benchmark for the graph tool axis: what _readiness_
  * costs before a tool can answer its first question, per (tool × fixture).
  *
- * The agent benchmark (`graph.mjs`) measures what a question costs once a tool
+ * The agent benchmark (`graph.ts`) measures what a question costs once a tool
  * is ready; this runner measures the readiness itself. Per cell it deletes the
  * tool's index, runs its build step once, and takes wall time:
  *
@@ -32,10 +32,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PROJECTS, projectDir, resolveWorkDir } from "./corpus.mjs";
+import { REPOSITORY_ROOT } from "../constants.ts";
+import { PROJECTS, projectDir, resolveWorkDir } from "./corpus.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "../../..");
+const repoRoot = REPOSITORY_ROOT;
 const ttscDir = path.join(repoRoot, "packages", "ttsc");
 const workDir = resolveWorkDir(repoRoot);
 const websiteJson = path.join(
@@ -99,7 +100,7 @@ if (selected.length === 0) {
   throw new Error("index-time benchmark requires --project <name> or --all");
 }
 
-// Quiet-host gate, mirrored from performance.mjs: a cold build is one sample
+// Quiet-host gate, mirrored from performance.ts: a cold build is one sample
 // with no median to hide behind, so a noisy host corrupts the cell outright.
 // Warns by default, aborts under TTSC_BENCH_REQUIRE_QUIET=1 (set it for every
 // publication run), and is silenced by TTSC_BENCH_SKIP_LOAD_CHECK=1. Note

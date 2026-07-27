@@ -9,9 +9,9 @@
 //
 // Usage:
 //   # one-time: fix the baseline (no MCP) at n=5 for every dedicated prompt
-//   node run-suite.mjs --arm=baseline --runs=5 --harness=codex --model=gpt-5.4-mini
+//   node --experimental-strip-types src/graph/run-suite.ts --arm=baseline --runs=5 --harness=codex --model=gpt-5.4-mini
 //   # each iteration: graph arm, n=1, all projects at once, vs the cached baseline
-//   node run-suite.mjs --arm=graph --runs=1 --harness=codex --model=gpt-5.4-mini
+//   node --experimental-strip-types src/graph/run-suite.ts --arm=graph --runs=1 --harness=codex --model=gpt-5.4-mini
 //
 // Flags: --family=dedicated|common|all (default dedicated, = one prompt/project),
 // --concurrency (prompts in flight, default 4), --inner-concurrency (agent runs
@@ -23,11 +23,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { websiteCellKey } from "./website-cell.mjs";
+import {
+  BENCHMARK_WORK_ROOT,
+  QUESTIONS_ROOT,
+  REPOSITORY_ROOT,
+  nodeTypescriptArguments,
+} from "../constants.ts";
+import { websiteCellKey } from "./website-cell.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "..", "..", "..");
-const work = path.join(repoRoot, "experimental", "benchmark", ".work");
+const repoRoot = REPOSITORY_ROOT;
+const work = BENCHMARK_WORK_ROOT;
 const websiteJson = path.join(
   repoRoot,
   "website",
@@ -39,7 +45,7 @@ const graphBenchmarkScript = path.join(
   repoRoot,
   "experimental",
   "benchmark",
-  "graph.mjs",
+  "graph.ts",
 );
 const PUBLISHED_SAMPLE_KEYS = [
   "tokens",
@@ -62,7 +68,7 @@ const PUBLISHED_SAMPLE_KEYS = [
   "attempts",
 ];
 
-// Match experimental/benchmark/graph.mjs, which owns fixture setup.
+// Match experimental/benchmark/src/graph.ts, which owns fixture setup.
 // Prepared clones live in .work/<repoName>@<branch>.
 const PROJECTS = {
   excalidraw: {
@@ -114,17 +120,20 @@ const family = arg("family", "dedicated");
 const outer = Number(arg("concurrency", "4"));
 const inner = Number(arg("inner-concurrency", String(runs)));
 const storePath = path.resolve(
-  arg("baseline-store", path.join(here, `baselines-${harness}.json`)),
+  arg(
+    "baseline-store",
+    path.join(BENCHMARK_WORK_ROOT, "graph", `baselines-${harness}.json`),
+  ),
 );
 const outPath = arg("out");
 const setup = !process.argv.includes("--no-setup");
 
 const harnessScript = path.join(
   here,
-  harness === "codex" ? "agent-ab-codex.mjs" : "agent-ab.mjs",
+  harness === "codex" ? "agent-ab-codex.ts" : "agent-ab.ts",
 );
 const manifest = JSON.parse(
-  fs.readFileSync(path.join(here, "questions", "manifest.json"), "utf8"),
+  fs.readFileSync(path.join(QUESTIONS_ROOT, "manifest.json"), "utf8"),
 );
 // --repo limits the suite to a subset (comma-separated) for validation or for
 // targeting one project; default is every project in the family.
@@ -177,14 +186,13 @@ function ensureFixtures(selectedPrompts) {
 }
 
 function runFixtureSetup(branch, repos) {
-  const args = [
-    graphBenchmarkScript,
+  const args = nodeTypescriptArguments(graphBenchmarkScript, [
     "--setup-only",
     `--project=${repos.join(",")}`,
     `--branch=${branch}`,
     "--tools=ttsc-graph",
     `--models=${model}`,
-  ];
+  ]);
   const result = cp.spawnSync(process.execPath, args, {
     cwd: repoRoot,
     env: process.env,
@@ -198,7 +206,7 @@ function runFixtureSetup(branch, repos) {
     );
 }
 
-const tmpDir = path.join(here, ".suite-tmp");
+const tmpDir = path.join(BENCHMARK_WORK_ROOT, "graph", "suite-tmp");
 fs.mkdirSync(tmpDir, { recursive: true });
 
 const median = (xs) => {
@@ -234,8 +242,7 @@ function runPrompt(prompt) {
       throw new Error(
         `missing prepared graph fixture for ${prompt.id}: ${dir}`,
       );
-    const childArgs = [
-      harnessScript,
+    const childArgs = nodeTypescriptArguments(harnessScript, [
       `--prompt-id=${prompt.id}`,
       `--arm=${arm}`,
       `--runs=${runs}`,
@@ -243,7 +250,7 @@ function runPrompt(prompt) {
       `--max-run-retries=${maxRunRetries}`,
       `--repo-dir=${dir}`,
       `--report=${report}`,
-    ];
+    ]);
     const child = cp.spawn(process.execPath, childArgs, {
       cwd: repoRoot,
       env: { ...process.env, TTSC_BENCH_CONCURRENCY: String(inner) },

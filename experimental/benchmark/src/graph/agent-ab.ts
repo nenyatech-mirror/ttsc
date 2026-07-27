@@ -25,35 +25,64 @@
 // `claude` and `go` on PATH, and a built `@ttsc/graph` (packages/graph/lib).
 //
 // Usage:
-//   node experimental/benchmark/graph/agent-ab.mjs --prompt-family=dedicated --repo=excalidraw --runs=2
-//   node experimental/benchmark/graph/agent-ab.mjs --prompt-family=common --repo=vscode --runs=4 --model=opus
-//   node experimental/benchmark/graph/agent-ab.mjs --prompt-id=typeorm-dedicated-v1 --runs=2
+//   node --experimental-strip-types experimental/benchmark/src/graph/agent-ab.ts --prompt-family=dedicated --repo=excalidraw --runs=2
+//   node --experimental-strip-types experimental/benchmark/src/graph/agent-ab.ts --prompt-family=common --repo=vscode --runs=4 --model=opus
+//   node --experimental-strip-types experimental/benchmark/src/graph/agent-ab.ts --prompt-id=typeorm-dedicated-v1 --runs=2
 import cp from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { GROUNDING, TOOL_NUDGE } from "./prompt.mjs";
+import {
+  BENCHMARK_WORK_ROOT,
+  QUESTIONS_ROOT,
+  REPOSITORY_ROOT,
+} from "../constants.ts";
+import { parseKeyValueArguments } from "../utils/arguments.ts";
+import { median } from "../utils/median.ts";
+import {
+  parseNonNegativeInteger,
+  parsePositiveInteger,
+} from "../utils/numbers.ts";
+import { GROUNDING, TOOL_NUDGE } from "./prompt.ts";
+import {
+  type AgentBenchmarkArm,
+  type AgentBenchmarkMetric,
+  type IAgentBenchmarkSample,
+} from "./structures/IAgentBenchmarkSample.ts";
+import type {
+  IBenchmarkCommand,
+  IBenchmarkMcpServer,
+  IBenchmarkSpawnOptions,
+  IBenchmarkSpawnResult,
+} from "./structures/IBenchmarkProcess.ts";
+import type {
+  IGraphBenchmarkPromptManifest,
+  IResolvedGraphBenchmarkPrompt,
+} from "./structures/IGraphBenchmarkPrompt.ts";
+import type { IGraphBenchmarkRepository } from "./structures/IGraphBenchmarkRepository.ts";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "..", "..", "..");
+const repoRoot = REPOSITORY_ROOT;
 const ttscDir = path.join(repoRoot, "packages", "ttsc");
 const graphLauncher = path.join(repoRoot, "packages", "graph", "lib", "bin.js");
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/i;
 
 // The manifest (questions/manifest.json) selects reusable prompt files. The
 // benchmark records runtime metrics only: tokens, tools, cost, and time.
-function loadManifest() {
-  const manifestPath = path.join(here, "questions", "manifest.json");
-  if (!fs.existsSync(manifestPath)) return { prompts: [] };
-  return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+function loadManifest(): IGraphBenchmarkPromptManifest {
+  const manifestPath = path.join(QUESTIONS_ROOT, "manifest.json");
+  if (!fs.existsSync(manifestPath)) return { schemaVersion: 1, prompts: [] };
+  return JSON.parse(
+    fs.readFileSync(manifestPath, "utf8"),
+  ) as IGraphBenchmarkPromptManifest;
 }
 
 // Resolve a manifest prompt by --prompt-id (exact), else the first prompt of a
 // --prompt-family, scoped to --repo when given. Returns the prompt entry plus
 // the loaded question text, or null when neither flag was passed.
-function resolveManifestPrompt(args) {
+function resolveManifestPrompt(
+  args: Readonly<Record<string, string>>,
+): IResolvedGraphBenchmarkPrompt | null {
   const id = args["prompt-id"];
   const family = args["prompt-family"];
   if (!id && !family) return null;
@@ -72,7 +101,7 @@ function resolveManifestPrompt(args) {
         : `no manifest prompt for --prompt-family ${family}${repoFilter ? ` repo ${repoFilter}` : ""}`,
     );
   }
-  const questionFile = path.resolve(here, "questions", entry.file);
+  const questionFile = path.resolve(QUESTIONS_ROOT, entry.file);
   const text = fs.readFileSync(questionFile, "utf8").trim();
   return {
     entry,
@@ -124,20 +153,26 @@ const REPOS = {
     fixtureUrl: "https://github.com/samchon/shopping-backend.git",
     tsconfig: "tsconfig.json",
   },
-};
+} satisfies Record<string, IGraphBenchmarkRepository>;
 
-const args = parseArgs(process.argv.slice(2));
+function repositoryOf(name: string): IGraphBenchmarkRepository {
+  if (Object.hasOwn(REPOS, name) === false)
+    throw new Error(
+      `unknown --repo ${name}; choose ${Object.keys(REPOS).join(" | ")}`,
+    );
+  return REPOS[name as keyof typeof REPOS];
+}
+
+const args: Record<string, string> = parseKeyValueArguments(
+  process.argv.slice(2),
+);
 // A manifest prompt (--prompt-id / --prompt-family) overrides the per-repo
 // question and pins the repo, fixtureBranch, and tsconfig. Resolve it first so
 // it can fill --repo when only --prompt-id is given.
 const manifestPrompt = resolveManifestPrompt(args);
-const repoKey = args.repo ?? manifestPrompt?.entry.repo ?? "excalidraw";
-const spec = REPOS[repoKey];
-if (!spec)
-  throw new Error(
-    `unknown --repo ${repoKey}; choose ${Object.keys(REPOS).join(" | ")}`,
-  );
-const runs = Number(args.runs ?? 2);
+const repoKey: string = args.repo ?? manifestPrompt?.entry.repo ?? "excalidraw";
+const spec: IGraphBenchmarkRepository = repositoryOf(repoKey);
+const runs: number = parsePositiveInteger(args.runs ?? "2", "--runs");
 const model = args.model ?? "sonnet";
 const effort = "high";
 const claudeStartupGraceMs = parseNonNegativeInteger(
@@ -170,7 +205,11 @@ const fixtureBranch =
   spec.fixtureBranch;
 // `graph` is the branch the AI-token benchmark measures; `ttsc` / `ttsc-lint`
 // remain for a run pointed at a performance fixture branch.
-const FIXTURE_BRANCHES = new Set(["graph", "ttsc", "ttsc-lint"]);
+const FIXTURE_BRANCHES: ReadonlySet<string> = new Set([
+  "graph",
+  "ttsc",
+  "ttsc-lint",
+]);
 if (fixtureBranch && !FIXTURE_BRANCHES.has(fixtureBranch)) {
   throw new Error(
     `--fixture-branch must be one of ${[...FIXTURE_BRANCHES].join(", ")}`,
@@ -220,7 +259,7 @@ if (!armsRequested.baseline && !armsRequested.graph)
   throw new Error(`--arm must be baseline | graph | both, got ${armFilter}`);
 
 const goRoot = path.join(os.homedir(), "go-sdk", "go", "bin");
-const goEnv = {
+const goEnv: NodeJS.ProcessEnv = {
   ...process.env,
   PATH: fs.existsSync(goRoot)
     ? `${goRoot}${path.delimiter}${process.env.PATH ?? ""}`
@@ -291,7 +330,7 @@ const emptyCfg = armsRequested.baseline
   ? path.join(os.tmpdir(), `mcp-empty-${process.pid}.json`)
   : null;
 if (withCfg) {
-  const serverCfg = cg
+  const serverCfg: Record<string, IBenchmarkMcpServer> = cg
     ? { codegraph: codegraphServerConfig(repoDir) }
     : cbm
       ? { "codebase-memory-mcp": codebaseMemoryServerConfig() }
@@ -315,10 +354,12 @@ if (withCfg) {
   fs.writeFileSync(withCfg, JSON.stringify({ mcpServers: serverCfg }));
 }
 if (emptyCfg) fs.writeFileSync(emptyCfg, JSON.stringify({ mcpServers: {} }));
-const arms = [
+const arms: Array<{ name: AgentBenchmarkArm; cfg: string }> = [
   { name: "baseline", cfg: emptyCfg },
   { name: "graph", cfg: withCfg },
-].filter((a) => a.cfg);
+].filter(
+  (arm): arm is { name: AgentBenchmarkArm; cfg: string } => arm.cfg !== null,
+);
 
 console.log(
   `\ncodegraph A/B on ${repoKey} - model ${model}, ${runs} run(s) x ${arms.length} arms` +
@@ -330,7 +371,7 @@ console.log(`Q: ${question}\n`);
 const reportName = "agent-ab-report.json";
 const reportPath = args.report
   ? path.resolve(args.report)
-  : path.join(here, reportName);
+  : path.join(BENCHMARK_WORK_ROOT, "graph", reportName);
 const traceDir = args["trace-dir"]
   ? path.resolve(args["trace-dir"])
   : path.join(
@@ -341,7 +382,10 @@ fs.rmSync(reportPath, { force: true });
 fs.rmSync(traceDir, { recursive: true, force: true });
 fs.mkdirSync(traceDir, { recursive: true });
 
-const samples = Object.fromEntries(arms.map((a) => [a.name, []]));
+const samples: Record<AgentBenchmarkArm, IAgentBenchmarkSample[]> = {
+  baseline: [],
+  graph: [],
+};
 let spent = 0;
 const MAX_RUN_RETRIES = parseNonNegativeInteger(
   args["max-run-retries"] ?? "4",
@@ -353,7 +397,7 @@ const MAX_RUN_RETRIES = parseNonNegativeInteger(
 // matters when comparing close conditions. Each invocation is its own process with
 // its own MCP server and trace file, so they never share state.
 const concurrency = Number(process.env.TTSC_BENCH_CONCURRENCY) || Infinity;
-const thunks = arms.flatMap((arm) =>
+const thunks: Array<() => Promise<void>> = arms.flatMap((arm) =>
   Array.from({ length: runs }, (_, r) => async () => {
     // A run is a measurement when it spent tokens and the harness carried it to
     // an answer. A 529 overload reports subtype "success" with is_error and zero
@@ -362,7 +406,7 @@ const thunks = arms.flatMap((arm) =>
     // as the cheapest cell in the table, a saving the tool never earned. Both are
     // retried. The trace file is keyed by run number, so a successful retry
     // overwrites the failed attempt.
-    let m;
+    let m: IAgentBenchmarkSample | undefined;
     let attempts = 0;
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
       attempts = attempt + 1;
@@ -378,11 +422,12 @@ const thunks = arms.flatMap((arm) =>
       if (Number(m?.tokens ?? 0) > 0 && m?.ok !== false) break;
       if (attempt < MAX_RUN_RETRIES)
         console.log(
-          `  ${arm.name.padEnd(8)} run ${r + 1}: [FAILED] ${m.error || ""} retrying (${attempt + 1}/${MAX_RUN_RETRIES})`,
+          `  ${arm.name.padEnd(8)} run ${r + 1}: [FAILED] ${m?.error || ""} retrying (${attempt + 1}/${MAX_RUN_RETRIES})`,
         );
     }
     // Tag the sample with prompt provenance only. The benchmark does not judge
     // answer correctness in-process.
+    if (m === undefined) throw new Error(`${arm.name} produced no sample`);
     if (promptId) m.promptId = promptId;
     if (manifestPrompt?.questionSha256) {
       m.questionSha256 = manifestPrompt.questionSha256;
@@ -390,9 +435,9 @@ const thunks = arms.flatMap((arm) =>
     m.run = r + 1;
     m.attempts = attempts;
     samples[arm.name].push(m);
-    spent += m.cost;
+    spent += m.cost ?? 0;
     console.log(
-      `  ${arm.name.padEnd(8)} run ${r + 1}: $${m.cost.toFixed(3)}, ${m.tokens} tok, ${m.tools} tools ` +
+      `  ${arm.name.padEnd(8)} run ${r + 1}: $${(m.cost ?? 0).toFixed(3)}, ${m.tokens} tok, ${m.tools} tools ` +
         `(read ${m.reads}, grep ${m.grep}, shell ${m.shell ?? 0}, source ${m.sourceTouches ?? 0}, graph ${m.graph}, web ${m.web ?? 0}), ${(m.durMs / 1000).toFixed(0)}s` +
         (m.ok ? "" : `  [FAILED${m.error ? `: ${m.error}` : ""}]`) +
         `  [running $${spent.toFixed(2)}]`,
@@ -403,37 +448,59 @@ await runWithConcurrency(thunks, concurrency);
 
 // runWithConcurrency runs thunks with at most `limit` in flight at once, draining a
 // shared cursor so a slow run never blocks a free worker.
-async function runWithConcurrency(work, limit) {
+async function runWithConcurrency(
+  work: ReadonlyArray<() => Promise<void>>,
+  limit: number,
+): Promise<void> {
   let next = 0;
-  const worker = async () => {
-    while (next < work.length) await work[next++]();
+  const worker = async (): Promise<void> => {
+    while (next < work.length) {
+      const current: (() => Promise<void>) | undefined = work[next++];
+      if (current !== undefined) await current();
+    }
   };
   const lanes = Math.max(1, Math.min(limit, work.length));
   await Promise.all(Array.from({ length: lanes }, worker));
 }
 
-const med = (arm, k) =>
+const med = (arm: AgentBenchmarkArm, key: AgentBenchmarkMetric): number =>
   median(
     (samples[arm] ?? [])
       .filter((m) => Number(m?.tokens ?? 0) > 0)
-      .map((m) => m[k]),
+      .map((sample: IAgentBenchmarkSample): number => Number(sample[key] ?? 0)),
   );
-const pct = (g, b) => (b === 0 ? 0 : Math.round((1 - g / b) * 100));
-const printBaselineLine = (label, k, fmt = (x) => x) => {
-  console.log(`  ${label.padEnd(12)} baseline ${fmt(med("baseline", k))}`);
+const pct = (graph: number, baseline: number): number =>
+  baseline === 0 ? 0 : Math.round((1 - graph / baseline) * 100);
+type MetricFormatter = (value: number) => string | number;
+type MetricPrinter = (
+  label: string,
+  key: AgentBenchmarkMetric,
+  format?: MetricFormatter,
+) => void;
+const identityMetric: MetricFormatter = (value: number): number => value;
+const printBaselineLine: MetricPrinter = (
+  label,
+  key,
+  format = identityMetric,
+) => {
+  console.log(`  ${label.padEnd(12)} baseline ${format(med("baseline", key))}`);
 };
-const printGraphLine = (label, k, fmt = (x) => x) => {
-  console.log(`  ${label.padEnd(12)} graph ${fmt(med("graph", k))}`);
+const printGraphLine: MetricPrinter = (label, key, format = identityMetric) => {
+  console.log(`  ${label.padEnd(12)} graph ${format(med("graph", key))}`);
 };
-const printComparisonLine = (label, k, fmt = (x) => x) => {
-  const b = med("baseline", k);
+const printComparisonLine: MetricPrinter = (
+  label,
+  key,
+  format = identityMetric,
+) => {
+  const baseline: number = med("baseline", key);
   console.log(
-    `  ${label.padEnd(12)} baseline ${fmt(b)}  ->  graph ${fmt(med("graph", k))} (${pct(med("graph", k), b)}%)`,
+    `  ${label.padEnd(12)} baseline ${format(baseline)}  ->  graph ${format(med("graph", key))} (${pct(med("graph", key), baseline)}%)`,
   );
 };
 
 console.log(`\nMedian of ${runs} run(s), codegraph metrics:`);
-const printLine =
+const printLine: MetricPrinter =
   armsRequested.baseline && armsRequested.graph
     ? printComparisonLine
     : armsRequested.baseline
@@ -441,8 +508,12 @@ const printLine =
       : printGraphLine;
 printLine("tokens", "tokens");
 printLine("tool calls", "tools");
-printLine("cost", "cost", (x) => `$${x.toFixed(3)}`);
-printLine("wall time", "durMs", (x) => `${(x / 1000).toFixed(0)}s`);
+printLine("cost", "cost", (value: number) => `$${value.toFixed(3)}`);
+printLine(
+  "wall time",
+  "durMs",
+  (value: number) => `${(value / 1000).toFixed(0)}s`,
+);
 
 console.log(`\nTotal spend this run: $${spent.toFixed(2)}`);
 
@@ -484,7 +555,12 @@ try {
   /* best effort */
 }
 
-async function runClaude(question, cfg, armName, runNumber) {
+async function runClaude(
+  question: string,
+  cfg: string,
+  armName: AgentBenchmarkArm,
+  runNumber: number,
+): Promise<IAgentBenchmarkSample> {
   const delayedInput = armName === "graph" && claudeStartupGraceMs > 0;
   // Prevent Claude's built-in Agent tool from turning an MCP benchmark into
   // subagent IO. Do not use --bare here: it disables OAuth/keychain auth.
@@ -543,7 +619,7 @@ async function runClaude(question, cfg, armName, runNumber) {
   return parseStream(stdout);
 }
 
-function streamJsonUserInput(text) {
+function streamJsonUserInput(text: string): string {
   return (
     JSON.stringify({
       type: "user",
@@ -557,7 +633,7 @@ function streamJsonUserInput(text) {
   );
 }
 
-function prepareClaudeHome(targetHome) {
+function prepareClaudeHome(targetHome: string): string {
   fs.rmSync(targetHome, { recursive: true, force: true });
   fs.mkdirSync(path.join(targetHome, ".claude"), { recursive: true });
   copyIfExists(path.join(os.homedir(), ".claude.json"), targetHome);
@@ -568,12 +644,14 @@ function prepareClaudeHome(targetHome) {
   return targetHome;
 }
 
-function copyIfExists(source, targetDir) {
+function copyIfExists(source: string, targetDir: string): void {
   if (!fs.existsSync(source)) return;
   fs.copyFileSync(source, path.join(targetDir, path.basename(source)));
 }
 
-function observedModelVersion(allSamples) {
+function observedModelVersion(
+  allSamples: Readonly<Record<AgentBenchmarkArm, IAgentBenchmarkSample[]>>,
+): string | undefined {
   for (const armSamples of Object.values(allSamples)) {
     for (const sample of armSamples ?? []) {
       if (sample.modelVersion) return sample.modelVersion;
@@ -582,7 +660,10 @@ function observedModelVersion(allSamples) {
   return undefined;
 }
 
-function promptForArm(baseQuestion, armName) {
+function promptForArm(
+  baseQuestion: string,
+  armName: AgentBenchmarkArm,
+): string {
   // The baseline arm is told to ground its answer in this checkout, because it
   // has nothing but the repository and its own memory of a famous project, and
   // without the sentence it answers from memory: it skips the files, states what
@@ -603,18 +684,18 @@ function promptForArm(baseQuestion, armName) {
 // blocks the loop the way spawnSync would, which is what lets every arm and run
 // fire concurrently.
 function spawnAsync(
-  command,
-  commandArgs,
-  { input, inputDelayMs = 0, ...spawnOpts },
-) {
-  return new Promise((resolve) => {
+  command: string,
+  commandArgs: string[],
+  { input, inputDelayMs = 0, ...spawnOpts }: IBenchmarkSpawnOptions,
+): Promise<IBenchmarkSpawnResult> {
+  return new Promise<IBenchmarkSpawnResult>((resolve) => {
     const child = cp.spawn(command, commandArgs, spawnOpts);
     let stdout = "";
     let stderr = "";
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (d) => (stdout += d));
-    child.stderr?.on("data", (d) => (stderr += d));
+    child.stdout?.on("data", (data: string) => (stdout += data));
+    child.stderr?.on("data", (data: string) => (stderr += data));
     child.on("error", (error) => resolve({ error, stdout, stderr }));
     child.on("close", () => resolve({ stdout, stderr }));
     if (input) {
@@ -639,7 +720,7 @@ function spawnAsync(
   });
 }
 
-function codegraphServerConfig(targetRepoDir) {
+function codegraphServerConfig(targetRepoDir: string): IBenchmarkMcpServer {
   const args = ["serve", "--mcp", "--path", targetRepoDir];
   return process.platform === "win32"
     ? {
@@ -654,7 +735,9 @@ function codegraphServerConfig(targetRepoDir) {
       };
 }
 
-function validateMcpServerConfig(serverCfg) {
+function validateMcpServerConfig(
+  serverCfg: Record<string, IBenchmarkMcpServer>,
+): void {
   if ((cg || cbm || serena) && serverCfg["ttsc-graph"]) {
     throw new Error("comparator Claude config must not include @ttsc/graph");
   }
@@ -671,7 +754,7 @@ function validateMcpServerConfig(serverCfg) {
   }
 }
 
-function codebaseMemoryServerConfig() {
+function codebaseMemoryServerConfig(): IBenchmarkMcpServer {
   return {
     command: cbmCommand,
     args: [],
@@ -682,14 +765,14 @@ function codebaseMemoryServerConfig() {
   };
 }
 
-function serenaServerConfig(targetRepoDir) {
+function serenaServerConfig(targetRepoDir: string): IBenchmarkMcpServer {
   return {
     command: serenaCommand,
     args: serenaServerArgs(targetRepoDir),
   };
 }
 
-function serenaServerArgs(targetRepoDir) {
+function serenaServerArgs(targetRepoDir: string): string[] {
   const configured = args["serena-args"] ?? process.env.SERENA_MCP_ARGS;
   if (configured) return parseConfiguredArgs(configured, targetRepoDir);
   return [
@@ -710,12 +793,12 @@ function serenaServerArgs(targetRepoDir) {
   ];
 }
 
-function parseConfiguredArgs(raw, targetRepoDir) {
+function parseConfiguredArgs(raw: string, targetRepoDir: string): string[] {
   const parsed = raw.trim().startsWith("[")
     ? JSON.parse(raw)
     : raw
         .match(/"[^"]*"|'[^']*'|\S+/g)
-        ?.map((part) => part.replace(/^(['"])(.*)\1$/, "$2"));
+        ?.map((part: string) => part.replace(/^(['"])(.*)\1$/, "$2"));
   if (!Array.isArray(parsed)) {
     throw new Error(
       "--serena-args must be a JSON string array or shell-like list",
@@ -728,20 +811,20 @@ function parseConfiguredArgs(raw, targetRepoDir) {
   );
 }
 
-function commandPath(command) {
+function commandPath(command: string): string {
   return path.isAbsolute(command) || /[\\/]/.test(command)
     ? path.resolve(command)
     : command;
 }
 
-function graphToolName() {
+function graphToolName(): string {
   if (cg) return "codegraph";
   if (cbm) return "codebase-memory";
   if (serena) return "serena";
   return "ttsc-graph";
 }
 
-function ensureInstalled(targetRepoDir) {
+function ensureInstalled(targetRepoDir: string): void {
   if (truthy(args["no-install"])) return;
   if (fs.existsSync(path.join(targetRepoDir, "node_modules"))) return;
   const plan = installPlan(targetRepoDir);
@@ -750,7 +833,7 @@ function ensureInstalled(targetRepoDir) {
   runOrThrow(plan.command, plan.args, targetRepoDir, process.env);
 }
 
-function installPlan(targetRepoDir) {
+function installPlan(targetRepoDir: string): IBenchmarkCommand | null {
   if (fs.existsSync(path.join(targetRepoDir, "pnpm-lock.yaml"))) {
     return packageCommand("pnpm", [
       "install",
@@ -774,7 +857,7 @@ function installPlan(targetRepoDir) {
   return null;
 }
 
-function packageCommand(command, args) {
+function packageCommand(command: string, args: string[]): IBenchmarkCommand {
   return process.platform === "win32"
     ? {
         label: command,
@@ -790,19 +873,11 @@ function packageCommand(command, args) {
     : { label: command, command, args };
 }
 
-function truthy(value) {
+function truthy(value: string | undefined): boolean {
   return value === "1" || value === "true" || value === "yes";
 }
 
-function parseNonNegativeInteger(value, label) {
-  const out = Number(value);
-  if (!Number.isInteger(out) || out < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return out;
-}
-
-function sourceInspectionCommand(command) {
+function sourceInspectionCommand(command: string): boolean {
   return (
     /\b(git\s+grep|rg|grep|Select-String|findstr)\b/i.test(command) ||
     /\b(Get-Content|gc|cat|type|sed|awk|head|tail)\b/i.test(command) ||
@@ -813,11 +888,16 @@ function sourceInspectionCommand(command) {
   );
 }
 
-function sourceToolUse(name, input) {
-  if (name === "Read") return SOURCE_FILE.test(input.file_path ?? "");
+function sourceToolUse(
+  name: string,
+  input: Readonly<Record<string, unknown>>,
+): boolean {
+  const filePath = typeof input.file_path === "string" ? input.file_path : "";
+  const command = typeof input.command === "string" ? input.command : "";
+  if (name === "Read") return SOURCE_FILE.test(filePath);
   if (name === "Grep" || name === "Glob") return true;
   if (name === "Bash" || name === "PowerShell" || name === "Shell")
-    return sourceInspectionCommand(input.command ?? "");
+    return sourceInspectionCommand(command);
   return false;
 }
 
@@ -827,7 +907,35 @@ function sourceToolUse(name, input) {
 // agent's final answer text: the `result` event's `result` string is the canonical
 // final answer; the concatenated text of the last assistant turn is the fallback
 // for a stream that ends without a result event.
-function parseStream(text) {
+interface IClaudeStreamBlock {
+  input?: Record<string, unknown>;
+  name?: string;
+  text?: string;
+  type?: string;
+}
+
+interface IClaudeStreamEvent {
+  duration_ms?: number;
+  is_error?: boolean;
+  message?: {
+    content?: IClaudeStreamBlock[];
+    model?: string;
+    usage?: {
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+      input_tokens?: number;
+      output_tokens?: number;
+    };
+  };
+  model?: string;
+  modelUsage?: Record<string, { outputTokens?: number }>;
+  result?: string;
+  subtype?: string;
+  total_cost_usd?: number;
+  type?: string;
+}
+
+function parseStream(text: string): IAgentBenchmarkSample {
   let tokens = 0,
     tools = 0,
     reads = 0,
@@ -838,15 +946,15 @@ function parseStream(text) {
     other = 0,
     sourceTouches = 0,
     shellSource = 0,
-    modelVersion = null,
-    result = null,
+    modelVersion: string | null = null,
+    result: IClaudeStreamEvent | null = null,
     lastAssistantText = "";
-  const shellCommands = [];
+  const shellCommands: string[] = [];
   for (const raw of text.split("\n")) {
     if (!raw.trim()) continue;
-    let e;
+    let e: IClaudeStreamEvent;
     try {
-      e = JSON.parse(raw);
+      e = JSON.parse(raw) as IClaudeStreamEvent;
     } catch {
       continue;
     }
@@ -861,7 +969,7 @@ function parseStream(text) {
           (u.output_tokens || 0) +
           (u.cache_read_input_tokens || 0) +
           (u.cache_creation_input_tokens || 0);
-      const textBlocks = [];
+      const textBlocks: string[] = [];
       for (const b of e.message?.content || []) {
         if (b.type === "text" && typeof b.text === "string") {
           textBlocks.push(b.text);
@@ -869,21 +977,24 @@ function parseStream(text) {
         }
         if (b.type !== "tool_use") continue;
         if (b.name === "ToolSearch") continue;
+        const toolName = b.name ?? "";
         tools++;
-        const input = b.input || {};
-        if (sourceToolUse(b.name, input)) sourceTouches++;
-        if (b.name === "Read") reads++;
-        else if (b.name === "Grep" || b.name === "Glob") grep++;
+        const input: Record<string, unknown> = b.input ?? {};
+        if (sourceToolUse(toolName, input)) sourceTouches++;
+        if (toolName === "Read") reads++;
+        else if (toolName === "Grep" || toolName === "Glob") grep++;
         else if (
-          b.name === "Bash" ||
-          b.name === "PowerShell" ||
-          b.name === "Shell"
+          toolName === "Bash" ||
+          toolName === "PowerShell" ||
+          toolName === "Shell"
         ) {
           shell++;
-          shellCommands.push(input.command ?? "");
-          if (sourceInspectionCommand(input.command ?? "")) shellSource++;
-        } else if (graphToolUseName(b.name)) graph++;
-        else if (/web/i.test(b.name)) web++;
+          const command =
+            typeof input.command === "string" ? input.command : "";
+          shellCommands.push(command);
+          if (sourceInspectionCommand(command)) shellSource++;
+        } else if (graphToolUseName(toolName)) graph++;
+        else if (/web/i.test(toolName)) web++;
         else other++;
       }
       // Keep the last assistant turn that carried prose, so a trailing tool-only
@@ -933,7 +1044,7 @@ function parseStream(text) {
   };
 }
 
-function graphToolUseName(name) {
+function graphToolUseName(name: string): boolean {
   return /graph|ttsc|codebase|memory|serena|architecture|trace_path|search_code|semantic_query|index_status|list_projects|find_symbol|references|symbols_overview/i.test(
     name,
   );
@@ -950,7 +1061,10 @@ function graphToolUseName(name) {
  * re-runs a sample marked `ok: false`, so the rule lives here, with the rest of
  * the arm's validity, rather than in a reader's afterthought over the audit.
  */
-function validateArmSample(sample, armName) {
+function validateArmSample(
+  sample: IAgentBenchmarkSample,
+  armName: AgentBenchmarkArm,
+): IAgentBenchmarkSample {
   if (armName === "baseline" || sample == null) return sample;
   if (Number(sample.graph ?? 0) > 0) return sample;
   return {
@@ -960,7 +1074,12 @@ function validateArmSample(sample, armName) {
   };
 }
 
-function runOrThrow(command, commandArgs, cwd, env) {
+function runOrThrow(
+  command: string,
+  commandArgs: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): string {
   const result = cp.spawnSync(command, commandArgs, {
     cwd,
     env,
@@ -974,20 +1093,4 @@ function runOrThrow(command, commandArgs, cwd, env) {
       `${command} ${commandArgs.join(" ")} failed (${result.status})\n${result.stderr ?? ""}`,
     );
   return result.stdout ?? "";
-}
-
-function median(values) {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-function parseArgs(argv) {
-  const out = {};
-  for (const arg of argv) {
-    const match = /^--([^=]+)=(.*)$/.exec(arg);
-    if (match) out[match[1]] = match[2];
-  }
-  return out;
 }

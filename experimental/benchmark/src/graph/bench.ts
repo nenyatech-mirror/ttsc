@@ -8,27 +8,28 @@
 // numbers show the shape, not a publishable figure.
 //
 // Usage:
-//   node experimental/benchmark/graph/bench.mjs                       # default: packages/ttsc
-//   node experimental/benchmark/graph/bench.mjs --project=/abs/path --tsconfig=tsconfig.json --runs=5
-
+//   node --experimental-strip-types experimental/benchmark/src/graph/bench.ts                       # default: packages/ttsc
+//   node --experimental-strip-types experimental/benchmark/src/graph/bench.ts --project=/abs/path --tsconfig=tsconfig.json --runs=5
 import cp from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "..", "..", "..");
+import { BENCHMARK_WORK_ROOT, REPOSITORY_ROOT } from "../constants.ts";
+import { isRecord } from "../utils/isRecord.ts";
+import { median } from "../utils/median.ts";
+
+const repoRoot = REPOSITORY_ROOT;
 const ttscDir = path.join(repoRoot, "packages", "ttsc");
 
 const args = parseArgs(process.argv.slice(2));
 const project = path.resolve(args.project ?? ttscDir);
 const tsconfig = args.tsconfig ?? "tsconfig.json";
-const runs = Number(args.runs ?? 5);
-const warmup = Number(args.warmup ?? 1);
+const runs = positiveInteger(args.runs ?? "5", "--runs");
+const warmup = nonNegativeInteger(args.warmup ?? "1", "--warmup");
 
 const goRoot = path.join(os.homedir(), "go-sdk", "go", "bin");
-const env = {
+const env: NodeJS.ProcessEnv = {
   ...process.env,
   PATH: fs.existsSync(goRoot)
     ? `${goRoot}${path.delimiter}${process.env.PATH ?? ""}`
@@ -48,7 +49,7 @@ console.log(
 );
 
 for (let i = 0; i < warmup; i++) measure();
-const samples = [];
+const samples: IGraphBenchmarkSample[] = [];
 for (let i = 0; i < runs; i++) {
   const sample = measure();
   samples.push(sample);
@@ -58,7 +59,7 @@ for (let i = 0; i < runs; i++) {
   );
 }
 
-const first = samples[0];
+const first: IGraphBenchmarkSample = samples[0]!;
 const report = {
   project: path.relative(repoRoot, project) || project,
   tsconfig,
@@ -78,7 +79,9 @@ const report = {
 
 console.log("\nResult (counts deterministic; timings indicative):");
 console.log(`  source files:  ${report.sourceFiles}`);
-console.log(`  nodes:         ${report.nodes} (${report.externalNodes} external boundary leaves)`);
+console.log(
+  `  nodes:         ${report.nodes} (${report.externalNodes} external boundary leaves)`,
+);
 console.log(
   `  edges:         ${report.totalEdges} (heritage ${report.edges.heritage}, ` +
     `value-call ${report.edges["value-call"]}, type-ref ${report.edges["type-ref"]})`,
@@ -93,7 +96,13 @@ console.log(
     `${(report.buildShareMedian * 100).toFixed(1)}% on top of the load it rides`,
 );
 
-const reportPath = path.join(here, "report.json");
+const reportPath = path.join(
+  BENCHMARK_WORK_ROOT,
+  "graph",
+  "structural",
+  "report.json",
+);
+fs.mkdirSync(path.dirname(reportPath), { recursive: true });
 fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log(`\nReport: ${path.relative(repoRoot, reportPath)}`);
 
@@ -103,16 +112,23 @@ try {
   /* best effort */
 }
 
-function measure() {
+function measure(): IGraphBenchmarkSample {
   const out = runChecked(
     binary,
     ["--cwd", project, "--tsconfig", tsconfig],
     ttscDir,
   );
-  return JSON.parse(out.trim());
+  const parsed: unknown = JSON.parse(out.trim());
+  if (isGraphBenchmarkSample(parsed) === false)
+    throw new Error("graphbench returned an invalid measurement");
+  return parsed;
 }
 
-function runChecked(command, commandArgs, cwd) {
+function runChecked(
+  command: string,
+  commandArgs: readonly string[],
+  cwd: string,
+): string {
   const result = cp.spawnSync(command, commandArgs, {
     cwd,
     env,
@@ -128,18 +144,64 @@ function runChecked(command, commandArgs, cwd) {
   return result.stdout ?? "";
 }
 
-function median(values) {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-function parseArgs(argv) {
-  const out = {};
-  for (const arg of argv) {
-    const match = /^--([^=]+)=(.*)$/.exec(arg);
-    if (match) out[match[1]] = match[2];
+function parseArgs(argv: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const argument of argv) {
+    const match: RegExpExecArray | null = /^--([^=]+)=(.*)$/.exec(argument);
+    if (match !== null) out[match[1]!] = match[2]!;
   }
   return out;
+}
+
+interface IGraphBenchmarkSample {
+  sourceFiles: number;
+  nodes: number;
+  externalNodes: number;
+  edges: {
+    heritage: number;
+    "value-call": number;
+    "type-ref": number;
+  };
+  totalEdges: number;
+  symbolFiles: number;
+  coveredFiles: number;
+  coverage: number;
+  loadMs: number;
+  buildMs: number;
+  buildShareOfLoad: number;
+}
+
+function isGraphBenchmarkSample(
+  input: unknown,
+): input is IGraphBenchmarkSample {
+  if (isRecord(input) === false || isRecord(input.edges) === false)
+    return false;
+  return [
+    input.sourceFiles,
+    input.nodes,
+    input.externalNodes,
+    input.edges.heritage,
+    input.edges["value-call"],
+    input.edges["type-ref"],
+    input.totalEdges,
+    input.symbolFiles,
+    input.coveredFiles,
+    input.coverage,
+    input.loadMs,
+    input.buildMs,
+    input.buildShareOfLoad,
+  ].every((value: unknown) => typeof value === "number");
+}
+
+function positiveInteger(value: string, label: string): number {
+  const parsed: number = nonNegativeInteger(value, label);
+  if (parsed === 0) throw new Error(`${label} must be greater than zero`);
+  return parsed;
+}
+
+function nonNegativeInteger(value: string, label: string): number {
+  const parsed: number = Number(value);
+  if (Number.isInteger(parsed) === false || parsed < 0)
+    throw new Error(`${label} must be a non-negative integer`);
+  return parsed;
 }

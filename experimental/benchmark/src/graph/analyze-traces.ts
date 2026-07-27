@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // Tool-usage analyzer for the @ttsc/graph A/B traces.
 //
-// agent-ab.mjs and agent-ab-codex.mjs write full stream logs for every run.
+// agent-ab.ts and agent-ab-codex.ts write full stream logs for every run.
 // This script reads those logs back and reports navigation behavior only:
 // tool counts, graph-arm shell/source fallback, repeated queries, and oversized
 // tool outputs. It records no answer score.
 //
 // Usage:
-//   node analyze-traces.mjs --trace-dir=<dir> [--out=<analysis.json>]
-//   node analyze-traces.mjs --report=<report.json> [--out=<analysis.json>]
+//   node --experimental-strip-types src/graph/analyze-traces.ts --trace-dir=<dir> [--out=<analysis.json>]
+//   node --experimental-strip-types src/graph/analyze-traces.ts --report=<report.json> [--out=<analysis.json>]
 import fs from "node:fs";
 import path from "node:path";
 
@@ -25,12 +25,12 @@ if (!traceDir && reportPath) {
 }
 if (!traceDir) {
   console.error(
-    "analyze-traces.mjs: --trace-dir=<dir> or --report=<path> required",
+    "analyze-traces.ts: --trace-dir=<dir> or --report=<path> required",
   );
   process.exit(2);
 }
 if (!fs.existsSync(traceDir)) {
-  console.error(`analyze-traces.mjs: trace dir not found: ${traceDir}`);
+  console.error(`analyze-traces.ts: trace dir not found: ${traceDir}`);
   process.exit(1);
 }
 
@@ -156,9 +156,14 @@ function targetOf(call) {
   if (call.name === "Read") return input.file_path ?? "";
   if (call.name === "Grep" || call.name === "Glob")
     return input.pattern ?? input.query ?? "";
-  if (call.name === "Bash" || call.name === "PowerShell" || call.name === "Shell")
+  if (
+    call.name === "Bash" ||
+    call.name === "PowerShell" ||
+    call.name === "Shell"
+  )
     return (input.command ?? "").slice(0, 120);
-  if (/lookup|query|index/i.test(call.name)) return input.query ?? input.question ?? "";
+  if (/lookup|query|index/i.test(call.name))
+    return input.query ?? input.question ?? "";
   if (/trace/i.test(call.name))
     return `${input.from ?? ""}${input.to ? ` -> ${input.to}` : ""}`;
   if (/details|expand/i.test(call.name))
@@ -197,7 +202,9 @@ function misuseOf(calls) {
     }
   }
 
-  const details = graphCalls.filter((call) => /details|expand/i.test(call.name));
+  const details = graphCalls.filter((call) =>
+    /details|expand/i.test(call.name),
+  );
   if (details.length > 1)
     issues.push({
       kind: "unbatched graph details",
@@ -206,13 +213,20 @@ function misuseOf(calls) {
 
   const queries = graphCalls
     .filter((call) => /lookup|query/i.test(call.name))
-    .map((call) => (call.input.query ?? call.input.question ?? "").trim().toLowerCase());
-  const dupes = queries.filter((query, index) => query && queries.indexOf(query) !== index);
+    .map((call) =>
+      (call.input.query ?? call.input.question ?? "").trim().toLowerCase(),
+    );
+  const dupes = queries.filter(
+    (query, index) => query && queries.indexOf(query) !== index,
+  );
   for (const query of new Set(dupes))
     issues.push({ kind: "repeated graph query", detail: query });
 
   if (graphCalls.length === 0)
-    issues.push({ kind: "answered without the graph", detail: "0 graph calls" });
+    issues.push({
+      kind: "answered without the graph",
+      detail: "0 graph calls",
+    });
 
   return { issues, fallbacks };
 }
@@ -229,7 +243,10 @@ for (const file of files) {
   const parsed = parseTrace(fs.readFileSync(path.join(traceDir, file), "utf8"));
   const counts = { graph: 0, read: 0, search: 0, shell: 0, other: 0 };
   for (const call of parsed.calls) counts[laneOf(call.name)]++;
-  const outputBytes = parsed.calls.reduce((sum, call) => sum + outputSize(call), 0);
+  const outputBytes = parsed.calls.reduce(
+    (sum, call) => sum + outputSize(call),
+    0,
+  );
   const largestOutputs = parsed.calls
     .map((call, index) => ({
       index: index + 1,
@@ -278,7 +295,8 @@ for (const [arm, runs] of Object.entries(byArm)) {
   );
   const issues = runs.flatMap((run) => run.issues);
   const issueTally = {};
-  for (const issue of issues) issueTally[issue.kind] = (issueTally[issue.kind] ?? 0) + 1;
+  for (const issue of issues)
+    issueTally[issue.kind] = (issueTally[issue.kind] ?? 0) + 1;
   const runsWithMisuse = runs.filter((run) => run.issues.length).length;
 
   summary[arm] = {
@@ -307,7 +325,9 @@ for (const [arm, runs] of Object.entries(byArm)) {
     for (const run of runs.filter((item) => item.issues.length)) {
       console.log(`    run ${run.run}:`);
       for (const issue of run.issues)
-        console.log(`      - ${issue.kind}${issue.detail ? `: ${issue.detail}` : ""}`);
+        console.log(
+          `      - ${issue.kind}${issue.detail ? `: ${issue.detail}` : ""}`,
+        );
     }
   }
   console.log("");

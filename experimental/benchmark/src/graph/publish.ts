@@ -1,13 +1,13 @@
 // Publish the @ttsc/graph benchmark results into the website.
 //
 // The three graph benchmarks each write a local, git-ignored report:
-//   - bench.mjs            -> report.json                 (structural: counts + coverage)
-//   - agent-ab.mjs         -> agent-ab-report.json        (Claude agent-cost A/B)
-//   - agent-ab-codex.mjs   -> agent-ab-codex-report.json  (codex / GPT agent-cost A/B)
+//   - bench.ts            -> report.json                 (structural: counts + coverage)
+//   - agent-ab.ts         -> agent-ab-report.json        (Claude agent-cost A/B)
+//   - agent-ab-codex.ts   -> agent-ab-codex-report.json  (codex / GPT agent-cost A/B)
 //
 // This script folds whichever of those exist into the committed, served
 // `website/public/benchmark/graph.json`, the graph sibling of the performance
-// dashboard's `performance.json`. Like `merge-website.mjs`, it merges in place:
+// dashboard's `performance.json`. Like `merge-website.ts`, it merges in place:
 // each agent cell is keyed by `websiteCellKey` and upserted, so running one
 // repo/model at a time accumulates cells across separate quiet-host runs instead
 // of clobbering the others. The structural block is replaced whole.
@@ -18,17 +18,18 @@
 // https://ttsc.dev/docs/benchmark#code-graph-mcp.
 //
 // Usage:
-//   node experimental/benchmark/graph/publish.mjs              # fold graph/*.json reports
-//   node experimental/benchmark/graph/publish.mjs --from <dir> # fold graph.mjs suite output
-//   node experimental/benchmark/graph/publish.mjs --reset      # drop prior cells first
+//   node --experimental-strip-types experimental/benchmark/src/graph/publish.ts              # fold graph/*.json reports
+//   node --experimental-strip-types experimental/benchmark/src/graph/publish.ts --from <dir> # fold graph.ts suite output
+//   node --experimental-strip-types experimental/benchmark/src/graph/publish.ts --reset      # drop prior cells first
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { websiteCellKey } from "./website-cell.mjs";
+import { BENCHMARK_WORK_ROOT, REPOSITORY_ROOT } from "../constants.ts";
+import { websiteCellKey } from "./website-cell.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "..", "..", "..");
+const repoRoot = REPOSITORY_ROOT;
 const websiteJson = path.resolve(
   repoRoot,
   "website",
@@ -316,5 +317,5 @@ function parseSourceDirs(argv) {
       dirs.push(path.resolve(repoRoot, arg.slice("--source=".length)));
     }
   }
-  return dirs.length > 0 ? dirs : [here];
+  return dirs.length > 0 ? dirs : [path.join(BENCHMARK_WORK_ROOT, "graph")];
 }

@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "name": "@ttsc/experimental-benchmark",
+  "version": "0.0.0",
+  "description": "Performance and graph benchmark harnesses for ttsc.",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "performance": "node --experimental-strip-types src/performance.ts",
+    "graph": "node --experimental-strip-types src/graph.ts",
+    "graph:structural": "node --experimental-strip-types src/graph/bench.ts",
+    "graph:audit": "node --experimental-strip-types src/graph/audit-codex-traces.ts"
+  }
+}

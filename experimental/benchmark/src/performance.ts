@@ -13,14 +13,20 @@
  *
  * Useful modes:
  *
- * - `node performance.mjs --setup-only`
- * - `node performance.mjs --verify-only`
- * - `node performance.mjs --project vue --project rxjs`
- * - `node performance.mjs --project=vue --ttsc-build-only`
- * - `node performance.mjs --project=vue --only-ttsc-build --reset`
- * - `node performance.mjs --project=vue --only-ttsc-build --no-website`
- * - `node performance.mjs --project=vue --lint-only`
- * - `node performance.mjs --cell-filter=':ttsc:build:' vue zod`
+ * - `node --experimental-strip-types src/performance.ts --setup-only`
+ * - `node --experimental-strip-types src/performance.ts --verify-only`
+ * - `node --experimental-strip-types src/performance.ts --project vue --project
+ *   rxjs`
+ * - `node --experimental-strip-types src/performance.ts --project=vue
+ *   --ttsc-build-only`
+ * - `node --experimental-strip-types src/performance.ts --project=vue
+ *   --only-ttsc-build --reset`
+ * - `node --experimental-strip-types src/performance.ts --project=vue
+ *   --only-ttsc-build --no-website`
+ * - `node --experimental-strip-types src/performance.ts --project=vue
+ *   --lint-only`
+ * - `node --experimental-strip-types src/performance.ts
+ *   --cell-filter=':ttsc:build:' vue zod`
  *
  * Default output is milestone-only: phase timers, per-cell `run i: N ms`, and
  * short status lines ("Cloning X", "Installing X", "Reusing X"). Child process
@@ -38,12 +44,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { BENCHMARK_WORK_ROOT, REPOSITORY_ROOT } from "./constants.ts";
+
 const { cellFilters, flags, projectArgs, positional } = parseCliArgs(
   process.argv.slice(2),
 );
-const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
-const WORK =
-  process.env.TTSC_BENCH_WORK ?? path.resolve(import.meta.dirname, ".work");
+const REPO_ROOT = REPOSITORY_ROOT;
+const WORK = process.env.TTSC_BENCH_WORK ?? BENCHMARK_WORK_ROOT;
 const TGZ =
   process.env.TTSC_BENCH_TGZ ??
   path.join(
@@ -51,8 +58,7 @@ const TGZ =
     flags.has("--no-pack") ? "ttsc-tgz" : `ttsc-tgz-${process.pid}`,
   );
 const OUT =
-  process.env.TTSC_BENCH_OUT ??
-  path.resolve(import.meta.dirname, ".work", "report.md");
+  process.env.TTSC_BENCH_OUT ?? path.resolve(BENCHMARK_WORK_ROOT, "report.md");
 const WEBSITE_JSON = path.resolve(
   REPO_ROOT,
   "website",
@@ -65,7 +71,7 @@ const CHECKPOINT_JSON =
   process.env.TTSC_BENCH_CHECKPOINT ??
   path.resolve(WORK, "benchmark.checkpoint.json");
 const TSCONFIG_FILES = quote(
-  path.join(import.meta.dirname, "tsconfig-files.mjs"),
+  path.join(import.meta.dirname, "tsconfig-files.ts"),
 );
 
 const RUNS = numberEnv("TTSC_BENCH_RUNS", 5);
@@ -500,9 +506,7 @@ function readTypeScriptGoWorkspaceCatalogVersion(repoRoot) {
       path.join(repoRoot, "pnpm-workspace.yaml"),
       "utf8",
     );
-    const match = file.match(
-      /^\s*typescript:\s*([^\s#]+)\s*$/m,
-    );
+    const match = file.match(/^\s*typescript:\s*([^\s#]+)\s*$/m);
     if (match) return match[1].replace(/^['"]|['"]$/g, "");
   } catch {
     // Fall through.
@@ -616,7 +620,7 @@ function nestjsPackageTsconfigs() {
 function tsconfigFiles(projects) {
   const list = Array.isArray(projects) ? projects : [projects];
   const args = list.map((project) => `-p ${quote(project)}`).join(" ");
-  return `$(node ${TSCONFIG_FILES} ${args} --shell)`;
+  return `$(node --experimental-strip-types ${TSCONFIG_FILES} ${args} --shell)`;
 }
 
 function normalizeSteps(value) {

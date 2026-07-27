@@ -13,7 +13,17 @@
  * runs of the same cell are the same cell, whatever the runner happened to
  * record about them.
  */
-export function websiteCellKey(cell) {
+export interface IWebsiteAgentCell {
+  harness: string;
+  tool?: string;
+  repo: string;
+  promptId?: string;
+  promptFamily?: string;
+  model: string;
+  daemon?: boolean;
+}
+
+export function websiteCellKey(cell: IWebsiteAgentCell): string {
   return JSON.stringify([
     cell.harness,
     cell.tool ?? "ttsc-graph",

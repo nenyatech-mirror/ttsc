@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Deterministic audit for Codex JSON traces produced by agent-ab-codex.mjs.
+// Deterministic audit for Codex JSON traces produced by agent-ab-codex.ts.
 //
 // It records what the stream exposes: assistant messages, command/MCP calls,
 // per-turn token usage, and reasoning_output_tokens. Codex does not expose
@@ -7,11 +7,11 @@
 // counts and marks reasoning text as unavailable instead of inventing it.
 //
 // Usage:
-//   node experimental/benchmark/graph/audit-codex-traces.mjs --dir=experimental/benchmark/.work/graph/<timestamp> --out=audit.json
-//   node experimental/benchmark/graph/audit-codex-traces.mjs --report=experimental/benchmark/.work/graph/<timestamp>/report.json
-//   node experimental/benchmark/graph/audit-codex-traces.mjs --dir=... --baseline=website/public/benchmark/graph.json
-//   node experimental/benchmark/graph/audit-codex-traces.mjs --compare=before/codex-trace-audit.json,after/report.json
-//   node experimental/benchmark/graph/audit-codex-traces.mjs --self-test
+//   node --experimental-strip-types experimental/benchmark/src/graph/audit-codex-traces.ts --dir=experimental/benchmark/.work/graph/<timestamp> --out=audit.json
+//   node --experimental-strip-types experimental/benchmark/src/graph/audit-codex-traces.ts --report=experimental/benchmark/.work/graph/<timestamp>/report.json
+//   node --experimental-strip-types experimental/benchmark/src/graph/audit-codex-traces.ts --dir=... --baseline=website/public/benchmark/graph.json
+//   node --experimental-strip-types experimental/benchmark/src/graph/audit-codex-traces.ts --compare=before/codex-trace-audit.json,after/report.json
+//   node --experimental-strip-types experimental/benchmark/src/graph/audit-codex-traces.ts --self-test
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -51,7 +51,7 @@ if (compareInputs.length > 0) {
 
 if (!suiteDir && !suiteReport) {
   console.error(
-    "audit-codex-traces.mjs: --dir, --report, --compare, or --self-test is required",
+    "audit-codex-traces.ts: --dir, --report, --compare, or --self-test is required",
   );
   process.exit(2);
 }

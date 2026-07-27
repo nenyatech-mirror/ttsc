@@ -3,7 +3,7 @@
  * One-shot AI token benchmark for @ttsc/graph, codegraph, codebase-memory, and
  * Serena on the graph benchmark fixtures.
  *
- * It stays separate from performance.mjs in every respect: it spends real
+ * It stays separate from performance.ts in every respect: it spends real
  * Claude/Codex credits, so it only runs when called explicitly, and it owns its
  * own fixtures — the `graph` branch of each benchmark repo, cloned into
  * `../graph-benchmark-work` beside this repo, installed from the fixture's own
@@ -21,10 +21,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { websiteCellKey } from "./graph/website-cell.mjs";
+import { REPOSITORY_ROOT, nodeTypescriptArguments } from "./constants.ts";
+import { websiteCellKey } from "./graph/website-cell.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "../..");
+const repoRoot = REPOSITORY_ROOT;
 // Outside the repo on purpose: the measured agent's cwd is the fixture clone,
 // and both CLIs walk the parent chain for CLAUDE.md / AGENTS.md, so a fixture
 // under `experimental/benchmark/.work` loaded ttsc's own agent instructions into
@@ -41,8 +42,8 @@ const websiteJson = path.join(
   "graph.json",
 );
 const graphHarnessDir = path.join(here, "graph");
-const claudeHarness = path.join(graphHarnessDir, "agent-ab.mjs");
-const codexHarness = path.join(graphHarnessDir, "agent-ab-codex.mjs");
+const claudeHarness = path.join(graphHarnessDir, "agent-ab.ts");
+const codexHarness = path.join(graphHarnessDir, "agent-ab-codex.ts");
 const DEFAULT_PROMPT_FAMILIES = ["dedicated", "common"];
 const TOOL_TTSC = "ttsc-graph";
 const TOOL_CODEGRAPH = "codegraph";
@@ -286,12 +287,11 @@ function runCodexTraceAudit(currentReportPath, currentReport) {
   }
   const auditPath = path.join(outDir, "codex-trace-audit.json");
   runChecked(
-    "node",
-    [
-      path.join(graphHarnessDir, "audit-codex-traces.mjs"),
-      `--report=${currentReportPath}`,
-      `--out=${auditPath}`,
-    ],
+    process.execPath,
+    nodeTypescriptArguments(
+      path.join(graphHarnessDir, "audit-codex-traces.ts"),
+      [`--report=${currentReportPath}`, `--out=${auditPath}`],
+    ),
     {
       label: "codex trace audit",
       logBase: path.join(outDir, "codex-trace-audit"),
@@ -357,7 +357,6 @@ function runAgentCell({
   const label = agentLabel(resolvedModel);
   const logStem = `${project}-${branch}-${promptFamily}-${filenamePart(`${tool}-${label}`)}`;
   const args = [
-    harness,
     `--repo=${project}`,
     `--repo-dir=${repoDir}`,
     `--tsconfig=${spec.tsconfig}`,
@@ -392,7 +391,7 @@ function runAgentCell({
   }
   if (codex) args.push(`--effort=${effort}`);
 
-  runChecked("node", args, {
+  runChecked(process.execPath, nodeTypescriptArguments(harness, args), {
     label: `${project} ${branch} ${tool} ${resolvedModel}`,
     logBase: path.join(outDir, logStem),
   });
