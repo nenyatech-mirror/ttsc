@@ -1,6 +1,6 @@
 # Toolchain Performance Benchmark
 
-Read this document before running or changing `experimental/benchmark/src/performance.ts`, editing its `legacy`, `ttsc`, or `ttsc-lint` fixture branches, or publishing `website/public/benchmark/performance.json`.
+Read this document before running or changing `experimental/benchmark/src/executable/performance.ts`, editing its `legacy`, `ttsc`, or `ttsc-lint` fixture branches, or publishing `website/public/benchmark/performance.json`.
 
 ## Workload
 
@@ -29,18 +29,18 @@ Application source must remain identical across the three branches. Tooling file
 
 Lint and format cells process exactly the program selected by `tsconfig.json`. Do not exclude files through ignore patterns or add out-of-program files; either change makes the cells incomparable.
 
-When the Legacy TypeScript headline major changes, update every fixture's `legacy` branch in the same release. Add a fixture by adding a repository with all three branches and a `PACKAGE_CONFIGS` entry in `performance.ts`; do not multiplex unrelated fixtures inside one repository.
+When the Legacy TypeScript headline major changes, update every fixture's `legacy` branch in the same release. Add a fixture by adding a repository with all three branches and a project entry in `experimental/benchmark/src/performance/TtscBenchmarkPerformanceConfiguration.ts`; do not multiplex unrelated fixtures inside one repository.
 
 `type-fest` remains deliberately removed. Raw `tsgo` rows remain a launcher-overhead reference and are not eligible for the headline winner.
 
 ## Run Locally
 
 ```bash
-node --experimental-strip-types experimental/benchmark/src/performance.ts
-node --experimental-strip-types experimental/benchmark/src/performance.ts --project=vue --no-website
-node --experimental-strip-types experimental/benchmark/src/performance.ts --verify-only
-node --experimental-strip-types experimental/benchmark/src/performance.ts --list
-node --experimental-strip-types experimental/benchmark/src/performance.ts --sequential
+pnpm --dir experimental/benchmark performance
+pnpm --dir experimental/benchmark performance -- --project=vue --no-website
+pnpm --dir experimental/benchmark performance -- --verify-only
+pnpm --dir experimental/benchmark performance -- --list
+pnpm --dir experimental/benchmark performance -- --sequential
 ```
 
 Use `--no-website` for every targeted development run so a partial matrix cannot overwrite dashboard state.
@@ -62,7 +62,7 @@ Publish only from a quiet external host. `TTSC_BENCH_REQUIRE_QUIET=1` turns host
 Set `TTSC_BENCH_REQUIRE_QUIET` to `1` using the current shell's environment-variable syntax, then run:
 
 ```bash
-node --experimental-strip-types experimental/benchmark/src/performance.ts
+pnpm --dir experimental/benchmark performance
 ```
 
 After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `merge-website.ts` only to combine audited partial `report.json` files by cell ID.
