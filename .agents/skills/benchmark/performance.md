@@ -4,7 +4,7 @@ Read this document before running or changing `experimental/benchmark/src/execut
 
 ## Workload
 
-The benchmark compares `ttsc + @ttsc/lint + ttsc format` with `tsc + eslint + prettier` on seven real TypeScript projects. The runner clones three branches per fixture into `experimental/benchmark/.work/`, warms the configured toolchain, replays each cell, and publishes medians to the dashboard at https://ttsc.dev/benchmark.
+The benchmark compares `ttsc + @ttsc/lint + ttsc format` with `tsc + eslint + prettier` on seven real TypeScript projects. The runner clones three branches per fixture into `experimental/benchmark/.work/`, warms the configured toolchain, replays each cell, and publishes raw samples for dashboard-side reduction at https://ttsc.dev/benchmark.
 
 Cell ID is `project:branch:op:threading`.
 
@@ -49,7 +49,7 @@ Important control families:
 
 - **Scope:** `--project`, `--cell-filter`, `--lint-only`, `--format-only`, `--ttsc-build-only`.
 - **Setup:** `--setup-only`, `--no-setup`, `--no-install`, `--no-pack`, `--force-install`; `TTSC_BENCH_SKIP_PACK=1` is the environment equivalent of `--no-pack`.
-- **Sampling:** `TTSC_BENCH_RUNS` defaults to 5, `TTSC_BENCH_WARMUP` to 1, and `TTSC_BENCH_RETRIES` to 2 for race-classified failures. `report.json` retains the minimum and every raw sample in addition to the median.
+- **Sampling:** `TTSC_BENCH_RUNS` defaults to 5, `TTSC_BENCH_WARMUP` to 1, and `TTSC_BENCH_RETRIES` to 2 for race-classified failures. `report.json` retains every raw sample; the dashboard currently reduces them to the minimum at render time.
 - **Output:** `--no-website` skips dashboard merging, `--reset` discards prior measurements, `TTSC_BENCH_OUT` redirects the report, and `--verbose` enables child-process traces.
 - **Disk use:** `--sequential` or `TTSC_BENCH_SEQUENTIAL=1` holds one fixture branch at a time. It is incompatible with `--setup-only` and `--no-setup`.
 

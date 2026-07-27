@@ -201,7 +201,7 @@ export class TtscBenchmarkPerformanceRunner {
     const message =
       `host load is high (1-min loadavg ${load1.toFixed(2)} on ` +
       `${cpuCount} CPUs, ratio ${ratio.toFixed(2)}); short cells may ` +
-      `drift 20??0% from a quiet baseline. ` +
+      `drift 20–60% from a quiet baseline. ` +
       `Set TTSC_BENCH_SKIP_LOAD_CHECK=1 to ignore.`;
     if (process.env.TTSC_BENCH_REQUIRE_QUIET === "1") {
       throw new Error(`bench: ${message}`);
