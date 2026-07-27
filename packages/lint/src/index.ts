@@ -7,6 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  CONFIG_EVALUATOR_PROCESS_OPTIONS,
+  CONFIG_EVALUATOR_STATUS_FD,
+  configEvaluatorBoundaryEnvironment,
+  configEvaluatorProcessFailure,
+} from "./internal/configEvaluatorFailure";
 import type { ITtscLintPlugin, ITtscLintPluginConfig } from "./structures";
 
 export * from "./defaultFormat";
@@ -1741,41 +1747,30 @@ function evaluateTtsxConfigPlugins(
     if (process.env.TTSC_TSGO_BINARY) {
       args.unshift("--binary", process.env.TTSC_TSGO_BINARY);
     }
-    const env = nodeConfigLoaderEnv(configPath);
+    const env = {
+      ...nodeConfigLoaderEnv(configPath),
+      ...configEvaluatorBoundaryEnvironment(),
+    };
     const command = ttsxThroughNodeIfNeeded(ttsxBinary);
     const result = spawnSync(command.binary, [...command.prefix, ...args], {
       cwd: tempDir,
       env,
       encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 16,
-      stdio: ["ignore", "pipe", "pipe"],
-      // 60s cap so a runaway top-level await / infinite loop in the
-      // user's lint config can't hang the entire ttsc invocation.
-      timeout: 60_000,
+      ...CONFIG_EVALUATOR_PROCESS_OPTIONS,
+      stdio: [
+        "ignore",
+        "pipe",
+        "pipe",
+        ...Array.from(
+          { length: CONFIG_EVALUATOR_STATUS_FD - 2 },
+          () => "pipe" as const,
+        ),
+      ],
       windowsHide: true,
     });
     forwardConfigEvaluatorStreams(result.stdout, result.stderr);
-    if (result.error) {
-      throw new Error(
-        `@ttsc/lint: failed to spawn ttsx for ${configPath}: ${result.error.message}`,
-      );
-    }
-    if (result.signal) {
-      throw new Error(
-        `@ttsc/lint: ttsx evaluation of ${configPath} was killed by signal ${result.signal} ` +
-          `(likely the 60s timeout). Simplify the config or move heavy work out of top-level.`,
-      );
-    }
-    if (result.status !== 0) {
-      // The evaluator already said why on its own stderr. Reporting only the
-      // exit code discards that and leaves the caller — a test, a CI log, a
-      // user with a typo in one contributor — holding a number.
-      const reason = configEvaluatorFailureReason(result.stderr);
-      throw new Error(
-        `@ttsc/lint: lint config ${configPath} evaluation failed with exit code ${String(result.status)}` +
-          (reason === "" ? "" : "\n" + reason),
-      );
-    }
+    const processFailure = configEvaluatorProcessFailure(result, configPath);
+    if (processFailure) throw processFailure;
     let payload: {
       dependencies?: ConfigDependencyFingerprint[];
       entries?: ConfigPluginEntry[];
@@ -1849,24 +1844,6 @@ function evaluateTtsxConfigPlugins(
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
-
-/**
- * What the evaluator said before it gave up, trimmed to the part that explains
- * it.
- *
- * The build banner and progress lines are the same on success, so they say
- * nothing about the failure; the tail is where the thrown reason lands. Kept to
- * a few lines because this is appended to an exception message, not a log.
- */
-function configEvaluatorFailureReason(stderr: string | undefined): string {
-  const lines = (stderr ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim() !== "");
-  return lines.slice(-CONFIG_EVALUATOR_REASON_LINES).join("\n");
-}
-
-const CONFIG_EVALUATOR_REASON_LINES = 5;
 
 function forwardConfigEvaluatorStreams(
   stdout: string | null | undefined,

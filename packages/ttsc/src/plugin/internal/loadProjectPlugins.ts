@@ -15,6 +15,13 @@ import type { TtscPluginStage } from "../../structures/TtscPluginStage";
 import type { ITtscLoadedNativePlugin } from "../../structures/internal/ITtscLoadedNativePlugin";
 import type { ITtscParsedProjectConfig } from "../../structures/internal/ITtscParsedProjectConfig";
 import { buildSourcePlugin } from "./buildSourcePlugin";
+import {
+  PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES,
+  PLUGIN_DESCRIPTOR_PROCESS_OPTIONS,
+  PLUGIN_DESCRIPTOR_STATUS_FD,
+  pluginDescriptorBoundaryEnvironment,
+  pluginDescriptorProcessFailure,
+} from "./descriptorProcessFailure";
 
 const GO_MOD_SEARCH_MAX_DEPTH = 3;
 
@@ -766,23 +773,49 @@ function loadDescriptorViaTtsx(
         TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
         TTSC_PLUGIN_DESCRIPTOR_OUT: out,
         TTSC_PLUGIN_ENTRY: request,
+        ...pluginDescriptorBoundaryEnvironment(),
       },
+      ...PLUGIN_DESCRIPTOR_PROCESS_OPTIONS,
+      stdio: [
+        "ignore",
+        "pipe",
+        "pipe",
+        ...Array.from(
+          { length: PLUGIN_DESCRIPTOR_STATUS_FD - 2 },
+          () => "pipe" as const,
+        ),
+      ],
       windowsHide: true,
     });
-    if (result.status !== 0 || !fs.existsSync(out)) {
+    const processFailure = pluginDescriptorProcessFailure(result, request);
+    if (processFailure) throw processFailure;
+    if (!fs.existsSync(out)) {
       throw new Error(
-        [
-          `ttsc: failed to load plugin descriptor "${request}" through ttsx`,
-          result.stderr || result.stdout || "",
-        ]
-          .filter((line) => line.trim().length !== 0)
-          .join("\n"),
+        `ttsc: plugin descriptor "${request}" evaluation through ttsx produced no descriptor output.`,
       );
     }
-    return JSON.parse(fs.readFileSync(out, "utf8"));
+    const outputSize = fs.statSync(out).size;
+    if (outputSize > PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" produced ${outputSize} bytes of JSON, ` +
+          `exceeding the ${PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES / (1024 * 1024)} MiB descriptor output limit.`,
+      );
+    }
+    const text = fs.readFileSync(out, "utf8");
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" produced invalid JSON: ${errorMessage(error)}`,
+      );
+    }
   } finally {
     fs.rmSync(dir, { force: true, recursive: true });
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function withPluginLoaderEnv<T>(run: () => T): T {
