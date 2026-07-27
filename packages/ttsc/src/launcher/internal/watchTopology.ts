@@ -125,6 +125,7 @@ export class WatchTopology {
     ProjectInputPathIdentityContext,
     Map<string, boolean>
   >();
+  private projectInputCompilerAcknowledgements = new Map<string, string>();
   private reloadFiles = new Map<string, string>();
 
   public constructor(
@@ -142,16 +143,22 @@ export class WatchTopology {
     skipUnobservedProjectInputWatchRoots: boolean,
   ): void {
     const next = resolveWatchTopology(this.options, this.extraInputs);
-    const projectInputProgramChange =
+    const compilerProgramMembershipChange =
       next.analysisOnly &&
       mapsEqual(this.reloadFiles, next.reloadFiles) &&
       mapsEqual(this.outputFiles, next.outputFiles) &&
       mapsEqual(this.outputs, next.outputs)
-        ? projectInputCompilerMembershipChange(
-            this.projectInputs,
-            this.files,
-            next.files,
-          )
+        ? compilerMembershipChange(this.files, next.files)
+        : [];
+    const projectInputProgramOverlap = projectInputCompilerMembershipChange(
+      this.projectInputs,
+      compilerProgramMembershipChange,
+    );
+    const projectInputProgramChange =
+      compilerProgramMembershipChange.length !== 0 &&
+      projectInputProgramOverlap.length ===
+        compilerProgramMembershipChange.length
+        ? projectInputProgramOverlap
         : undefined;
     const changed =
       this.analysisOnly !== next.analysisOnly ||
@@ -180,6 +187,17 @@ export class WatchTopology {
     this.outputFiles = next.outputFiles;
     this.outputs = next.outputs;
     this.reloadFiles = next.reloadFiles;
+    for (const key of this.projectInputCompilerAcknowledgements.keys()) {
+      if (!next.files.has(key)) {
+        this.projectInputCompilerAcknowledgements.delete(key);
+      }
+    }
+    const projectInputProgramReload =
+      projectInputProgramOverlap.length === 0
+        ? false
+        : this.acknowledgeProjectInputCompilerMembership(
+            projectInputProgramOverlap,
+          );
     const fileWatcherRegistered = this.syncFileWatchers();
     const directoryWatcherRegistered = this.syncDirectoryWatchers();
     this.syncExtraWatchers();
@@ -192,18 +210,78 @@ export class WatchTopology {
     }
     if (notify && changed) {
       if (projectInputProgramChange !== undefined) {
-        this.callbacks.onInputChange({
-          invalidate: true,
-          kind: "project",
-          path:
-            projectInputProgramChange.length === 1
-              ? projectInputProgramChange[0]
-              : undefined,
-        });
+        const changedPath =
+          projectInputProgramChange.length === 1
+            ? projectInputProgramChange[0]
+            : undefined;
+        this.callbacks.onInputChange(
+          projectInputProgramReload
+            ? { kind: "config", path: changedPath }
+            : {
+                invalidate: true,
+                kind: "project",
+                path: changedPath,
+              },
+        );
       } else {
         this.callbacks.onTopologyChange();
       }
     }
+  }
+
+  /**
+   * Hand one Program-membership transition from the compiler lane to the
+   * overlapping project-input lane.
+   *
+   * Windows can deliver the compiler membership refresh before the recursive
+   * project watcher names the same creation. The rebuild scheduled here already
+   * consumes the current project bytes, so publishing their strong fingerprints
+   * keeps the later parent event from rediscovering the same population delta.
+   * A newly tracked compiler file also remembers that fingerprint until its
+   * first named content delivery; identical bytes are the delayed creation,
+   * while different bytes are a real later edit and remain observable even
+   * inside filesystem timestamp resolution.
+   */
+  private acknowledgeProjectInputCompilerMembership(
+    changed: readonly string[],
+  ): boolean {
+    const matches = this.collectProjectInputMatches();
+    const fingerprints = fingerprintProjectInputMatches(matches);
+    const identities = createProjectInputPathIdentityContext();
+    const changedInputs = projectInputChangedPaths({
+      next: matches,
+      nextFingerprints: fingerprints,
+      previous: this.projectInputMatches,
+      previousFingerprints: this.projectInputFingerprints,
+    });
+    const population = this.projectInputPopulation();
+    const causedBy = projectInputCompilerMembershipProjectChanges(
+      changed,
+      population.globs,
+    );
+    const reload = projectInputReloadEventShouldNotify({
+      causedBy,
+      changed: causedBy.length === 1 ? causedBy[0] : undefined,
+      changedInputs,
+      globs: population.globs,
+      reloadDirectories: population.reloadDirectories,
+      reloadFiles: population.reloadFiles ?? [],
+    });
+    // The callback below consumes the complete population observed by this
+    // scan. Crucially, reload classification runs against the old baseline
+    // first, so a concurrent selection delta becomes one cold transition
+    // instead of disappearing behind the warm compiler-membership handoff.
+    this.projectInputMatches = matches;
+    this.projectInputFingerprints = fingerprints;
+    for (const location of changed) {
+      const compilerKey = pathKey(location);
+      if (!this.files.has(compilerKey)) continue;
+      const fingerprint = fingerprints.get(identities.resolve(location).key);
+      if (fingerprint !== undefined && fingerprint !== "") {
+        this.projectInputCompilerAcknowledgements.set(compilerKey, fingerprint);
+      }
+    }
+    return reload;
   }
 
   /** Add Go plugin source trees discovered by the real build lane. */
@@ -488,8 +566,16 @@ export class WatchTopology {
     // Those two are decided from the bytes, and the rearm they drive is
     // unaffected, because rebinding is about the inode and not the content.
     if (changed !== undefined && event !== "rename") {
-      for (const file of changes) this.recordCompilerFileSnapshot(file);
-      return [...changes];
+      return changes.filter((file) => {
+        const key = pathKey(file);
+        const acknowledged = this.projectInputCompilerAcknowledgements.get(key);
+        this.projectInputCompilerAcknowledgements.delete(key);
+        this.recordCompilerFileSnapshot(file);
+        return (
+          acknowledged === undefined ||
+          acknowledged !== fingerprintProjectInputFile(file)
+        );
+      });
     }
     return changes.filter((file) => this.compilerFileMovement(file).content);
   }
@@ -2348,6 +2434,7 @@ function projectInputChangedPaths(input: {
  * bytes remain quiet before this classifier is observed.
  */
 export function projectInputReloadEventShouldNotify(input: {
+  causedBy?: readonly string[];
   changed?: string;
   changedInputs: readonly string[];
   reloadDirectories?: readonly string[];
@@ -2417,13 +2504,16 @@ export function projectInputReloadEventShouldNotify(input: {
   // resolution moved. A missed reselection is a wrong answer; a spare restart is
   // a slow one.
   const explains = (directory: ProjectInputPathIdentity): boolean => {
-    if (input.changed === undefined) return false;
+    const causes =
+      input.causedBy ?? (input.changed === undefined ? [] : [input.changed]);
     // Only an immediate entry can move this directory's digest, so only an
     // immediate entry can account for the delta. Asking whether the event was
     // data somewhere else answers a different directory's question, and one
     // exemption would then cancel every other directory's evidence.
-    const parent = identities.resolve(path.dirname(input.changed)).key;
-    return parent === directory.key && exemptedFrom(directory, input.changed);
+    return causes.some((location) => {
+      const parent = identities.resolve(path.dirname(location)).key;
+      return parent === directory.key && exemptedFrom(directory, location);
+    });
   };
   const isReloadDirectoryEvent = (location: string): boolean =>
     namesDirectory(location) || holdsAsImmediateEntry(location);
@@ -2500,11 +2590,10 @@ function projectInputPathMayAffectProgram(location: string): boolean {
   return extension === ".json" || isCompilerEmittableSourceExtension(extension);
 }
 
-function projectInputCompilerMembershipChange(
-  snapshot: ITtscProjectInputSnapshot,
+function compilerMembershipChange(
   previous: ReadonlyMap<string, string>,
   next: ReadonlyMap<string, string>,
-): string[] | undefined {
+): string[] {
   const changed = new Map<string, string>();
   for (const [key, location] of previous) {
     if (next.has(key) === false) changed.set(key, location);
@@ -2512,17 +2601,45 @@ function projectInputCompilerMembershipChange(
   for (const [key, location] of next) {
     if (previous.has(key) === false) changed.set(key, location);
   }
-  if (
-    changed.size === 0 ||
-    [...changed.values()].some(
-      (location) =>
-        matchesProjectInput(snapshot, location) === false ||
-        projectInputPathMayAffectProgram(location) === false,
-    )
-  ) {
-    return undefined;
-  }
   return [...changed.values()].sort();
+}
+
+function projectInputCompilerMembershipChange(
+  snapshot: ITtscProjectInputSnapshot,
+  changed: readonly string[],
+): string[] {
+  return changed.filter(
+    (location) =>
+      matchesProjectInput(snapshot, location) &&
+      projectInputPathMayAffectProgram(location),
+  );
+}
+
+/**
+ * Name a compiler-membership transition as the recursive project watcher does.
+ *
+ * Creating the first member below a missing glob root makes Windows report the
+ * root directory before it reports the member. Reload-directory fingerprints
+ * must see that same causal path: the new root then explains its ancestor's
+ * immediate-entry delta instead of turning ordinary project data into a cold
+ * selection reload. The deepest matching glob owns the most specific delivery.
+ */
+function projectInputCompilerMembershipProjectChanges(
+  locations: readonly string[],
+  globs: readonly string[],
+): string[] {
+  const identities = createProjectInputPathIdentityContext();
+  const roots = globs.map((glob) => identities.resolve(literalGlobRoot(glob)));
+  const changes = new Map<string, string>();
+  for (const location of locations) {
+    const candidate = identities.resolve(location);
+    const root = roots
+      .filter((entry) => identities.isWithin(entry.path, candidate.path))
+      .sort((left, right) => right.path.length - left.path.length)[0];
+    const change = root ?? candidate;
+    changes.set(change.key, change.path);
+  }
+  return [...changes.values()].sort();
 }
 
 function fingerprintProjectInputMatches(
@@ -2530,46 +2647,54 @@ function fingerprintProjectInputMatches(
 ): Map<string, string> {
   const fingerprints = new Map<string, string>();
   for (const [key, location] of matches) {
-    try {
-      fingerprints.set(
-        key,
-        isDirectory(location)
-          ? fingerprintProjectInputDirectory(location)
-          : crypto
-              .createHash("sha256")
-              .update(fs.readFileSync(location))
-              .digest("hex"),
-      );
-    } catch {
-      fingerprints.set(key, "");
-    }
+    fingerprints.set(
+      key,
+      isDirectory(location)
+        ? fingerprintProjectInputDirectory(location)
+        : fingerprintProjectInputFile(location),
+    );
   }
   return fingerprints;
 }
 
+function fingerprintProjectInputFile(location: string): string {
+  try {
+    return crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(location))
+      .digest("hex");
+  } catch {
+    return "";
+  }
+}
+
 function fingerprintProjectInputDirectory(location: string): string {
-  const entries = fs
-    .readdirSync(location, { withFileTypes: true })
-    .map((entry) => {
-      const kind = entry.isDirectory()
-        ? "directory"
-        : entry.isFile()
-          ? "file"
-          : entry.isSymbolicLink()
-            ? "symlink"
-            : "other";
-      let target = "";
-      if (entry.isSymbolicLink()) {
-        try {
-          target = fs.readlinkSync(path.join(location, entry.name));
-        } catch {
-          target = "<unreadable>";
+  try {
+    const entries = fs
+      .readdirSync(location, { withFileTypes: true })
+      .map((entry) => {
+        const kind = entry.isDirectory()
+          ? "directory"
+          : entry.isFile()
+            ? "file"
+            : entry.isSymbolicLink()
+              ? "symlink"
+              : "other";
+        let target = "";
+        if (entry.isSymbolicLink()) {
+          try {
+            target = fs.readlinkSync(path.join(location, entry.name));
+          } catch {
+            target = "<unreadable>";
+          }
         }
-      }
-      return entry.name + "\0" + kind + "\0" + target;
-    })
-    .sort();
-  return crypto.createHash("sha256").update(entries.join("\0")).digest("hex");
+        return entry.name + "\0" + kind + "\0" + target;
+      })
+      .sort();
+    return crypto.createHash("sha256").update(entries.join("\0")).digest("hex");
+  } catch {
+    return "";
+  }
 }
 
 function matchesProjectInputGlob(

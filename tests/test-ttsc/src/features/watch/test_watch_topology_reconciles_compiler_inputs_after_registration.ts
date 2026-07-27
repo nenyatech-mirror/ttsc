@@ -19,16 +19,20 @@ import {
  * 1. Swallow every startup event and report one config change plus parse error.
  * 2. Swallow a new included source event and refresh compiler membership once.
  * 3. Let a real source event win the race without producing a duplicate.
- * 4. Rebind a same-stamp POSIX replacement without reporting identical bytes.
- * 5. Keep a source rearm from repeating a failed config membership refresh.
- * 6. Observe the rebound POSIX file's next in-place edit.
- * 7. Close before reconciliation and drain every fake watcher exactly once.
+ * 4. Hand pure and mixed Windows memberships across project/compiler watchers.
+ * 5. Contain and recover a transient reload-directory fingerprint race.
+ * 6. Rebind a same-stamp POSIX replacement without reporting identical bytes.
+ * 7. Keep a source rearm from repeating a failed config membership refresh.
+ * 8. Observe the rebound POSIX file's next in-place edit.
+ * 9. Close before reconciliation and drain every fake watcher exactly once.
  */
 export const test_watch_topology_reconciles_compiler_inputs_after_registration =
   async (): Promise<void> => {
     await verifySwallowedConfigDeletion();
     await verifySwallowedCompilerMembership();
     await verifyBackendEventWinsReconciliation();
+    await verifyWindowsProjectCompilerMembershipHandoff();
+    await verifyTransientReloadDirectoryFingerprintRace();
     await verifyAtomicReplacementRebindsPosixFileWatcher();
     await verifyFileRearmDoesNotRepeatCompilerRefresh();
     await verifyCloseCancelsReconciliation();
@@ -187,6 +191,320 @@ async function verifyBackendEventWinsReconciliation(): Promise<void> {
   assert.ok(
     registrations.every(({ watcher }) => watcher.closeCount === 1),
     "close did not drain every event-wins watcher",
+  );
+}
+
+async function verifyWindowsProjectCompilerMembershipHandoff(): Promise<void> {
+  if (process.platform !== "win32") return;
+
+  const fixture = createFixture("ttsc-watch-membership-handoff-", {
+    compilerOptions: {
+      esModuleInterop: true,
+      module: "commonjs",
+      noEmit: true,
+      resolveJsonModule: true,
+    },
+    include: ["src"],
+  });
+  const first = path.join(fixture.root, "api", "first.json");
+  const firstPeer = path.join(fixture.root, "api", "first-peer.json");
+  const other = path.join(fixture.root, "contracts", "other.json");
+  const mixed = path.join(fixture.root, "api", "mixed.json");
+  const mixedSource = path.join(fixture.root, "src", "added.ts");
+  const second = path.join(fixture.root, "api", "second.json");
+  const third = path.join(fixture.root, "api", "third.json");
+  const reloadDirectory = path.join(fixture.root, "config-deps");
+  fs.mkdirSync(reloadDirectory, { recursive: true });
+  fs.writeFileSync(
+    fixture.source,
+    [
+      'import first from "../api/first.json";',
+      'import firstPeer from "../api/first-peer.json";',
+      'import other from "../contracts/other.json";',
+      'import mixed from "../api/mixed.json";',
+      'import second from "../api/second.json";',
+      'import third from "../api/third.json";',
+      "JSON.stringify([first, firstPeer, other, mixed, second, third]);",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const changes: WatchInputChange[] = [];
+  const errors: unknown[] = [];
+  let topologyChanges = 0;
+  const registrations: Array<{
+    listener: fs.WatchListener<string>;
+    location: string;
+    watcher: FakeWatcher;
+  }> = [];
+  const originalWatch = fs.watch;
+  Object.defineProperty(fs, "watch", {
+    configurable: true,
+    value: ((
+      location: fs.PathLike,
+      _options: fs.WatchOptions,
+      listener: fs.WatchListener<string>,
+    ) => {
+      const watcher = new FakeWatcher();
+      registrations.push({
+        listener,
+        location: path.resolve(location.toString()),
+        watcher,
+      });
+      return watcher as unknown as fs.FSWatcher;
+    }) as typeof fs.watch,
+    writable: true,
+  });
+
+  const topology = createTopology(
+    fixture.root,
+    changes,
+    errors,
+    () => (topologyChanges += 1),
+  );
+  try {
+    topology.refresh(false);
+    await Promise.resolve();
+    const compiler = registrations[0];
+    assert.ok(compiler, "the compiler watcher was not registered");
+    const beforeProjectInputs = registrations.length;
+    topology.setProjectInputs({
+      files: [],
+      globs: [
+        path.join(fixture.root, "api", "**", "*.json"),
+        path.join(fixture.root, "contracts", "**", "*.json"),
+      ],
+      reloadDirectories: [fixture.root, reloadDirectory],
+      reloadFiles: [second],
+      root: fixture.root,
+    });
+    const project = registrations[beforeProjectInputs];
+    assert.ok(project, "the project-input watcher was not registered");
+
+    fs.mkdirSync(path.dirname(first), { recursive: true });
+    fs.mkdirSync(path.dirname(other), { recursive: true });
+    fs.writeFileSync(first, '{"name":"created"}\n', "utf8");
+    fs.writeFileSync(firstPeer, '{"name":"created"}\n', "utf8");
+    fs.writeFileSync(other, '{"name":"created"}\n', "utf8");
+    topology.refresh(true);
+    assert.deepEqual(changes, [
+      { invalidate: true, kind: "project", path: undefined },
+    ]);
+
+    project.listener(
+      "rename",
+      path.relative(project.location, path.dirname(first)),
+    );
+    project.listener(
+      "rename",
+      path.relative(project.location, path.dirname(other)),
+    );
+    compiler.listener("change", path.relative(compiler.location, first));
+    compiler.listener("change", path.relative(compiler.location, firstPeer));
+    compiler.listener("change", path.relative(compiler.location, other));
+    await Promise.resolve();
+    assert.equal(
+      changes.length,
+      1,
+      "delayed project/compiler deliveries repeated one consumed warm creation",
+    );
+    assert.equal(topologyChanges, 0);
+
+    topology.setProjectInputs({
+      files: [],
+      globs: [
+        path.join(fixture.root, "api", "**", "*.json"),
+        path.join(fixture.root, "contracts", "**", "*.json"),
+      ],
+      reloadDirectories: [reloadDirectory],
+      reloadFiles: [second],
+      root: fixture.root,
+    });
+    fs.writeFileSync(mixed, '{"name":"created"}\n', "utf8");
+    fs.writeFileSync(mixedSource, "export const added = true;\n", "utf8");
+    topology.refresh(true);
+    assert.equal(
+      topologyChanges,
+      1,
+      "mixed compiler membership did not retain its broader topology reload",
+    );
+    assert.equal(
+      changes.length,
+      1,
+      "mixed compiler membership invented a narrower input callback",
+    );
+    project.listener(
+      "rename",
+      path.relative(project.location, path.dirname(mixed)),
+    );
+    compiler.listener("change", path.relative(compiler.location, mixed));
+    await Promise.resolve();
+    assert.equal(
+      topologyChanges,
+      1,
+      "delayed mixed membership repeated its topology reload",
+    );
+    assert.equal(
+      changes.length,
+      1,
+      "delayed project/compiler delivery escaped a mixed membership handoff",
+    );
+
+    fs.writeFileSync(second, '{"name":"created"}\n', "utf8");
+    topology.refresh(true);
+    assert.deepEqual(changes.at(-1), {
+      kind: "config",
+      path: second,
+    });
+    project.listener(
+      "rename",
+      path.relative(project.location, path.dirname(second)),
+    );
+    compiler.listener("change", path.relative(compiler.location, second));
+    await Promise.resolve();
+    assert.equal(
+      changes.length,
+      2,
+      "a consumed reload-file delta survived its cold handoff",
+    );
+    const stamp = fs.statSync(second);
+    fs.writeFileSync(second, '{"name":"altered"}\n', "utf8");
+    fs.utimesSync(second, stamp.atime, stamp.mtime);
+    assert.equal(
+      fs.statSync(second).size,
+      stamp.size,
+      "the strong-fingerprint case changed file size",
+    );
+    compiler.listener("change", path.relative(compiler.location, second));
+    await Promise.resolve();
+    assert.deepEqual(changes.at(-1), {
+      kind: "compiler",
+      path: second,
+    });
+
+    fs.writeFileSync(third, '{"name":"created"}\n', "utf8");
+    fs.writeFileSync(
+      path.join(reloadDirectory, "selection.cjs"),
+      "module.exports = 1;\n",
+      "utf8",
+    );
+    topology.refresh(true);
+    assert.deepEqual(changes.at(-1), {
+      kind: "config",
+      path: third,
+    });
+    project.listener(
+      "rename",
+      path.relative(project.location, path.dirname(third)),
+    );
+    compiler.listener("change", path.relative(compiler.location, third));
+    await Promise.resolve();
+    assert.equal(
+      changes.length,
+      4,
+      "a consumed reload-directory delta survived its cold handoff",
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    topology.close();
+    Object.defineProperty(fs, "watch", {
+      configurable: true,
+      value: originalWatch,
+      writable: true,
+    });
+  }
+  assert.ok(
+    registrations.every(({ watcher }) => watcher.closeCount === 1),
+    "close did not drain every handoff watcher",
+  );
+}
+
+async function verifyTransientReloadDirectoryFingerprintRace(): Promise<void> {
+  const fixture = createFixture("ttsc-watch-reload-directory-race-");
+  const reloadDirectory = path.join(fixture.root, "config-deps");
+  fs.mkdirSync(reloadDirectory, { recursive: true });
+  const reloadDirectoryIdentity = fs.realpathSync.native(reloadDirectory);
+  fs.writeFileSync(
+    path.join(reloadDirectory, "selection.cjs"),
+    "module.exports = 1;\n",
+    "utf8",
+  );
+
+  const changes: WatchInputChange[] = [];
+  const errors: unknown[] = [];
+  const watchers: FakeWatcher[] = [];
+  const originalWatch = fs.watch;
+  const originalReaddirSync = fs.readdirSync;
+  let injected = false;
+  Object.defineProperty(fs, "watch", {
+    configurable: true,
+    value: (() => {
+      const watcher = new FakeWatcher();
+      watchers.push(watcher);
+      return watcher as unknown as fs.FSWatcher;
+    }) as typeof fs.watch,
+    writable: true,
+  });
+  Object.defineProperty(fs, "readdirSync", {
+    configurable: true,
+    value: ((location: fs.PathLike, options?: unknown) => {
+      if (
+        !injected &&
+        fs.realpathSync.native(location) === reloadDirectoryIdentity
+      ) {
+        injected = true;
+        const error = new Error(
+          "simulated transient directory race",
+        ) as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return Reflect.apply(originalReaddirSync, fs, [location, options]);
+    }) as typeof fs.readdirSync,
+    writable: true,
+  });
+
+  const topology = createTopology(fixture.root, changes, errors);
+  try {
+    topology.setProjectInputs({
+      files: [],
+      globs: [],
+      reloadDirectories: [reloadDirectory],
+      reloadFiles: [],
+      root: fixture.root,
+    });
+    assert.equal(injected, true, "the transient fingerprint race was not run");
+    Object.defineProperty(fs, "readdirSync", {
+      configurable: true,
+      value: originalReaddirSync,
+      writable: true,
+    });
+    await Promise.resolve();
+
+    assert.deepEqual(changes, [
+      {
+        kind: "config",
+        path: reloadDirectoryIdentity,
+      },
+    ]);
+    assert.deepEqual(errors, []);
+  } finally {
+    topology.close();
+    Object.defineProperty(fs, "readdirSync", {
+      configurable: true,
+      value: originalReaddirSync,
+      writable: true,
+    });
+    Object.defineProperty(fs, "watch", {
+      configurable: true,
+      value: originalWatch,
+      writable: true,
+    });
+  }
+  assert.ok(
+    watchers.every((watcher) => watcher.closeCount === 1),
+    "close did not drain every reload-directory watcher",
   );
 }
 
