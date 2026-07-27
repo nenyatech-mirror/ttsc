@@ -5,10 +5,9 @@ const zlib = require("node:zlib");
 
 const {
   findGoArchiveChecksum,
-  hasVerifiedGoExtraction,
-  recordVerifiedGoExtraction,
   verifyOrReplaceGoArchive,
 } = require("./go-sdk-integrity.cjs");
+const { ensureVerifiedGoExtraction } = require("./go-sdk-extraction.cjs");
 const { resolveGoTarget } = require("./platform-target.cjs");
 
 const GO_DOWNLOADS_URL = "https://go.dev/dl/?mode=json&include=all";
@@ -211,24 +210,15 @@ function ensureDownloadedGoRoot() {
   const archivePath = path.join(cacheRoot, archive);
   const url = `https://go.dev/dl/${archive}`;
   const checksum = fetchGoArchiveChecksum(cacheRoot, version, archive);
-  ensureVerifiedGoArchive(archivePath, url, checksum);
-  if (hasVerifiedGoExtraction(extractDir, goBinary, checksum)) return goroot;
-
-  fs.rmSync(extractDir, { recursive: true, force: true });
-  fs.mkdirSync(extractDir, { recursive: true });
-  if (archive.endsWith(".tar.gz")) {
-    cp.execFileSync("tar", ["-xzf", archivePath, "-C", extractDir], {
-      stdio: "inherit",
-    });
-  } else {
-    extractZipArchive(archivePath, extractDir);
-  }
-  if (!fs.existsSync(goBinary)) {
-    throw new Error(
-      `build-platform-package: downloaded Go compiler missing: ${goBinary}`,
-    );
-  }
-  recordVerifiedGoExtraction(extractDir, checksum);
+  ensureVerifiedGoExtraction({
+    archivePath,
+    checksum,
+    extractDir,
+    extractZipArchive,
+    goBinary,
+    verifyArchive: (file, expected) =>
+      ensureVerifiedGoArchive(file, url, expected),
+  });
   return goroot;
 }
 

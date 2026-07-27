@@ -10,8 +10,15 @@ import {
 } from "../../internal/toolchain";
 
 /**
- * The platform packager must source a checksum from official Go metadata and
- * reject a cached or newly downloaded archive whose bytes differ from it.
+ * Verifies platform package: authenticates downloaded Go SDK archives.
+ *
+ * A corrupt cached or newly downloaded SDK must never enter the extraction
+ * transaction. The package owner sources the official checksum, verifies or
+ * replaces the archive, and then delegates authenticated extraction.
+ *
+ * 1. Resolve official metadata and replace a corrupt cache through SHA-256.
+ * 2. Pin replacement failure cleanup and checksum-bound extraction markers.
+ * 3. Assert the platform package wires authentication into extraction.
  */
 export const test_platform_package_verifies_downloaded_go_archives = () => {
   const integrity = requireFromTest(
@@ -84,6 +91,11 @@ export const test_platform_package_verifies_downloaded_go_archives = () => {
         ),
       /checksum mismatch/,
     );
+    assert.equal(
+      fs.existsSync(temporary),
+      false,
+      "a failed replacement must remove its temporary download",
+    );
 
     const extractDir = path.join(root, "extract");
     const goBinary = path.join(extractDir, "go", "bin", "go");
@@ -112,7 +124,9 @@ export const test_platform_package_verifies_downloaded_go_archives = () => {
   );
   assert.match(packager, /https:\/\/go\.dev\/dl\/\?mode=json&include=all/);
   assert.match(packager, /fetchGoArchiveChecksum/);
-  assert.match(packager, /ensureVerifiedGoArchive/);
-  assert.match(packager, /hasVerifiedGoExtraction/);
-  assert.match(packager, /recordVerifiedGoExtraction/);
+  assert.match(
+    packager,
+    /ensureVerifiedGoExtraction\(\{\s*archivePath,\s*checksum,\s*extractDir,\s*extractZipArchive,\s*goBinary,\s*verifyArchive: \(file, expected\) =>\s*ensureVerifiedGoArchive\(file, url, expected\),\s*\}\)/,
+    "the package owner must authenticate the same archive before extraction",
+  );
 };
