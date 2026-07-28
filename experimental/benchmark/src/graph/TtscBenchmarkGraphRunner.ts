@@ -19,6 +19,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { TtscBenchmarkCommandLine } from "../TtscBenchmarkCommandLine.ts";
 import { TtscBenchmarkConstant } from "../TtscBenchmarkConstant.ts";
 import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import { TtscBenchmarkGraphWebsiteCell } from "./TtscBenchmarkGraphWebsiteCell.ts";
@@ -52,12 +53,6 @@ export namespace TtscBenchmarkGraphRunner {
       | "serena";
     type PromptFamily = "dedicated" | "common";
     type Command = [command: string, arguments_: string[]];
-
-    interface IParsedArguments {
-      flags: Set<string>;
-      positional: string[];
-      values: Record<string, string | undefined>;
-    }
 
     interface IAgentHarnessReport {
       effort?: string;
@@ -1424,7 +1419,7 @@ export namespace TtscBenchmarkGraphRunner {
       flags,
       values,
       positional,
-    }: IParsedArguments): string[] {
+    }: TtscBenchmarkCommandLine.IArguments): string[] {
       const explicit = [...splitList(values.project ?? ""), ...positional];
       const names = flags.has("--all")
         ? Object.keys(TtscBenchmarkGraph.PROJECTS)
@@ -1438,37 +1433,33 @@ export namespace TtscBenchmarkGraphRunner {
       return [...new Set(names)];
     }
 
-    function parseArgs(argv: readonly string[]): IParsedArguments {
-      const values: Record<string, string | undefined> = {};
-      const flags = new Set<string>();
-      const positional: string[] = [];
-      for (let i = 0; i < argv.length; i++) {
-        const arg = argv[i]!;
-        if (arg === "--project") {
-          values.project = appendCsv(values.project, argv[++i]);
-        } else if (arg.startsWith("--project=")) {
-          values.project = appendCsv(
-            values.project,
-            arg.slice("--project=".length),
-          );
-        } else if (arg === "--question") {
-          values.question = argv[++i];
-        } else if (arg.startsWith("--")) {
-          const match = /^--([^=]+)=(.*)$/.exec(arg);
-          if (match) values[match[1]!] = match[2];
-          else flags.add(arg);
-        } else {
-          positional.push(arg);
-        }
-      }
-      return { values, flags, positional };
-    }
-
-    function appendCsv(
-      left: string | undefined,
-      right: string | undefined,
-    ): string {
-      return [left, right].filter(Boolean).join(",");
+    function parseArgs(
+      argv: readonly string[],
+    ): TtscBenchmarkCommandLine.IArguments {
+      return TtscBenchmarkCommandLine.parse(argv, {
+        repeatable: ["project"],
+        values: [
+          "project",
+          "question",
+          "arm",
+          "models",
+          "model",
+          "tools",
+          "tool",
+          "prompt-family",
+          "prompt-families",
+          "runs",
+          "max-run-retries",
+          "daemon",
+          "codex-model",
+          "out",
+          "serena-command",
+          "serena-args",
+          "serena-source",
+          "codebase-memory-binary",
+          "cbm-binary",
+        ],
+      });
     }
 
     function splitList(value: string): string[] {

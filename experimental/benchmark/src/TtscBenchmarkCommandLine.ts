@@ -41,18 +41,17 @@ export namespace TtscBenchmarkCommandLine {
       }
       const equals: number = argument.indexOf("=");
       if (equals !== -1) {
-        assignValue(
-          output.values,
-          argument.slice(2, equals),
-          argument.slice(equals + 1),
-          repeatable,
-        );
+        const name: string = argument.slice(2, equals);
+        const value: string = argument.slice(equals + 1);
+        if (valueOptions.has(name) === true && value.length === 0)
+          throw new Error(`--${name} requires a value`);
+        assignValue(output.values, name, value, repeatable);
         continue;
       }
       const name: string = argument.slice(2);
       if (valueOptions.has(name) === true) {
         const value: string | undefined = arguments_[++index];
-        if (value === undefined)
+        if (value === undefined || value.startsWith("--"))
           throw new Error(`${argument} requires a value`);
         assignValue(output.values, name, value, repeatable);
       } else {
