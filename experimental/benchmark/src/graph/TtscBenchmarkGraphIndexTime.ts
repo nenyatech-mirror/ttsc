@@ -485,12 +485,30 @@ export namespace TtscBenchmarkGraphIndexTime {
         throw new TypeError(`invalid graph website report: ${websiteJson}`);
       const prior = asJsonRecord(priorInput);
       const keepPrior = !parsed.flags.has("--reset-index");
-      const priorIndex = keepPrior ? asJsonRecord(prior?.index) : undefined;
+      const priorIndexInput = keepPrior ? prior?.index : undefined;
+      if (
+        priorIndexInput !== undefined &&
+        priorIndexInput !== null &&
+        !isJsonRecord(priorIndexInput)
+      ) {
+        throw new TypeError(`invalid graph website index: ${websiteJson}`);
+      }
+      const priorIndex = asJsonRecord(priorIndexInput);
       const scale = {
-        ...parseScale(priorIndex?.scale),
+        ...parseScale(
+          priorIndex?.scale,
+          "graph website index scale",
+          priorIndex !== undefined,
+        ),
         ...currentReport.scale,
       };
-      const cells = [...parseIndexCells(priorIndex?.cells)];
+      const cells = [
+        ...parseIndexCells(
+          priorIndex?.cells,
+          "graph website index cells",
+          priorIndex !== undefined,
+        ),
+      ];
       for (const cell of currentReport.cells) {
         const at = cells.findIndex(
           (old) => old.project === cell.project && old.tool === cell.tool,
@@ -803,22 +821,41 @@ export namespace TtscBenchmarkGraphIndexTime {
       const values: Record<string, string> = {};
       const flags = new Set<string>();
       const positional: string[] = [];
+      const valueOptions = new Set([
+        "project",
+        "tools",
+        "tool",
+        "out",
+        "publish",
+        "serena-command",
+        "serena-source",
+        "codebase-memory-binary",
+        "cbm-binary",
+      ]);
       for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === undefined) continue;
-        if (arg === "--project") {
-          values.project = appendCsv(values.project, argv[++i]);
-        } else if (arg.startsWith("--project=")) {
-          values.project = appendCsv(
-            values.project,
-            arg.slice("--project=".length),
-          );
-        } else if (arg.startsWith("--")) {
+        if (arg.startsWith("--")) {
           const match = /^--([^=]+)=(.*)$/.exec(arg);
           const key = match?.[1];
           const value = match?.[2];
-          if (key !== undefined && value !== undefined) values[key] = value;
-          else flags.add(arg);
+          if (key !== undefined && value !== undefined) {
+            if (value.length === 0)
+              throw new Error(`option --${key} requires a value`);
+            values[key] =
+              key === "project" ? appendCsv(values.project, value) : value;
+            continue;
+          }
+          const option = arg.slice(2);
+          if (!valueOptions.has(option)) {
+            flags.add(arg);
+            continue;
+          }
+          const next = argv[++i];
+          if (next === undefined || next.startsWith("--"))
+            throw new Error(`option ${arg} requires a value`);
+          values[option] =
+            option === "project" ? appendCsv(values.project, next) : next;
         } else {
           positional.push(arg);
         }
@@ -892,15 +929,27 @@ export namespace TtscBenchmarkGraphIndexTime {
       return (
         isJsonRecord(value) &&
         typeof value.files === "number" &&
-        typeof value.lines === "number"
+        Number.isInteger(value.files) &&
+        value.files >= 0 &&
+        typeof value.lines === "number" &&
+        Number.isInteger(value.lines) &&
+        value.lines >= 0
       );
     }
 
-    function parseScale(value: unknown): Record<string, IProjectScale> {
-      if (!isJsonRecord(value)) return {};
+    function parseScale(
+      value: unknown,
+      label: string,
+      required: boolean,
+    ): Record<string, IProjectScale> {
+      if (value === undefined && !required) return {};
+      if (!isJsonRecord(value))
+        throw new TypeError(`invalid ${label}: expected an object`);
       const scale: Record<string, IProjectScale> = {};
       for (const [project, entry] of Object.entries(value)) {
-        if (isProjectScale(entry)) scale[project] = entry;
+        if (!isProjectScale(entry))
+          throw new TypeError(`invalid ${label} entry: ${project}`);
+        scale[project] = entry;
       }
       return scale;
     }
@@ -913,13 +962,25 @@ export namespace TtscBenchmarkGraphIndexTime {
         typeof value.project === "string" &&
         typeof value.tool === "string" &&
         typeof value.buildMs === "number" &&
+        Number.isFinite(value.buildMs) &&
+        value.buildMs >= 0 &&
         (value.mode === undefined || typeof value.mode === "string") &&
         (value.hasBuildStep === undefined || value.hasBuildStep === false)
       );
     }
 
-    function parseIndexCells(value: unknown): IPublishedIndexCell[] {
-      return Array.isArray(value) ? value.filter(isPublishedIndexCell) : [];
+    function parseIndexCells(
+      value: unknown,
+      label: string,
+      required: boolean,
+    ): IPublishedIndexCell[] {
+      if (value === undefined && !required) return [];
+      if (!Array.isArray(value))
+        throw new TypeError(`invalid ${label}: expected an array`);
+      for (const [index, cell] of value.entries())
+        if (!isPublishedIndexCell(cell))
+          throw new TypeError(`invalid ${label} entry: ${index}`);
+      return value.filter(isPublishedIndexCell);
     }
 
     function parseIndexReport(value: unknown): IPublishableIndexReport {
@@ -928,8 +989,8 @@ export namespace TtscBenchmarkGraphIndexTime {
       }
       return {
         host: value.host,
-        scale: parseScale(value.scale),
-        cells: parseIndexCells(value.cells),
+        scale: parseScale(value.scale, "index-time report scale", true),
+        cells: parseIndexCells(value.cells, "index-time report cells", true),
       };
     }
 
