@@ -4,6 +4,10 @@
   "version": "0.0.0",
   "description": "Performance and graph benchmark harnesses for ttsc.",
   "type": "module",
+  "devDependencies": {
+    "@types/node": "catalog:utils",
+    "typescript": "catalog:typescript"
+  },
   "scripts": {
     "check": "pnpm run check:source && tsc --noEmit -p tsconfig.json",
     "check:source": "node --experimental-transform-types src/executable/check-source-contract.ts",
