@@ -100,14 +100,7 @@ const websiteJson = path.join(
   "benchmark",
   "graph.json",
 );
-const graphBenchmarkScript = path.join(
-  repoRoot,
-  "experimental",
-  "benchmark",
-  "src",
-  "executable",
-  "graph.ts",
-);
+const graphBenchmarkScript = path.join(here, "index.ts");
 const PUBLISHED_SAMPLE_KEYS = [
   "tokens",
   "cached",

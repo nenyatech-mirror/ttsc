@@ -1,6 +1,6 @@
 # Graph AI Benchmark
 
-Read this document before running or changing `experimental/benchmark/src/executable/graph.ts`, graph benchmark prompts or fixtures, trace auditing, comparator setup, or `website/public/benchmark/graph.json` publication.
+Read this document before running or changing `experimental/benchmark/src/executable/graph/index.ts`, graph benchmark prompts or fixtures, trace auditing, comparator setup, or `website/public/benchmark/graph.json` publication.
 
 ## Workload And Fixtures
 

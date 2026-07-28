@@ -37,6 +37,7 @@ const runRoot = path.join(
 );
 const env: NodeJS.ProcessEnv = {
   ...process.env,
+  GOCACHE: path.join(runRoot, "go-cache"),
   GOTMPDIR: path.join(runRoot, "go-tmp"),
   PATH: fs.existsSync(goRoot)
     ? `${goRoot}${path.delimiter}${process.env.PATH ?? ""}`
@@ -48,6 +49,7 @@ const binary = path.join(
   `graphbench-${process.pid}${process.platform === "win32" ? ".exe" : ""}`,
 );
 
+fs.mkdirSync(env.GOCACHE!, { recursive: true });
 fs.mkdirSync(env.GOTMPDIR!, { recursive: true });
 try {
   console.log("Building graphbench...");

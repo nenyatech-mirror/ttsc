@@ -3,9 +3,9 @@
  * Cold index build-time benchmark for the graph tool axis: what _readiness_
  * costs before a tool can answer its first question, per (tool × fixture).
  *
- * The agent benchmark (`graph.ts`) measures what a question costs once a tool
- * is ready; this runner measures the readiness itself. Per cell it deletes the
- * tool's index, runs its build step once, and takes wall time:
+ * The agent benchmark (`graph/index.ts`) measures what a question costs once a
+ * tool is ready; this runner measures the readiness itself. Per cell it deletes
+ * the tool's index, runs its build step once, and takes wall time:
  *
  * - `ttsc-graph`: `ttscgraph dump --cwd <fixture> --tsconfig <tsconfig>` — the
  *   MCP launcher runs exactly this at startup, so the agent's first question
@@ -140,6 +140,7 @@ const outDir = path.resolve(
 );
 const reportPath = path.join(outDir, "report.json");
 const runRoot = path.join(outDir, `.run-${process.pid}`);
+const goCache = path.join(runRoot, "go-cache");
 const goTmp = path.join(runRoot, "go-tmp");
 
 function cleanupRunRoot(): void {
@@ -202,6 +203,7 @@ if (process.env.TTSC_BENCH_SKIP_LOAD_CHECK !== "1") {
 }
 
 fs.mkdirSync(outDir, { recursive: true });
+fs.mkdirSync(goCache, { recursive: true });
 fs.mkdirSync(goTmp, { recursive: true });
 
 if (!parsed.flags.has("--no-setup")) {
@@ -391,6 +393,7 @@ function buildDumpBinary(): string {
     logBase: path.join(outDir, "go-build-ttscgraph"),
     cwd: ttscDir,
     env: {
+      GOCACHE: goCache,
       GOTMPDIR: goTmp,
       ...(fs.existsSync(goRoot)
         ? { PATH: `${goRoot}${path.delimiter}${process.env.PATH ?? ""}` }

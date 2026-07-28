@@ -21,12 +21,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { TtscBenchmarkConstant } from "../TtscBenchmarkConstant.ts";
-import { TtscBenchmarkGraph } from "../graph/TtscBenchmarkGraph.ts";
-import { TtscBenchmarkGraphWebsiteCell } from "../graph/TtscBenchmarkGraphWebsiteCell.ts";
-import type { ITtscBenchmarkAgentSample } from "../graph/structures/ITtscBenchmarkAgentSample.ts";
-import type { ITtscBenchmarkGraphProject } from "../graph/structures/ITtscBenchmarkGraphProject.ts";
-import { ITtscBenchmarkGraphWebsiteAgentCell } from "../graph/structures/ITtscBenchmarkGraphWebsiteAgentCell.ts";
+import { TtscBenchmarkConstant } from "../../TtscBenchmarkConstant.ts";
+import { TtscBenchmarkGraph } from "../../graph/TtscBenchmarkGraph.ts";
+import { TtscBenchmarkGraphWebsiteCell } from "../../graph/TtscBenchmarkGraphWebsiteCell.ts";
+import type { ITtscBenchmarkAgentSample } from "../../graph/structures/ITtscBenchmarkAgentSample.ts";
+import type { ITtscBenchmarkGraphProject } from "../../graph/structures/ITtscBenchmarkGraphProject.ts";
+import { ITtscBenchmarkGraphWebsiteAgentCell } from "../../graph/structures/ITtscBenchmarkGraphWebsiteAgentCell.ts";
 
 type BenchmarkArm = ITtscBenchmarkAgentSample.Arm | "both";
 type BenchmarkTool =
@@ -189,7 +189,7 @@ const websiteJson = path.join(
   "benchmark",
   "graph.json",
 );
-const graphHarnessDir = path.join(here, "graph");
+const graphHarnessDir = here;
 const claudeHarness = path.join(graphHarnessDir, "agent-ab.ts");
 const codexHarness = path.join(graphHarnessDir, "agent-ab-codex.ts");
 const DEFAULT_PROMPT_FAMILIES = ["dedicated", "common"] as const;

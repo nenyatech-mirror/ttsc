@@ -303,11 +303,13 @@ if (!armsRequested.baseline && !armsRequested.graph)
 const goRoot = path.join(os.homedir(), "go-sdk", "go", "bin");
 const goEnv: NodeJS.ProcessEnv = {
   ...process.env,
+  GOCACHE: path.join(runRoot, "go-cache"),
   GOTMPDIR: path.join(runRoot, "go-tmp"),
   PATH: fs.existsSync(goRoot)
     ? `${goRoot}${path.delimiter}${process.env.PATH ?? ""}`
     : process.env.PATH,
 };
+fs.mkdirSync(goEnv.GOCACHE!, { recursive: true });
 fs.mkdirSync(goEnv.GOTMPDIR!, { recursive: true });
 
 // 1. Build the native ttscgraph dump binary, which the @ttsc/graph launcher runs

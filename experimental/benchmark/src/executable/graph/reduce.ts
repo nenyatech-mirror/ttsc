@@ -249,7 +249,9 @@ function dumpFromGo(root: string, tsconfig: string): IRawDump {
     "reduce",
     `run-${process.pid}`,
   );
+  const goCache: string = path.join(runRoot, "go-cache");
   const goTmp: string = path.join(runRoot, "go-tmp");
+  fs.mkdirSync(goCache, { recursive: true });
   fs.mkdirSync(goTmp, { recursive: true });
   try {
     const stdout: string = execFileSync(
@@ -265,7 +267,7 @@ function dumpFromGo(root: string, tsconfig: string): IRawDump {
       {
         cwd: path.join(repositoryRoot, "packages", "ttsc"),
         encoding: "utf8",
-        env: { ...process.env, GOTMPDIR: goTmp },
+        env: { ...process.env, GOCACHE: goCache, GOTMPDIR: goTmp },
         maxBuffer: 1024 * 1024 * 512,
       },
     );

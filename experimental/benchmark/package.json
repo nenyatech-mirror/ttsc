@@ -13,7 +13,7 @@
     "check:source": "node --experimental-transform-types src/executable/check-source-contract.ts",
     "performance": "node --experimental-transform-types src/executable/performance.ts",
     "performance:merge": "node --experimental-transform-types src/executable/merge-website.ts",
-    "graph": "node --experimental-transform-types src/executable/graph.ts",
+    "graph": "node --experimental-transform-types src/executable/graph/index.ts",
     "graph:agent:claude": "node --experimental-transform-types src/executable/graph/agent-ab.ts",
     "graph:agent:codex": "node --experimental-transform-types src/executable/graph/agent-ab-codex.ts",
     "graph:analyze": "node --experimental-transform-types src/executable/graph/analyze-traces.ts",
