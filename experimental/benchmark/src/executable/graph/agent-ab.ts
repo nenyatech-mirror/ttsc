@@ -25,9 +25,9 @@
 // `claude` and `go` on PATH, and a built `@ttsc/graph` (packages/graph/lib).
 //
 // Usage:
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/agent-ab.ts --prompt-family=dedicated --repo=excalidraw --runs=2
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/agent-ab.ts --prompt-family=common --repo=vscode --runs=4 --model=opus
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/agent-ab.ts --prompt-id=typeorm-dedicated-v1 --runs=2
+//   pnpm --dir experimental/benchmark graph:agent:claude -- --prompt-family=dedicated --repo=excalidraw --runs=2
+//   pnpm --dir experimental/benchmark graph:agent:claude -- --prompt-family=common --repo=vscode --runs=4 --model=opus
+//   pnpm --dir experimental/benchmark graph:agent:claude -- --prompt-id=typeorm-dedicated-v1 --runs=2
 import cp from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -46,6 +46,15 @@ import type { TtscBenchmarkProcess } from "../../graph/structures/TtscBenchmarkP
 const repoRoot = TtscBenchmarkConstant.REPOSITORY_ROOT;
 const ttscDir = path.join(repoRoot, "packages", "ttsc");
 const graphLauncher = path.join(repoRoot, "packages", "graph", "lib", "bin.js");
+const runRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), "ttsc-benchmark-claude-"),
+);
+
+function cleanupRunRoot(): void {
+  fs.rmSync(runRoot, { recursive: true, force: true });
+}
+
+process.once("exit", cleanupRunRoot);
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/i;
 
 /**
@@ -294,16 +303,18 @@ if (!armsRequested.baseline && !armsRequested.graph)
 const goRoot = path.join(os.homedir(), "go-sdk", "go", "bin");
 const goEnv: NodeJS.ProcessEnv = {
   ...process.env,
+  GOTMPDIR: path.join(runRoot, "go-tmp"),
   PATH: fs.existsSync(goRoot)
     ? `${goRoot}${path.delimiter}${process.env.PATH ?? ""}`
     : process.env.PATH,
 };
+fs.mkdirSync(goEnv.GOTMPDIR!, { recursive: true });
 
 // 1. Build the native ttscgraph dump binary, which the @ttsc/graph launcher runs
 // once to build the resident graph (skipped for codegraph, which is a global CLI).
 // The Go binary is dump-only now; the MCP server itself is the Node launcher.
 const binary = path.join(
-  os.tmpdir(),
+  runRoot,
   `ttscgraph-ab-${process.pid}${process.platform === "win32" ? ".exe" : ""}`,
 );
 if (armsRequested.graph && !cg && !cbm && !serena) {
@@ -349,7 +360,7 @@ if (
 ) {
   throw new Error(`missing tsconfig: ${path.join(repoDir, tsconfig)}`);
 }
-if (armsRequested.graph && !cg && !cbm && !serena) ensureInstalled(repoDir);
+if (armsRequested.graph) ensureInstalled(repoDir);
 
 // 3. WITH = @ttsc/graph; WITHOUT = empty config. Both --strict-mcp-config. The
 // graph server is the Node launcher run over stdio; it shells out to the dump
@@ -357,10 +368,10 @@ if (armsRequested.graph && !cg && !cbm && !serena) ensureInstalled(repoDir);
 // calls from the resident graph. The launcher has no daemon/port mode; its
 // single type-check stays inside the measured cell, so there is no daemon path.
 const withCfg = armsRequested.graph
-  ? path.join(os.tmpdir(), `mcp-graph-${process.pid}.json`)
+  ? path.join(runRoot, "mcp-graph.json")
   : null;
 const emptyCfg = armsRequested.baseline
-  ? path.join(os.tmpdir(), `mcp-empty-${process.pid}.json`)
+  ? path.join(runRoot, "mcp-empty.json")
   : null;
 if (withCfg) {
   const serverCfg: Record<string, TtscBenchmarkProcess.IMcpServer> = cg
@@ -589,13 +600,8 @@ fs.writeFileSync(
     2,
   )}\n`,
 );
-try {
-  fs.rmSync(binary, { force: true });
-  if (withCfg) fs.rmSync(withCfg, { force: true });
-  if (emptyCfg) fs.rmSync(emptyCfg, { force: true });
-} catch {
-  /* best effort */
-}
+process.off("exit", cleanupRunRoot);
+cleanupRunRoot();
 
 async function runClaude(
   question: string,
@@ -890,7 +896,6 @@ function graphToolName(): string {
 
 function ensureInstalled(targetRepoDir: string): void {
   if (truthy(args["no-install"])) return;
-  if (fs.existsSync(path.join(targetRepoDir, "node_modules"))) return;
   const plan = installPlan(targetRepoDir);
   if (!plan) return;
   console.log(`Installing dependencies in ${targetRepoDir} (${plan.label})...`);

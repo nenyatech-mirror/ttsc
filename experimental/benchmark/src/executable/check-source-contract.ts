@@ -3,17 +3,25 @@ import path from "node:path";
 
 const SOURCE_ROOT = path.resolve(import.meta.dirname, "..");
 const EXPORT_PATTERN =
-  /^export\s+(?:(?:abstract|async|declare)\s+)*(class|const|enum|function|interface|namespace|type)\s+([A-Za-z_$][\w$]*)/gm;
+  /^export\s+(?:(?:abstract|async|declare)\s+)*(class|const|enum|function|interface|let|namespace|type|var)\s+([A-Za-z_$][\w$]*)/gm;
 const NAMESPACE_MEMBER_PATTERN =
-  /^\s+export\s+(?:(?:abstract|async|declare)\s+)*(class|const|enum|function|interface|namespace|type)\s+([A-Za-z_$][\w$]*)/gm;
+  /^\s+export\s+(?:(?:abstract|async|declare)\s+)*(class|const|enum|function|interface|let|namespace|type|var)\s+([A-Za-z_$][\w$]*)/gm;
 const CLASS_PUBLIC_MEMBER_PATTERN =
-  /^\s+public\s+(?:(?:abstract|async|readonly|static)\s+)*(constructor|[A-Za-z_$][\w$]*)\s*(?:<[^>{}]*>)?\s*\(/gm;
+  /^\s+public\s+(?:(?:abstract|async|get|readonly|set|static)\s+)*(constructor|[A-Za-z_$][\w$]*)\s*(?:<[^>{}]*>)?\s*\(/gm;
+const CLASS_PUBLIC_FIELD_PATTERN =
+  /^\s+public\s+(?:(?:declare|readonly|static)\s+)*([A-Za-z_$][\w$]*)[!?]?\s*(?::|=)/gm;
+const CLASS_IMPLICIT_PUBLIC_MEMBER_PATTERN =
+  /^  (?!(?:private|protected|public)\b)(?:(?:abstract|async|declare|get|readonly|set|static)\s+)*(constructor|[A-Za-z_$][\w$]*)[!?]?\s*(?:<[^>{}]*>)?\s*(?:\(|:|=)/gm;
+const TOP_LEVEL_EXPORT_PATTERN = /^export\b/gm;
 
 const files: string[] = collectTypeScriptFiles(SOURCE_ROOT);
 const failures: string[] = [];
 
 for (const file of files) {
   const source: string = fs.readFileSync(file, "utf8");
+  const topLevelExports: RegExpMatchArray[] = Array.from(
+    source.matchAll(TOP_LEVEL_EXPORT_PATTERN),
+  );
   const exports: { index: number; kind: string; name: string }[] = Array.from(
     source.matchAll(EXPORT_PATTERN),
     (
@@ -29,11 +37,16 @@ for (const file of files) {
   const executable: boolean =
     relative === "executable" || relative.startsWith(`executable${path.sep}`);
   if (executable) {
-    if (exports.length !== 0)
+    if (topLevelExports.length !== 0)
       failures.push(
         `${relative}: executable entrypoints must not export reusable symbols`,
       );
     continue;
+  }
+  if (topLevelExports.length !== exports.length) {
+    failures.push(
+      `${relative}: every export must be one named class, interface, or namespace declaration`,
+    );
   }
   if (exports.length === 0) {
     failures.push(
@@ -122,6 +135,16 @@ function checkClassPublicMembers(
     const name: string = match[1]!;
     const index: number = openingBrace + 1 + (match.index ?? 0);
     failures.push(...checkLeadingJsDoc(relative, source, index, name));
+  }
+  for (const match of body.matchAll(CLASS_PUBLIC_FIELD_PATTERN)) {
+    const name: string = match[1]!;
+    const index: number = openingBrace + 1 + (match.index ?? 0);
+    failures.push(...checkLeadingJsDoc(relative, source, index, name));
+  }
+  for (const match of body.matchAll(CLASS_IMPLICIT_PUBLIC_MEMBER_PATTERN)) {
+    failures.push(
+      `${relative}: class member ${match[1]} requires an explicit public, private, or protected modifier`,
+    );
   }
   return failures;
 }

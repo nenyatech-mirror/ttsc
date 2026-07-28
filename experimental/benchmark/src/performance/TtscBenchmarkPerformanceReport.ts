@@ -311,14 +311,20 @@ export class TtscBenchmarkPerformanceReport {
   public isReport(input: unknown): input is ITtscBenchmarkPerformanceReport {
     if (!TtscBenchmarkPerformancePackage.isRecord(input)) return false;
     return (
-      typeof input.date === "string" &&
-      typeof input.runs === "number" &&
-      typeof input.warmup === "number" &&
+      this.isIsoDate(input.date) &&
+      this.isPositiveInteger(input.runs) &&
+      this.isNonNegativeInteger(input.warmup) &&
       this.isHost(input.host) &&
       Array.isArray(input.projects) &&
       input.projects.every((project: unknown): boolean =>
         this.isProject(project),
-      )
+      ) &&
+      new Set(
+        input.projects.map(
+          (project: ITtscBenchmarkPerformanceReport.IProject): string =>
+            project.name,
+        ),
+      ).size === input.projects.length
     );
   }
 
@@ -442,7 +448,13 @@ export class TtscBenchmarkPerformanceReport {
   ): ITtscBenchmarkPerformanceReport {
     if (this.options.reset) return report;
     const previous = this.loadJson(this.options.websiteJson);
-    if (!this.isReport(previous)) return report;
+    if (!this.isReport(previous)) {
+      if (fs.existsSync(this.options.websiteJson))
+        throw new TypeError(
+          `invalid performance website report: ${this.options.websiteJson}`,
+        );
+      return report;
+    }
 
     const cloned: unknown = JSON.parse(JSON.stringify(report));
     if (!this.isReport(cloned)) {
@@ -524,7 +536,10 @@ export class TtscBenchmarkPerformanceReport {
   private isNumberArray(input: unknown): input is number[] {
     return (
       Array.isArray(input) &&
-      input.every((entry: unknown): boolean => typeof entry === "number")
+      input.every(
+        (entry: unknown): boolean =>
+          typeof entry === "number" && Number.isFinite(entry) && entry >= 0,
+      )
     );
   }
 
@@ -534,12 +549,18 @@ export class TtscBenchmarkPerformanceReport {
 
   private isMeasurement(
     input: unknown,
+    projectName: string,
   ): input is ITtscBenchmarkPerformanceMeasurement {
     if (!TtscBenchmarkPerformancePackage.isRecord(input)) return false;
+    const expectedId: string = (
+      input.tool === "tsgo"
+        ? [projectName, input.branch, "tsgo", input.op, input.threading]
+        : [projectName, input.branch, input.op, input.threading]
+    ).join(":");
     return (
-      typeof input.id === "string" &&
+      input.id === expectedId &&
       this.isBranch(input.branch) &&
-      typeof input.tool === "string" &&
+      this.isTool(input.tool) &&
       this.isOperation(input.op) &&
       this.isThreading(input.threading) &&
       this.isNumberArray(input.samples) &&
@@ -547,13 +568,13 @@ export class TtscBenchmarkPerformanceReport {
       this.isOptionalNumberArray(input.lintPluginSamples) &&
       this.isOptionalNumberArray(input.transformHostSamples) &&
       (input.raceRetries === undefined ||
-        typeof input.raceRetries === "number") &&
+        this.isNonNegativeInteger(input.raceRetries)) &&
       (input.failure === undefined ||
         input.failure === "race" ||
         input.failure === "error") &&
       (input.exitStatus === undefined ||
         input.exitStatus === null ||
-        typeof input.exitStatus === "number")
+        Number.isInteger(input.exitStatus))
     );
   }
 
@@ -562,16 +583,22 @@ export class TtscBenchmarkPerformanceReport {
   ): input is ITtscBenchmarkPerformanceReport.IProject {
     if (!TtscBenchmarkPerformancePackage.isRecord(input)) return false;
     return (
-      typeof input.name === "string" &&
-      typeof input.repo === "string" &&
-      typeof input.kind === "string" &&
-      typeof input.files === "number" &&
-      typeof input.typescript === "string" &&
-      typeof input.tsgo === "string" &&
+      this.isNonEmptyString(input.name) &&
+      this.isNonEmptyString(input.repo) &&
+      this.isNonEmptyString(input.kind) &&
+      this.isNonNegativeInteger(input.files) &&
+      this.isNonEmptyString(input.typescript) &&
+      this.isNonEmptyString(input.tsgo) &&
       Array.isArray(input.measurements) &&
       input.measurements.every((measurement: unknown): boolean =>
-        this.isMeasurement(measurement),
-      )
+        this.isMeasurement(measurement, input.name as string),
+      ) &&
+      new Set(
+        input.measurements.map(
+          (measurement: ITtscBenchmarkPerformanceMeasurement): string =>
+            measurement.id,
+        ),
+      ).size === input.measurements.length
     );
   }
 
@@ -580,15 +607,17 @@ export class TtscBenchmarkPerformanceReport {
   ): input is ITtscBenchmarkPerformanceReport.IHost {
     if (!TtscBenchmarkPerformancePackage.isRecord(input)) return false;
     return (
-      typeof input.os === "string" &&
-      typeof input.kernel === "string" &&
-      typeof input.cpu === "string" &&
-      typeof input.cores === "number" &&
+      this.isNonEmptyString(input.os) &&
+      this.isNonEmptyString(input.kernel) &&
+      this.isNonEmptyString(input.cpu) &&
+      this.isPositiveInteger(input.cores) &&
       typeof input.ramGB === "number" &&
-      typeof input.node === "string" &&
-      typeof input.ttsc === "string" &&
-      typeof input.typescript === "string" &&
-      typeof input.tsgo === "string"
+      Number.isFinite(input.ramGB) &&
+      input.ramGB > 0 &&
+      this.isNonEmptyString(input.node) &&
+      this.isNonEmptyString(input.ttsc) &&
+      this.isNonEmptyString(input.typescript) &&
+      this.isNonEmptyString(input.tsgo)
     );
   }
 
@@ -618,6 +647,44 @@ export class TtscBenchmarkPerformanceReport {
       input === "checkers2" ||
       input === "checkers4" ||
       input === "checkers8"
+    );
+  }
+
+  private isTool(input: unknown): boolean {
+    return (
+      input === "tsc" ||
+      input === "tsgo" ||
+      input === "ttsc" ||
+      input === "ttsc+@ttsc/lint" ||
+      input === "eslint" ||
+      input === "@ttsc/lint" ||
+      input === "ttsc-format" ||
+      input === "prettier"
+    );
+  }
+
+  private isNonEmptyString(input: unknown): input is string {
+    return typeof input === "string" && input.length > 0;
+  }
+
+  private isPositiveInteger(input: unknown): input is number {
+    return this.isNonNegativeInteger(input) && input > 0;
+  }
+
+  private isNonNegativeInteger(input: unknown): input is number {
+    return (
+      typeof input === "number" &&
+      Number.isFinite(input) &&
+      Number.isInteger(input) &&
+      input >= 0
+    );
+  }
+
+  private isIsoDate(input: unknown): input is string {
+    if (!this.isNonEmptyString(input)) return false;
+    const timestamp: number = Date.parse(input);
+    return (
+      Number.isFinite(timestamp) && new Date(timestamp).toISOString() === input
     );
   }
 

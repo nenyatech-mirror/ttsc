@@ -29,9 +29,9 @@
 // `codex` (logged in) and `go` on PATH, and a built `@ttsc/graph` (packages/graph/lib).
 //
 // Usage:
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/agent-ab-codex.ts --prompt-family=dedicated --repo=excalidraw --runs=4
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/agent-ab-codex.ts --prompt-family=common --repo=vscode --runs=4
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/agent-ab-codex.ts --prompt-id=typeorm-dedicated-v1 --runs=4
+//   pnpm --dir experimental/benchmark graph:agent:codex -- --prompt-family=dedicated --repo=excalidraw --runs=4
+//   pnpm --dir experimental/benchmark graph:agent:codex -- --prompt-family=common --repo=vscode --runs=4
+//   pnpm --dir experimental/benchmark graph:agent:codex -- --prompt-id=typeorm-dedicated-v1 --runs=4
 import cp from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -51,6 +51,13 @@ import type { TtscBenchmarkProcess } from "../../graph/structures/TtscBenchmarkP
 const repoRoot = TtscBenchmarkConstant.REPOSITORY_ROOT;
 const ttscDir = path.join(repoRoot, "packages", "ttsc");
 const graphLauncher = path.join(repoRoot, "packages", "graph", "lib", "bin.js");
+const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-benchmark-codex-"));
+
+function cleanupRunRoot(): void {
+  fs.rmSync(runRoot, { recursive: true, force: true });
+}
+
+process.once("exit", cleanupRunRoot);
 
 /**
  * Loads and validates the reusable prompt manifest.
@@ -290,16 +297,18 @@ if (!armsRequested.baseline && !armsRequested.graph)
 const goRoot = path.join(os.homedir(), "go-sdk", "go", "bin");
 const goEnv: NodeJS.ProcessEnv = {
   ...process.env,
+  GOTMPDIR: path.join(runRoot, "go-tmp"),
   PATH: fs.existsSync(goRoot)
     ? `${goRoot}${path.delimiter}${process.env.PATH ?? ""}`
     : process.env.PATH,
 };
+fs.mkdirSync(goEnv.GOTMPDIR!, { recursive: true });
 
 // 1. Build the native ttscgraph dump binary, which the @ttsc/graph launcher runs
 // once to build the resident graph. The Go binary is dump-only now; the MCP server
 // is the Node launcher.
 const binary = path.join(
-  os.tmpdir(),
+  runRoot,
   `ttscgraph-codex-${process.pid}${process.platform === "win32" ? ".exe" : ""}`,
 );
 if (armsRequested.graph && !cg && !cbm && !serena) {
@@ -345,7 +354,7 @@ if (
 ) {
   throw new Error(`missing tsconfig: ${path.join(repoDir, tsconfig)}`);
 }
-if (armsRequested.graph && !cg && !cbm && !serena) ensureInstalled(repoDir);
+if (armsRequested.graph) ensureInstalled(repoDir);
 
 // 3. The graph server is the Node launcher run over stdio; it shells out to the
 // dump binary (pointed at via TTSC_GRAPH_BINARY) on the first tool call, then
@@ -410,13 +419,10 @@ const samples: Record<
 const concurrency = Number(process.env.TTSC_BENCH_CONCURRENCY) || Infinity;
 const thunks: Array<() => Promise<void>> = arms.flatMap((arm) =>
   Array.from({ length: runs }, (_, r) => async () => {
-    // Validity is token-based only: a run that spent tokens is a real measurement
-    // and is kept, even if its MCP calls failed or it never produced a clean
-    // answer. Those are quality concerns judged out of band, not reasons to
-    // re-spend the budget. Only a zero-token run (rate limit / capacity failure /
-    // an incomplete turn that never reached the model) is invalid: it carries no
-    // usable sample, so retry it in place rather than letting it thin the TtscBenchmarkNumber.median.
-    // The trace file is keyed by run number, so a retry overwrites the attempt.
+    // Retry zero-token infrastructure failures, incomplete answers, and graph
+    // arms that never called their mounted MCP. Shell source reads remain
+    // measured behavior once the MCP was actually used. The trace file is keyed
+    // by run number, so a retry overwrites the prior attempt.
     let m: ITtscBenchmarkAgentSample | undefined;
     let attempts = 0;
     for (let attempt = 0; attempt <= MAX_RUN_RETRIES; attempt++) {
@@ -535,11 +541,8 @@ fs.writeFileSync(
   reportPath,
   `${JSON.stringify({ tool: graphToolName(), ...(toolSetupMs !== undefined ? { toolSetupMs } : {}), repo: repoKey, fixtureBranch, repoDir, model, effort, ...(promptId ? { promptId } : {}), promptFamily, ...(manifestPrompt?.questionSha256 ? { questionSha256: manifestPrompt.questionSha256 } : {}), daemon: false, runs, question, traceDir, samples }, null, 2)}\n`,
 );
-cleanup(
-  [binary, withHome, withoutHome].filter(
-    (value): value is string => typeof value === "string",
-  ),
-);
+process.off("exit", cleanupRunRoot);
+cleanupRunRoot();
 
 // makeCodexHome builds a throwaway CODEX_HOME: the real auth.json plus a minimal
 // config.toml pinning the model and effort, and (for the graph arm) the
@@ -548,7 +551,7 @@ cleanup(
 // launcher the Claude harness configures. TOML literal strings ('...') carry
 // Windows paths verbatim with no escaping.
 function makeCodexHome(tag: string, serverArgs: string[] | null): string {
-  const home = path.join(os.tmpdir(), `codex-home-${tag}-${process.pid}`);
+  const home = path.join(runRoot, `codex-home-${tag}`);
   fs.mkdirSync(home, { recursive: true });
   fs.copyFileSync(
     path.join(realHome, "auth.json"),
@@ -717,7 +720,6 @@ function promptForArm(
 
 function ensureInstalled(targetRepoDir: string): void {
   if (truthy(args["no-install"])) return;
-  if (fs.existsSync(path.join(targetRepoDir, "node_modules"))) return;
   const plan = installPlan(targetRepoDir);
   if (!plan) return;
   console.log(`Installing dependencies in ${targetRepoDir} (${plan.label})...`);
@@ -1102,14 +1104,4 @@ function runOrThrow(
 
 function oneLine(value: unknown): string {
   return String(value).replace(/\s+/g, " ").trim();
-}
-
-function cleanup(paths: string[]): void {
-  for (const p of paths) {
-    try {
-      fs.rmSync(p, { recursive: true, force: true });
-    } catch {
-      /* best effort */
-    }
-  }
 }

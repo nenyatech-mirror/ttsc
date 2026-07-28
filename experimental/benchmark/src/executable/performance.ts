@@ -13,21 +13,18 @@
  *
  * Useful modes:
  *
- * - `node --experimental-transform-types src/executable/performance.ts
- *   --setup-only`
- * - `node --experimental-transform-types src/executable/performance.ts
- *   --verify-only`
- * - `node --experimental-transform-types src/executable/performance.ts --project
- *   vue --project rxjs`
- * - `node --experimental-transform-types src/executable/performance.ts
- *   --project=vue --ttsc-build-only`
- * - `node --experimental-transform-types src/executable/performance.ts
- *   --project=vue --only-ttsc-build --reset`
- * - `node --experimental-transform-types src/executable/performance.ts
- *   --project=vue --only-ttsc-build --no-website`
- * - `node --experimental-transform-types src/executable/performance.ts
- *   --project=vue --lint-only`
- * - `node --experimental-transform-types src/executable/performance.ts
+ * - `pnpm --dir experimental/benchmark performance -- --setup-only`
+ * - `pnpm --dir experimental/benchmark performance -- --verify-only`
+ * - `pnpm --dir experimental/benchmark performance -- --project vue --project
+ *   rxjs`
+ * - `pnpm --dir experimental/benchmark performance -- --project=vue
+ *   --ttsc-build-only`
+ * - `pnpm --dir experimental/benchmark performance -- --project=vue
+ *   --only-ttsc-build --reset`
+ * - `pnpm --dir experimental/benchmark performance -- --project=vue
+ *   --only-ttsc-build --no-website`
+ * - `pnpm --dir experimental/benchmark performance -- --project=vue --lint-only`
+ * - `pnpm --dir experimental/benchmark performance --
  *   --cell-filter=':ttsc:build:' vue zod`
  *
  * Default output is milestone-only: phase timers, per-cell `run i: N ms`, and
@@ -220,15 +217,15 @@ const performanceRunner = new TtscBenchmarkPerformanceRunner({
   worktree: performanceWorktree,
 });
 
-if (flags.has("--list")) {
-  performanceRunner.printConfig();
-  process.exit(0);
-}
 if (
   projectSelection.length &&
   wantedProjects.length !== projectSelection.length
 ) {
   const known = PROJECTS.map((p) => `${p.name} (${p.repoName})`).join(", ");
   throw new Error(`unknown project selection. Known: ${known}`);
+}
+if (flags.has("--list")) {
+  performanceRunner.printConfig();
+  process.exit(0);
 }
 performanceRunner.main();

@@ -7,11 +7,11 @@
 // counts and marks reasoning text as unavailable instead of inventing it.
 //
 // Usage:
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/audit-codex-traces.ts --dir=experimental/benchmark/.work/graph/<timestamp> --out=audit.json
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/audit-codex-traces.ts --report=experimental/benchmark/.work/graph/<timestamp>/report.json
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/audit-codex-traces.ts --dir=... --baseline=website/public/benchmark/graph.json
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/audit-codex-traces.ts --compare=before/codex-trace-audit.json,after/report.json
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/audit-codex-traces.ts --self-test
+//   pnpm --dir experimental/benchmark graph:audit -- --dir=experimental/benchmark/.work/graph/<timestamp> --out=audit.json
+//   pnpm --dir experimental/benchmark graph:audit -- --report=experimental/benchmark/.work/graph/<timestamp>/report.json
+//   pnpm --dir experimental/benchmark graph:audit -- --dir=... --baseline=website/public/benchmark/graph.json
+//   pnpm --dir experimental/benchmark graph:audit -- --compare=before/codex-trace-audit.json,after/report.json
+//   pnpm --dir experimental/benchmark graph:audit -- --self-test
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

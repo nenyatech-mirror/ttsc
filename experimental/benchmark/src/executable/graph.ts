@@ -164,10 +164,12 @@ interface IRunOptions {
 }
 
 interface IWebsiteReport {
+  [key: string]: unknown;
   agent: {
     cells: IWebsiteCell[];
   };
   generatedAt: string;
+  index?: unknown;
   schemaVersion: number;
   structural: unknown;
 }
@@ -596,17 +598,19 @@ function runAgentCell({
 
 function publishWebsiteCells(cells: readonly IWebsiteCell[]): void {
   if (parsed.flags.has("--no-website")) return;
-  const prior =
-    !resetWebsite && fs.existsSync(websiteJson)
-      ? loadWebsiteReport(websiteJson)
-      : null;
-  resetWebsite = false;
+  const prior = fs.existsSync(websiteJson)
+    ? loadWebsiteReport(websiteJson)
+    : null;
   const out: IWebsiteReport = {
+    ...(prior ?? {}),
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     structural: prior?.structural ?? null,
-    agent: { cells: [...(prior?.agent?.cells ?? [])] },
+    agent: {
+      cells: resetWebsite ? [] : [...(prior?.agent?.cells ?? [])],
+    },
   };
+  resetWebsite = false;
   for (const cell of cells) {
     if (
       !cell ||
@@ -1100,7 +1104,7 @@ function isOptionalUsageList(value: unknown): boolean {
   );
 }
 
-function loadWebsiteReport(file: string): IWebsiteReport | null {
+function loadWebsiteReport(file: string): IWebsiteReport {
   const value = loadJson(file);
   if (
     !isRecord(value) ||
@@ -1110,9 +1114,10 @@ function loadWebsiteReport(file: string): IWebsiteReport | null {
     !Array.isArray(value.agent.cells) ||
     !value.agent.cells.every(isWebsiteCell)
   ) {
-    return null;
+    throw new TypeError(`invalid graph website report: ${file}`);
   }
   return {
+    ...value,
     schemaVersion: value.schemaVersion,
     generatedAt: value.generatedAt,
     structural: value.structural,
@@ -1250,24 +1255,106 @@ function ensureFixtures(projects: readonly string[]): void {
     const spec = projectSpec(project);
     const repoDir = TtscBenchmarkGraph.projectDir(workDir, spec);
     if (fs.existsSync(repoDir)) {
+      if (!fs.existsSync(path.join(repoDir, ".git")))
+        throw new Error(`${repoDir} exists but is not a git checkout`);
       process.stdout.write(`[graph] reusing fixture ${project}\n`);
-      continue;
+      refreshFixture(project, spec, repoDir);
+    } else {
+      fs.mkdirSync(path.dirname(repoDir), { recursive: true });
+      const cloneArgs = [
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        spec.sourceBranch,
+        spec.sourceRepo,
+        repoDir,
+      ];
+      runChecked("git", cloneArgs, {
+        label: `clone graph fixture ${project}`,
+        logBase: path.join(outDir, `setup-${project}-source`),
+      });
     }
-    fs.mkdirSync(path.dirname(repoDir), { recursive: true });
-    const cloneArgs = [
-      "clone",
-      "--depth",
-      "1",
-      "--branch",
-      spec.sourceBranch,
-      spec.sourceRepo,
-      repoDir,
-    ];
-    runChecked("git", cloneArgs, {
-      label: `clone graph fixture ${project}`,
-      logBase: path.join(outDir, `setup-${project}-source`),
-    });
+    ensureFixtureInstalled(project, repoDir);
   }
+}
+
+function refreshFixture(
+  project: string,
+  spec: ITtscBenchmarkGraphProject,
+  repoDir: string,
+): void {
+  runChecked("git", ["fetch", "--depth=1", "origin", spec.sourceBranch], {
+    label: `refresh graph fixture ${project}`,
+    logBase: path.join(outDir, `setup-${project}-fetch`),
+    cwd: repoDir,
+  });
+  runChecked("git", ["reset", "--hard", "FETCH_HEAD"], {
+    label: `reset graph fixture ${project}`,
+    logBase: path.join(outDir, `setup-${project}-reset`),
+    cwd: repoDir,
+  });
+  runChecked(
+    "git",
+    ["clean", "-fdx", "-e", "node_modules", "-e", "**/node_modules"],
+    {
+      label: `clean graph fixture ${project}`,
+      logBase: path.join(outDir, `setup-${project}-clean`),
+      cwd: repoDir,
+    },
+  );
+}
+
+function ensureFixtureInstalled(project: string, repoDir: string): void {
+  if (parsed.flags.has("--no-install")) return;
+  const plan = fixtureInstallPlan(repoDir);
+  if (plan === null) return;
+  runChecked(plan.command, plan.args, {
+    label: `install graph fixture ${project} (${plan.label})`,
+    logBase: path.join(outDir, `setup-${project}-install`),
+    cwd: repoDir,
+  });
+}
+
+function fixtureInstallPlan(
+  repoDir: string,
+): { args: string[]; command: string; label: string } | null {
+  if (fs.existsSync(path.join(repoDir, "pnpm-lock.yaml")))
+    return packageCommand("pnpm", [
+      "install",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+    ]);
+  if (fs.existsSync(path.join(repoDir, "package-lock.json")))
+    return packageCommand("npm", ["ci", "--ignore-scripts"]);
+  if (fs.existsSync(path.join(repoDir, "yarn.lock")))
+    return packageCommand("yarn", [
+      "install",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+    ]);
+  if (fs.existsSync(path.join(repoDir, "package.json")))
+    return packageCommand("npm", ["install", "--ignore-scripts"]);
+  return null;
+}
+
+function packageCommand(
+  command: string,
+  args: string[],
+): { args: string[]; command: string; label: string } {
+  return process.platform === "win32"
+    ? {
+        label: command,
+        command: "cmd.exe",
+        args: [
+          "/d",
+          "/s",
+          "/c",
+          ...(command === "yarn" ? ["corepack", "yarn"] : [command]),
+          ...args,
+        ],
+      }
+    : { label: command, command, args };
 }
 
 function selectProjects({

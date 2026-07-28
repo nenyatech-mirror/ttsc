@@ -50,7 +50,7 @@ export namespace ITtscBenchmarkPerformanceProject {
 
   /** Metadata cached while a sequential-mode clone still exists. */
   export interface IMeta {
-    /** Count of measured TypeScript and TSX source files. */
+    /** Count of non-declaration TS, TSX, MTS, and CTS source files. */
     files?: number;
 
     /** Legacy branch TypeScript package version. */

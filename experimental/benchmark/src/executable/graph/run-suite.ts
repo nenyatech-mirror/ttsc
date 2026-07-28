@@ -9,9 +9,9 @@
 //
 // Usage:
 //   # one-time: fix the baseline (no MCP) at n=5 for every dedicated prompt
-//   node --experimental-transform-types src/executable/graph/run-suite.ts --arm=baseline --runs=5 --harness=codex --model=gpt-5.4-mini
+//   pnpm --dir experimental/benchmark graph:suite -- --arm=baseline --runs=5 --harness=codex --model=gpt-5.4-mini
 //   # each iteration: graph arm, n=1, all projects at once, vs the cached baseline
-//   node --experimental-transform-types src/executable/graph/run-suite.ts --arm=graph --runs=1 --harness=codex --model=gpt-5.4-mini
+//   pnpm --dir experimental/benchmark graph:suite -- --arm=graph --runs=1 --harness=codex --model=gpt-5.4-mini
 //
 // Flags: --family=dedicated|common|all (default dedicated, = one prompt/project),
 // --concurrency (prompts in flight, default 4), --inner-concurrency (agent runs
@@ -68,12 +68,14 @@ interface IStoredWebsiteAgentCell extends ITtscBenchmarkGraphWebsiteAgentCell {
 }
 
 interface IWebsiteDocument {
+  [key: string]: unknown;
   schemaVersion: number;
   generatedAt: string;
   structural: unknown;
   agent: {
     cells: IStoredWebsiteAgentCell[];
   };
+  index?: unknown;
 }
 
 interface ISuiteRow {
@@ -202,25 +204,26 @@ function fixtureOf(prompt: ITtscBenchmarkGraphPrompt): string {
 function ensureFixtures(
   selectedPrompts: readonly ITtscBenchmarkGraphPrompt[],
 ): void {
-  const missing = new Map<string, string>();
-  for (const prompt of selectedPrompts) {
-    const dir = fixtureOf(prompt);
-    if (fs.existsSync(dir)) continue;
-    missing.set(prompt.repo, dir);
+  const repositories = [
+    ...new Set(selectedPrompts.map((prompt) => prompt.repo)),
+  ];
+  if (setup) {
+    runFixtureSetup(repositories);
+  } else {
+    const missing = selectedPrompts
+      .map((prompt) => [prompt.id, fixtureOf(prompt)] as const)
+      .filter(([, dir]) => !fs.existsSync(dir));
+    if (missing.length !== 0)
+      throw new Error(
+        `missing prepared graph fixtures: ${missing
+          .map(([id, dir]) => `${id} at ${dir}`)
+          .join(", ")}`,
+      );
   }
-  if (missing.size === 0) return;
-  if (!setup) {
-    throw new Error(
-      `missing prepared graph fixtures: ${[...missing]
-        .map(([repo, dir]) => `${repo} at ${dir}`)
-        .join(", ")}`,
-    );
-  }
-  runFixtureSetup([...missing.keys()]);
   const stillMissing = selectedPrompts
     .map((prompt) => [prompt.id, fixtureOf(prompt)] as const)
     .filter(([, dir]) => !fs.existsSync(dir));
-  if (stillMissing.length) {
+  if (stillMissing.length !== 0) {
     throw new Error(
       `graph fixture setup did not create: ${stillMissing
         .map(([id, dir]) => `${id} at ${dir}`)
@@ -455,6 +458,7 @@ function publishWebsiteReports(reports: readonly string[]): void {
   if (cells.length === 0) return;
   const prior = fs.existsSync(websiteJson) ? parseJsonFile(websiteJson) : null;
   const out: IWebsiteDocument = {
+    ...(isRecord(prior) ? prior : {}),
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     structural: isRecord(prior) ? (prior.structural ?? null) : null,
@@ -465,8 +469,24 @@ function publishWebsiteReports(reports: readonly string[]): void {
     const at = out.agent.cells.findIndex(
       (old) => TtscBenchmarkGraphWebsiteCell.key(old) === key,
     );
-    if (at >= 0) out.agent.cells[at] = cell;
-    else out.agent.cells.push(cell);
+    if (at >= 0) {
+      const existing = out.agent.cells[at]!;
+      const existingBaseline = existing.samples?.baseline.length ?? 0;
+      const existingGraph = existing.samples?.graph.length ?? 0;
+      const nextBaseline = cell.samples?.baseline.length ?? 0;
+      const nextGraph = cell.samples?.graph.length ?? 0;
+      if (nextBaseline < existingBaseline || nextGraph < existingGraph) {
+        console.warn(
+          `skip thinner agent cell: ${cell.tool ?? "ttsc-graph"} / ${
+            cell.repo
+          } / ${cell.modelVersion ?? cell.model} / ${
+            cell.promptFamily ?? "project-specific"
+          } (${nextBaseline}/${nextGraph} < ${existingBaseline}/${existingGraph})`,
+        );
+        continue;
+      }
+      out.agent.cells[at] = { ...existing, ...cell };
+    } else out.agent.cells.push(cell);
   }
   fs.mkdirSync(path.dirname(websiteJson), { recursive: true });
   fs.writeFileSync(websiteJson, `${JSON.stringify(out)}\n`);
@@ -620,10 +640,15 @@ function isGraphBenchmarkPrompt(
 }
 
 function storedWebsiteCells(data: unknown): IStoredWebsiteAgentCell[] {
-  if (!isRecord(data) || !isRecord(data.agent)) return [];
-  return Array.isArray(data.agent.cells)
-    ? data.agent.cells.filter(isStoredWebsiteAgentCell)
-    : [];
+  if (data === null) return [];
+  if (
+    !isRecord(data) ||
+    !isRecord(data.agent) ||
+    !Array.isArray(data.agent.cells) ||
+    !data.agent.cells.every(isStoredWebsiteAgentCell)
+  )
+    throw new TypeError(`invalid graph website report: ${websiteJson}`);
+  return data.agent.cells;
 }
 
 function isStoredWebsiteAgentCell(

@@ -78,16 +78,16 @@ export namespace ITtscBenchmarkPerformanceCommand {
     /** Whether a non-zero status throws immediately. */
     check?: boolean;
 
-    /** Environment variables added to the child process. */
+    /** Complete child environment; defaults to the parent process environment. */
     env?: NodeJS.ProcessEnv;
 
     /** Human-readable label used in verbose traces. */
     label?: string;
 
-    /** Whether normal child output is suppressed. */
+    /** Whether verbose mode still suppresses inherited child output. */
     quiet?: boolean;
 
-    /** Whether the invocation contributes measured wall time. */
+    /** Whether verbose mode emits start and completion timing lines. */
     timing?: boolean;
   }
 
@@ -102,7 +102,7 @@ export namespace ITtscBenchmarkPerformanceCommand {
     /** Measured child wall time in milliseconds. */
     ms: number;
 
-    /** Combined stdout and stderr used for timing and failure parsing. */
+    /** Combined stdout and stderr retained for diagnostics and failure parsing. */
     log: string;
   }
 
@@ -114,7 +114,7 @@ export namespace ITtscBenchmarkPerformanceCommand {
     /** Absolute child working directory. */
     cwd: string;
 
-    /** Environment variables added to the child process. */
+    /** Environment-variable overrides merged into the parent environment. */
     env?: NodeJS.ProcessEnv;
   }
 }

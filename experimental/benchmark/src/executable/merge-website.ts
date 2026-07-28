@@ -4,11 +4,11 @@
  * `website/public/benchmark/performance.json`.
  *
  * Used after collecting partial `experimental/benchmark/.work/report.json`
- * files into one directory. Each partial may live directly in that directory or
- * in its own subdirectory before this script is invoked:
+ * files into one directory. Each partial lives in its own subdirectory before
+ * this script is invoked:
  *
- * Node --experimental-transform-types src/executable/merge-website.ts
- * <partials-dir> <website-json>
+ * `pnpm --dir experimental/benchmark performance:merge -- <partials-dir>
+ * <website-json>`
  *
  * Semantics:
  *

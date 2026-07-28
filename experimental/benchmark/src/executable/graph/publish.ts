@@ -18,10 +18,10 @@
 // https://ttsc.dev/docs/benchmark#code-graph-mcp.
 //
 // Usage:
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/publish.ts              # fold graph reports
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/publish.ts --from <dir> # fold graph.ts suite output
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/publish.ts --reset      # drop prior cells first
-//   node --experimental-transform-types experimental/benchmark/src/executable/graph/publish.ts --dry-run    # validate and preview without writing
+//   pnpm --dir experimental/benchmark graph:publish
+//   pnpm --dir experimental/benchmark graph:publish -- --from <dir>
+//   pnpm --dir experimental/benchmark graph:publish -- --reset
+//   pnpm --dir experimental/benchmark graph:publish -- --dry-run
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,7 @@ interface IPublishedAgentCell extends IStoredWebsiteAgentCell {
 }
 
 interface IWebsiteDocument {
+  [key: string]: unknown;
   schemaVersion: number;
   generatedAt: string;
   structural: unknown;
@@ -110,10 +111,9 @@ const reset = args.includes("--reset");
 const dryRun = args.includes("--dry-run");
 const sourceDirs = parseSourceDirs(args);
 
-const priorData =
-  !reset && fs.existsSync(websiteJson)
-    ? parseJsonFile(websiteJson)
-    : { schemaVersion: 1, structural: null, agent: { cells: [] } };
+const priorData = fs.existsSync(websiteJson)
+  ? parseJsonFile(websiteJson)
+  : { schemaVersion: 1, structural: null, agent: { cells: [] } };
 if (!isRecord(priorData)) {
   throw new TypeError(`invalid graph website report: ${websiteJson}`);
 }
@@ -127,11 +127,11 @@ const prior = priorData;
 // the last build, which is worse than serving none, because a missing chart is
 // visible and a stale one is not.
 const out: IWebsiteDocument = {
+  ...prior,
   schemaVersion: 1,
   generatedAt: new Date().toISOString(),
   structural: prior.structural ?? null,
-  agent: { cells: storedWebsiteCells(prior) },
-  ...(prior.index !== undefined ? { index: prior.index } : {}),
+  agent: { cells: reset ? [] : storedWebsiteCells(prior) },
 };
 const PUBLISHED_SAMPLE_KEYS = [
   "tokens",

@@ -715,19 +715,24 @@ export class TtscBenchmarkPerformanceSetup {
       const temporaryDirectory: string = fs.mkdtempSync(
         path.join(os.tmpdir(), "ttsc-bench-tgz-"),
       );
-      fs.rmSync(packageDirectory, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(packageDirectory), { recursive: true });
-      this.options.process.shell(
-        `tar --force-local -xzf ${this.options.process.quote(
-          this.tarPath(path.join(this.options.paths.tarballRoot, target.file)),
-        )} -C ${this.options.process.quote(this.tarPath(temporaryDirectory))}`,
-        directory,
-        { quiet: true },
-      );
-      fs.cpSync(path.join(temporaryDirectory, "package"), packageDirectory, {
-        recursive: true,
-      });
-      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+      try {
+        fs.rmSync(packageDirectory, { recursive: true, force: true });
+        fs.mkdirSync(path.dirname(packageDirectory), { recursive: true });
+        this.options.process.shell(
+          `tar --force-local -xzf ${this.options.process.quote(
+            this.tarPath(
+              path.join(this.options.paths.tarballRoot, target.file),
+            ),
+          )} -C ${this.options.process.quote(this.tarPath(temporaryDirectory))}`,
+          directory,
+          { quiet: true },
+        );
+        fs.cpSync(path.join(temporaryDirectory, "package"), packageDirectory, {
+          recursive: true,
+        });
+      } finally {
+        fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+      }
       this.linkPackageBins(packageDirectory, nodeModules);
     }
     process.stdout.write(

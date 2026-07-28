@@ -243,21 +243,34 @@ function isOptionalBoolean(input: unknown): input is boolean | undefined {
 }
 
 function dumpFromGo(root: string, tsconfig: string): IRawDump {
-  const stdout: string = execFileSync(
-    "go",
-    [
-      "run",
-      "./cmd/graphdump",
-      "--cwd",
-      path.resolve(repositoryRoot, root),
-      "--tsconfig",
-      tsconfig,
-    ],
-    {
-      cwd: path.join(repositoryRoot, "packages", "ttsc"),
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 512,
-    },
+  const runRoot: string = path.join(
+    TtscBenchmarkConstant.WORK_ROOT,
+    "graph",
+    "reduce",
+    `run-${process.pid}`,
   );
-  return parseRawDump(stdout);
+  const goTmp: string = path.join(runRoot, "go-tmp");
+  fs.mkdirSync(goTmp, { recursive: true });
+  try {
+    const stdout: string = execFileSync(
+      "go",
+      [
+        "run",
+        "./cmd/graphdump",
+        "--cwd",
+        path.resolve(repositoryRoot, root),
+        "--tsconfig",
+        tsconfig,
+      ],
+      {
+        cwd: path.join(repositoryRoot, "packages", "ttsc"),
+        encoding: "utf8",
+        env: { ...process.env, GOTMPDIR: goTmp },
+        maxBuffer: 1024 * 1024 * 512,
+      },
+    );
+    return parseRawDump(stdout);
+  } finally {
+    fs.rmSync(runRoot, { recursive: true, force: true });
+  }
 }

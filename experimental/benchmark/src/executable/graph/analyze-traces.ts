@@ -7,8 +7,8 @@
 // tool outputs. It records no answer score.
 //
 // Usage:
-//   node --experimental-transform-types src/executable/graph/analyze-traces.ts --trace-dir=<dir> [--out=<analysis.json>]
-//   node --experimental-transform-types src/executable/graph/analyze-traces.ts --report=<report.json> [--out=<analysis.json>]
+//   pnpm --dir experimental/benchmark graph:analyze -- --trace-dir=<dir> [--out=<analysis.json>]
+//   pnpm --dir experimental/benchmark graph:analyze -- --report=<report.json> [--out=<analysis.json>]
 import fs from "node:fs";
 import path from "node:path";
 

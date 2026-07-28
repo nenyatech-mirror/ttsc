@@ -139,6 +139,14 @@ const outDir = path.resolve(
   parsed.values.out ?? path.join(workDir, "graph-index", timestamp()),
 );
 const reportPath = path.join(outDir, "report.json");
+const runRoot = path.join(outDir, `.run-${process.pid}`);
+const goTmp = path.join(runRoot, "go-tmp");
+
+function cleanupRunRoot(): void {
+  fs.rmSync(runRoot, { recursive: true, force: true });
+}
+
+process.once("exit", cleanupRunRoot);
 
 if (parsed.flags.has("--list")) {
   for (const project of projectNames()) {
@@ -194,6 +202,7 @@ if (process.env.TTSC_BENCH_SKIP_LOAD_CHECK !== "1") {
 }
 
 fs.mkdirSync(outDir, { recursive: true });
+fs.mkdirSync(goTmp, { recursive: true });
 
 if (!parsed.flags.has("--no-setup")) {
   ensureFixtures(selected);
@@ -242,6 +251,8 @@ for (const project of selected) {
 }
 
 writeJson(reportPath, report);
+process.off("exit", cleanupRunRoot);
+cleanupRunRoot();
 process.stdout.write(
   `\nIndex-time benchmark report: ${path.relative(repoRoot, reportPath)}\n`,
 );
@@ -370,7 +381,7 @@ function runIndexCell({
 
 function buildDumpBinary(): string {
   const binary = path.join(
-    outDir,
+    runRoot,
     `ttscgraph-index${process.platform === "win32" ? ".exe" : ""}`,
   );
   const goRoot = path.join(os.homedir(), "go-sdk", "go", "bin");
@@ -379,9 +390,12 @@ function buildDumpBinary(): string {
     label: "go build ttscgraph",
     logBase: path.join(outDir, "go-build-ttscgraph"),
     cwd: ttscDir,
-    env: fs.existsSync(goRoot)
-      ? { PATH: `${goRoot}${path.delimiter}${process.env.PATH ?? ""}` }
-      : {},
+    env: {
+      GOTMPDIR: goTmp,
+      ...(fs.existsSync(goRoot)
+        ? { PATH: `${goRoot}${path.delimiter}${process.env.PATH ?? ""}` }
+        : {}),
+    },
   });
   return binary;
 }
@@ -442,9 +456,10 @@ function hostSpec(): IHostSpec {
 
 function publishWebsiteIndex(currentReport: IPublishableIndexReport): void {
   if (parsed.flags.has("--no-website")) return;
-  const prior = asJsonRecord(
-    fs.existsSync(websiteJson) ? loadJson(websiteJson) : null,
-  );
+  const priorInput = fs.existsSync(websiteJson) ? loadJson(websiteJson) : null;
+  if (priorInput !== null && !isJsonRecord(priorInput))
+    throw new TypeError(`invalid graph website report: ${websiteJson}`);
+  const prior = asJsonRecord(priorInput);
   const keepPrior = !parsed.flags.has("--reset-index");
   const priorIndex = keepPrior ? asJsonRecord(prior?.index) : undefined;
   const scale = {
@@ -460,6 +475,7 @@ function publishWebsiteIndex(currentReport: IPublishableIndexReport): void {
     else cells.push(cell);
   }
   const out = {
+    ...(prior ?? {}),
     schemaVersion: prior?.schemaVersion ?? 1,
     generatedAt: new Date().toISOString(),
     structural: prior?.structural ?? null,
@@ -624,7 +640,10 @@ function ensureFixtures(projects: TtscBenchmarkGraph.ProjectName[]): void {
         },
       );
     } else {
+      if (!fs.existsSync(path.join(repoDir, ".git")))
+        throw new Error(`${repoDir} exists but is not a git checkout`);
       process.stdout.write(`[index-time] reusing fixture ${project}\n`);
+      refreshFixture(project, spec, repoDir);
     }
     // ttsc-graph resolves modules through node_modules; an uninstalled
     // fixture loads a different (smaller) program and times a different job.
@@ -632,9 +651,34 @@ function ensureFixtures(projects: TtscBenchmarkGraph.ProjectName[]): void {
   }
 }
 
+function refreshFixture(
+  project: TtscBenchmarkGraph.ProjectName,
+  spec: ITtscBenchmarkGraphProject,
+  repoDir: string,
+): void {
+  runChecked("git", ["fetch", "--depth=1", "origin", spec.sourceBranch], {
+    label: `refresh graph fixture ${project}`,
+    logBase: path.join(outDir, `setup-${project}-fetch`),
+    cwd: repoDir,
+  });
+  runChecked("git", ["reset", "--hard", "FETCH_HEAD"], {
+    label: `reset graph fixture ${project}`,
+    logBase: path.join(outDir, `setup-${project}-reset`),
+    cwd: repoDir,
+  });
+  runChecked(
+    "git",
+    ["clean", "-fdx", "-e", "node_modules", "-e", "**/node_modules"],
+    {
+      label: `clean graph fixture ${project}`,
+      logBase: path.join(outDir, `setup-${project}-clean`),
+      cwd: repoDir,
+    },
+  );
+}
+
 function ensureInstalled(repoDir: string): void {
   if (parsed.flags.has("--no-install")) return;
-  if (fs.existsSync(path.join(repoDir, "node_modules"))) return;
   const plan = installPlan(repoDir);
   if (!plan) return;
   runChecked(plan.command, plan.args, {
@@ -680,7 +724,13 @@ function packageCommand(
     ? {
         label: command,
         command: "cmd.exe",
-        args: ["/d", "/s", "/c", command, ...args],
+        args: [
+          "/d",
+          "/s",
+          "/c",
+          ...(command === "yarn" ? ["corepack", "yarn"] : [command]),
+          ...args,
+        ],
       }
     : { label: command, command, args };
 }

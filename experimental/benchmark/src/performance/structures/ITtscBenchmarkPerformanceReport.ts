@@ -25,13 +25,13 @@ export namespace ITtscBenchmarkPerformanceReport {
     /** Stable dashboard project name. */
     name: string;
 
-    /** Fixture repository URL. */
+    /** Fixture repository basename retained for dashboard compatibility. */
     repo: string;
 
     /** Human-facing fixture category. */
     kind: string;
 
-    /** Count of measured TypeScript and TSX source files. */
+    /** Count of non-declaration TS, TSX, MTS, and CTS source files. */
     files: number;
 
     /** Legacy TypeScript display version. */
