@@ -61,16 +61,25 @@ export namespace TtscBenchmarkCommandLine {
     return output;
   }
 
-  /** Parses `--name=value` arguments into a string record. */
+  /** Parses `--name=value` and `--name value` arguments into a string record. */
   export function parseKeyValue(
     arguments_: readonly string[],
   ): Record<string, string> {
-    return Object.fromEntries(
-      arguments_.flatMap((argument: string): [string, string][] => {
-        const match: RegExpExecArray | null = /^--([^=]+)=(.*)$/.exec(argument);
-        return match === null ? [] : [[match[1]!, match[2]!]];
-      }),
-    );
+    const output: Record<string, string> = {};
+    for (let index: number = 0; index < arguments_.length; ++index) {
+      const argument: string = arguments_[index]!;
+      const match: RegExpExecArray | null = /^--([^=]+)=(.*)$/.exec(argument);
+      if (match !== null) {
+        output[match[1]!] = match[2]!;
+        continue;
+      }
+      if (argument.startsWith("--") === false) continue;
+      const value: string | undefined = arguments_[index + 1];
+      if (value === undefined || value.startsWith("--")) continue;
+      output[argument.slice(2)] = value;
+      ++index;
+    }
+    return output;
   }
 
   /** Splits a comma-delimited option into its non-empty trimmed entries. */
