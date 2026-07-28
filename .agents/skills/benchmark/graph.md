@@ -25,7 +25,7 @@ The benchmark measures setup time; it must not omit required setup to make a com
 ```bash
 pnpm --dir experimental/benchmark graph -- --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena
 pnpm --dir experimental/benchmark graph -- --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1
-pnpm --dir experimental/benchmark graph:audit -- --dir=experimental/benchmark/.work/graph/<timestamp>
+pnpm --dir experimental/benchmark graph:audit -- --dir=.work/graph/<timestamp>
 pnpm --dir experimental/benchmark graph:audit -- --compare=<before>,<after>
 pnpm --dir experimental/benchmark graph:audit -- --self-test
 ```

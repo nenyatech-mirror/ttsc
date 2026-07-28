@@ -20,9 +20,9 @@ pnpm --dir experimental/benchmark performance -- --verbose                      
 pnpm --dir experimental/benchmark graph -- --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena # one graph AI-token benchmark
 pnpm --dir experimental/benchmark graph -- --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1 # baseline-only graph refresh
 pnpm --dir experimental/benchmark graph -- --all --models=gpt-5.4-mini --arm=graph --tools=ttsc-graph,codegraph,codebase-memory,serena --prompt-family=all --runs=1 # comparator graph sweep
-pnpm --dir experimental/benchmark graph:audit -- --dir=experimental/benchmark/.work/graph/<timestamp> # inspect Codex message/tool/reasoning ledger and baseline savings
+pnpm --dir experimental/benchmark graph:audit -- --dir=.work/graph/<timestamp>       # inspect Codex message/tool/reasoning ledger and baseline savings
 pnpm --dir experimental/benchmark graph:audit -- --self-test                       # verify audit parser and savings semantics
-pnpm --dir experimental/benchmark graph:structural -- --project=packages/ttsc --runs=5 # structural graph metrics
+pnpm --dir experimental/benchmark graph:structural -- --runs=5                      # structural graph metrics for packages/ttsc
 pnpm --dir experimental/benchmark graph:index -- --all                             # cold index build time per (tool x fixture), quiet host only
 ```
 
