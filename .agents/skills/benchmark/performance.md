@@ -65,4 +65,4 @@ Set `TTSC_BENCH_REQUIRE_QUIET` to `1` using the current shell's environment-vari
 pnpm --dir experimental/benchmark performance
 ```
 
-After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `pnpm --dir experimental/benchmark performance:merge -- <report...>` only to combine audited partial `report.json` files by cell ID.
+After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `pnpm --dir experimental/benchmark performance:merge -- <partials-dir> <website-benchmark.json>` only to combine audited partial `report.json` files by cell ID.
