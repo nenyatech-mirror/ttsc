@@ -207,6 +207,53 @@ const PLATFORM_IDS = [
 ];
 
 /**
+ * Physical runners for shipped native packages.
+ *
+ * Watch backends and VS Code installation differ by OS, not CPU architecture,
+ * so only the representative x64 row for each OS owns those checks. When an
+ * experimental package surface changes, all six rows still verify the shipped
+ * native artifacts.
+ */
+const PLATFORM_ROWS = [
+  {
+    name: "linux-x64",
+    os: "linux",
+    runner: "ubuntu-24.04",
+    representative: true,
+  },
+  {
+    name: "linux-arm64",
+    os: "linux",
+    runner: "ubuntu-24.04-arm",
+    representative: false,
+  },
+  {
+    name: "darwin-x64",
+    os: "darwin",
+    runner: "macos-15-intel",
+    representative: true,
+  },
+  {
+    name: "darwin-arm64",
+    os: "darwin",
+    runner: "macos-15",
+    representative: false,
+  },
+  {
+    name: "win32-x64",
+    os: "win32",
+    runner: "windows-2025",
+    representative: true,
+  },
+  {
+    name: "win32-arm64",
+    os: "win32",
+    runner: "windows-11-arm",
+    representative: false,
+  },
+];
+
+/**
  * Exact workflow path contracts that remain at workflow creation time.
  *
  * The main test workflow intentionally has no path filter: GitHub can leave a
@@ -239,48 +286,8 @@ const WORKFLOW_PATHS = {
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
   ],
-  bun: integrationPaths("bun", "experimental/test-unplugin/**"),
-  experimental: integrationPaths(
-    "experimental",
-    "experimental/install/**",
-    "experimental/test-unplugin/**",
-  ),
   nestia: integrationPaths("nestia"),
-  "plugin-cache": [
-    ".github/workflows/plugin-cache.yml",
-    "scripts/build-current.cjs",
-    "scripts/build-platform-package.cjs",
-    "scripts/go-build-cache.cjs",
-    "scripts/go-sdk-extraction.cjs",
-    "scripts/go-sdk-integrity.cjs",
-    "scripts/platform-target.cjs",
-    "scripts/ci/plugin-cache-persistence.mjs",
-    "packages/ttsc/**",
-    "packages/ttsc-*/**",
-    "tests/projects/go-source-plugin/**",
-    "package.json",
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-  ],
-  "source-map": integrationPaths(
-    "source-map",
-    "experimental/source-map/**",
-  ),
   typia: integrationPaths("typia"),
-  vscode: [
-    ".github/workflows/vscode.yml",
-    "config/**",
-    "packages/vscode/**",
-    "packages/ttsc/package.json",
-    "packages/ttsc/src/**",
-    "scripts/assert-vscode-package.cjs",
-    "scripts/smoke-vscode-install.cjs",
-    "tests/test-ttsc/src/features/ttscserver/test_vscode_install_script_uses_windows_command_shim.ts",
-    "LICENSE",
-    "package.json",
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-  ],
   website: [
     ".github/workflows/website.yml",
     "config/**",
@@ -297,9 +304,52 @@ const WORKFLOW_PATHS = {
   ],
 };
 
+const PLATFORM_INTEGRATION_PATHS = {
+  bun: integrationSurfacePaths("experimental/test-unplugin/**"),
+  experimental: integrationSurfacePaths(
+    "experimental/install/**",
+    "experimental/test-unplugin/**",
+  ),
+  pluginCache: [
+    "scripts/build-current.cjs",
+    "scripts/build-platform-package.cjs",
+    "scripts/go-build-cache.cjs",
+    "scripts/go-sdk-extraction.cjs",
+    "scripts/go-sdk-integrity.cjs",
+    "scripts/platform-target.cjs",
+    "scripts/ci/plugin-cache-persistence.mjs",
+    "packages/ttsc/**",
+    "packages/ttsc-*/**",
+    "tests/projects/go-source-plugin/**",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+  ],
+  sourceMap: integrationSurfacePaths("experimental/source-map/**"),
+  vscode: [
+    "config/**",
+    "packages/vscode/**",
+    "packages/ttsc/package.json",
+    "packages/ttsc/src/**",
+    "scripts/assert-vscode-package.cjs",
+    "scripts/smoke-vscode-install.cjs",
+    "tests/test-ttsc/src/features/ttscserver/test_vscode_install_script_uses_windows_command_shim.ts",
+    "LICENSE",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+  ],
+};
+
 function integrationPaths(workflow, ...harnesses) {
   return [
     `.github/workflows/${workflow}.yml`,
+    ...integrationSurfacePaths(...harnesses),
+  ];
+}
+
+function integrationSurfacePaths(...harnesses) {
+  return [
     ...harnesses,
     "experimental/tarballs/**",
     "config/**",
@@ -336,6 +386,22 @@ function planForPaths(files) {
 
   const selected = new Set(["typecheck"]);
   let watch = false;
+  const integrations = {
+    bun: matchesAnyPath(normalized, PLATFORM_INTEGRATION_PATHS.bun),
+    experimental: matchesAnyPath(
+      normalized,
+      PLATFORM_INTEGRATION_PATHS.experimental,
+    ),
+    pluginCache: matchesAnyPath(
+      normalized,
+      PLATFORM_INTEGRATION_PATHS.pluginCache,
+    ),
+    sourceMap: matchesAnyPath(
+      normalized,
+      PLATFORM_INTEGRATION_PATHS.sourceMap,
+    ),
+    vscode: matchesAnyPath(normalized, PLATFORM_INTEGRATION_PATHS.vscode),
+  };
   const reasons = [];
   const add = (ids, reason) => {
     for (const id of ids) selected.add(id);
@@ -480,6 +546,14 @@ function planForPaths(files) {
     }
     if (
       [
+        "scripts/assert-vscode-package.cjs",
+        "scripts/smoke-vscode-install.cjs",
+      ].includes(file)
+    ) {
+      continue;
+    }
+    if (
+      [
         "scripts/ci/go-test-overlay.cjs",
         "scripts/ci/go-test-runners.test.cjs",
         "scripts/ci/website-compiler-module.test.cjs",
@@ -517,7 +591,7 @@ function planForPaths(files) {
     return fullPlan(`unknown input: ${file}`);
   }
 
-  return createPlan(selected, watch, reasons);
+  return createPlan(selected, watch, reasons, integrations);
 }
 
 function planTtscTest(file) {
@@ -569,18 +643,90 @@ function isDocumentation(file) {
 }
 
 function fullPlan(reason) {
-  return createPlan(new Set(FULL_LANE_IDS), true, [reason]);
+  return createPlan(new Set(FULL_LANE_IDS), true, [reason], {
+    bun: true,
+    experimental: true,
+    pluginCache: true,
+    sourceMap: true,
+    vscode: true,
+  });
 }
 
-function createPlan(selected, watch, reasons) {
+function createPlan(selected, watch, reasons, integrations) {
   const include = LANES.filter((lane) => selected.has(lane.id)).map(
     workflowLane,
   );
+  const platform = createPlatformPlan({
+    bun: integrations.bun,
+    experimental: integrations.experimental,
+    pluginCache: integrations.pluginCache,
+    sourceMap: integrations.sourceMap,
+    vscode: integrations.vscode,
+    watch,
+  });
   return {
     matrix: { include },
     laneIds: include.map((lane) => lane.id),
+    platformMatrix: platform.matrix,
+    platformSelected: platform.matrix.include.length > 0,
+    platformTasks: platform.tasks,
     watch,
     reasons: [...new Set(reasons)],
+  };
+}
+
+function createPlatformPlan(tasks) {
+  const include = PLATFORM_ROWS.filter(
+    (row) => tasks.experimental || row.representative,
+  )
+    .map((row) => {
+      const bun = tasks.bun && row.representative && row.os === "linux";
+      const pluginCache =
+        tasks.pluginCache &&
+        row.representative &&
+        (row.os === "linux" || row.os === "win32");
+      const sourceMap =
+        tasks.sourceMap && row.representative && row.os === "linux";
+      const vscode = tasks.vscode && row.representative;
+      const watch = tasks.watch && row.representative;
+      const build =
+        !tasks.experimental &&
+        (watch || pluginCache);
+      return {
+        name: row.name,
+        os: row.os,
+        runner: row.runner,
+        bun,
+        build,
+        build_scope: watch ? "experimental" : "plugin-cache",
+        experimental: tasks.experimental,
+        needs_go:
+          tasks.experimental ||
+          bun ||
+          pluginCache ||
+          sourceMap ||
+          watch,
+        plugin_cache: pluginCache,
+        setup_bun: bun || (pluginCache && row.os === "linux"),
+        source_map: sourceMap,
+        watch,
+        vscode,
+      };
+    })
+    .filter(
+      (row) =>
+        row.experimental ||
+        row.bun ||
+        row.plugin_cache ||
+        row.source_map ||
+        row.watch ||
+        row.vscode,
+    );
+  return {
+    matrix: { include },
+    tasks: Object.entries(tasks)
+      .filter(([, selected]) => selected)
+      .map(([task]) => task),
   };
 }
 
@@ -636,6 +782,18 @@ function normalizePath(file) {
   return String(file).replaceAll("\\", "/").replace(/^\.\/+/, "");
 }
 
+function matchesAnyPath(files, patterns) {
+  return files.some((file) =>
+    patterns.some((pattern) => {
+      const expression = pattern
+        .split("*")
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join(".*");
+      return new RegExp(`^${expression}$`).test(file);
+    }),
+  );
+}
+
 function parseArguments(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index++) {
@@ -662,10 +820,13 @@ function main(argv = process.argv.slice(2)) {
   const plan =
     diff.files === null ? fullPlan(diff.reason) : planForPaths(diff.files);
   const matrix = JSON.stringify(plan.matrix);
+  const platformMatrix = JSON.stringify(plan.platformMatrix);
   const output = [
     `matrix=${matrix}`,
-    `watch=${String(plan.watch)}`,
     `lanes=${plan.laneIds.join(",")}`,
+    `platform_matrix=${platformMatrix}`,
+    `platform=${String(plan.platformSelected)}`,
+    `platform_tasks=${plan.platformTasks.join(",")}`,
   ].join("\n");
   if (options["github-output"]) {
     fs.appendFileSync(options["github-output"], `${output}\n`);
@@ -673,7 +834,8 @@ function main(argv = process.argv.slice(2)) {
     process.stdout.write(`${output}\n`);
   }
   process.stderr.write(
-    `validation plan: ${plan.laneIds.join(", ")}; watch=${plan.watch}; ` +
+    `validation plan: ${plan.laneIds.join(", ")}; ` +
+      `platform=${plan.platformTasks.join(",") || "none"}; ` +
       `${plan.reasons.join("; ") || "no expensive owner"}\n`,
   );
 }
@@ -682,6 +844,8 @@ module.exports = {
   E2E_LANE_IDS,
   FULL_LANE_IDS,
   LANES,
+  PLATFORM_INTEGRATION_PATHS,
+  PLATFORM_ROWS,
   WORKFLOW_PATHS,
   changedPaths,
   fullPlan,
