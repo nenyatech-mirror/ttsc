@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { createRequire } = require("node:module");
 const path = require("node:path");
 const { test } = require("node:test");
 
@@ -13,6 +14,10 @@ const {
 const { PLATFORM_TARGETS, SCOPES } = require("../build-current.cjs");
 
 const root = path.resolve(__dirname, "..", "..");
+const testTtscRequire = createRequire(
+  path.join(root, "tests", "test-ttsc", "package.json"),
+);
+const { parse: parseYaml } = testTtscRequire("yaml");
 
 function ids(files) {
   return planForPaths(files).laneIds;
@@ -239,6 +244,73 @@ test("remaining workflow path filters match the repository contract", () => {
     /if: \$\{\{ always\(\) && !cancelled\(\) \}\}/,
     "a superseded run must not queue its aggregate behind cancellation",
   );
+
+  const nestiaWorkflow = fs.readFileSync(
+    path.join(root, ".github", "workflows", "nestia.yml"),
+    "utf8",
+  );
+  const nestiaDocument = parseYaml(nestiaWorkflow);
+  assert.deepEqual(
+    Object.keys(nestiaDocument.jobs),
+    ["nestia"],
+    "nestia compatibility must stay in one broad job",
+  );
+  const nestiaJob = nestiaDocument.jobs.nestia;
+  assert.equal(
+    Object.hasOwn(nestiaJob, "needs"),
+    false,
+    "the single nestia job must not wait for another producer",
+  );
+  assert.equal(nestiaJob["timeout-minutes"], 60);
+  assert.equal(nestiaJob.env.TTSC_TARBALLS_CURRENT, "1");
+  const steps = nestiaJob.steps;
+  assert.ok(Array.isArray(steps));
+  assert.equal(
+    steps.some(
+      (step) =>
+        typeof step.uses === "string" &&
+        /^actions\/(?:upload|download)-artifact@/.test(step.uses),
+    ),
+    false,
+    "nestia must consume local tarballs without an artifact handoff",
+  );
+  assert.deepEqual(
+    steps
+      .map((step) =>
+        typeof step.run === "string" ? executableRun(step.run) : "",
+      )
+      .filter(containsPnpmCommand),
+    [
+      "pnpm install --frozen-lockfile",
+      "pnpm package:tgz",
+      "pnpm install --no-frozen-lockfile",
+      "pnpm test",
+    ],
+    "nestia must keep one tarball build and one complete upstream test command",
+  );
+  const upstreamTestSteps = steps.filter(
+    (step) =>
+      typeof step.run === "string" && executableRun(step.run) === "pnpm test",
+  );
+  assert.equal(upstreamTestSteps.length, 1);
+  assert.equal(
+    upstreamTestSteps[0]["working-directory"],
+    "experimental/nestia",
+    "the complete upstream suite must run from the pinned nestia checkout",
+  );
+  for (const action of [
+    "pnpm/action-setup",
+    "actions/setup-node",
+    "actions/setup-go",
+  ])
+    assert.equal(
+      steps.filter(
+        (step) =>
+          typeof step.uses === "string" && step.uses.startsWith(`${action}@`),
+      ).length,
+      1,
+      `${action} must be configured exactly once`,
+    );
 });
 
 test("portable path normalization accepts git and Windows spellings", () => {
@@ -324,4 +396,16 @@ function workflowJob(source, name) {
       break;
     }
   return lines.slice(start, end).join("\n");
+}
+
+function executableRun(run) {
+  return run
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .join("\n");
+}
+
+function containsPnpmCommand(run) {
+  return run.split(/\r?\n/).some((line) => /\bpnpm(?=\s|$)/.test(line));
 }
