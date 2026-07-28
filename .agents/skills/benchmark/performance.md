@@ -1,6 +1,6 @@
 # Toolchain Performance Benchmark
 
-Read this document before running or changing `experimental/benchmark/src/executable/performance.ts`, editing its `legacy`, `ttsc`, or `ttsc-lint` fixture branches, or publishing `website/public/benchmark/performance.json`.
+Read this document before running or changing `experimental/benchmark/src/executable/performance/index.ts`, editing its `legacy`, `ttsc`, or `ttsc-lint` fixture branches, or publishing `website/public/benchmark/performance.json`.
 
 ## Workload
 
@@ -65,4 +65,4 @@ Set `TTSC_BENCH_REQUIRE_QUIET` to `1` using the current shell's environment-vari
 pnpm --dir experimental/benchmark performance
 ```
 
-After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `merge-website.ts` only to combine audited partial `report.json` files by cell ID.
+After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `pnpm --dir experimental/benchmark performance:merge -- <report...>` only to combine audited partial `report.json` files by cell ID.

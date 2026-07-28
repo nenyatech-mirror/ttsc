@@ -6,8 +6,6 @@ import path from "node:path";
 import type { ITtscBenchmarkPerformanceCommand } from "./structures/ITtscBenchmarkPerformanceCommand.ts";
 import type { ITtscBenchmarkPerformanceProject } from "./structures/ITtscBenchmarkPerformanceProject.ts";
 
-const GENERATED_PNPM_WORKSPACE = 'packages:\n  - "."\n';
-
 /**
  * Owns child-process execution and the process-wide tsconfig file cache.
  *
@@ -15,6 +13,9 @@ const GENERATED_PNPM_WORKSPACE = 'packages:\n  - "."\n';
  * materialization deliberately completes before `run()` starts its timer.
  */
 export class TtscBenchmarkPerformanceProcess {
+  /** Minimal workspace manifest used for standalone pnpm fixture installs. */
+  private static readonly GENERATED_PNPM_WORKSPACE = 'packages:\n  - "."\n';
+
   private readonly tsconfigFileArgumentsCache: Map<string, string> = new Map<
     string,
     string
@@ -94,7 +95,10 @@ export class TtscBenchmarkPerformanceProcess {
     if (project.packageManager !== "pnpm") return;
     const workspaceFile: string = path.join(root, "pnpm-workspace.yaml");
     if (fs.existsSync(workspaceFile)) return;
-    fs.writeFileSync(workspaceFile, GENERATED_PNPM_WORKSPACE);
+    fs.writeFileSync(
+      workspaceFile,
+      TtscBenchmarkPerformanceProcess.GENERATED_PNPM_WORKSPACE,
+    );
   }
 
   /** Executes one shell command with benchmark progress and failure policy. */

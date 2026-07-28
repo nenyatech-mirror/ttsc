@@ -10,6 +10,9 @@ Prereq: `pnpm install` at the workspace root so the local `ttsc` workspace can b
 
 ```bash
 pnpm --dir experimental/benchmark performance                                      # full sweep
+pnpm --dir experimental/benchmark performance:lint                                 # lint comparison only
+pnpm --dir experimental/benchmark performance:format                               # format comparison only
+pnpm --dir experimental/benchmark performance:ttsc-build                           # ttsc build only
 pnpm --dir experimental/benchmark performance -- --project=vue                     # one fixture
 pnpm --dir experimental/benchmark performance -- --setup-only                      # clone + install, no measurement
 pnpm --dir experimental/benchmark performance -- --list                            # print the cell grid and exit
@@ -25,13 +28,25 @@ pnpm --dir experimental/benchmark graph:index -- --all                          
 
 ## Layout
 
-- `src/executable/`: Export-free CLI entrypoints, with graph commands grouped under `src/executable/graph/`.
+- `src/executable/`: Short, export-free CLI bootstraps, grouped under `performance/` and `graph/`.
 - `src/`: Equal-named `TtscBenchmark*` and `ITtscBenchmark*` reusable modules.
 - `src/performance/`: Performance fixture configuration, cell planning, setup, measurement, reporting, verification, and runner services.
 - `src/performance/structures/`: Equal-named `ITtscBenchmarkPerformance*` data contracts.
 - `src/graph/`: Reusable graph benchmark namespaces and data contracts.
 - `assets/graph/questions/`: Tool-neutral benchmark questions and their integrity manifest.
 - `.work/`: Generated reports, traces, checkpoints, and temporary state.
+
+Each executable imports exactly one owning symbol and calls its `main()`:
+
+- `src/executable/performance/index.ts` → `TtscBenchmarkPerformanceExecutable`.
+- `src/executable/performance/merge.ts` → `TtscBenchmarkPerformanceWebsiteMerger`.
+- `src/executable/performance/tsconfig-files.ts` → `TtscBenchmarkPerformanceTypeScriptFileSelector`.
+- `src/executable/graph/index.ts` → `TtscBenchmarkGraphRunner`.
+- `agent-ab.ts` / `agent-ab-codex.ts` → `TtscBenchmarkGraphClaudeAgent` / `TtscBenchmarkGraphCodexAgent`.
+- `run-suite.ts` / `publish.ts` → `TtscBenchmarkGraphSuite` / `TtscBenchmarkGraphPublisher`.
+- `bench.ts` / `index-time.ts` → `TtscBenchmarkGraphStructural` / `TtscBenchmarkGraphIndexTime`.
+- `audit-codex-traces.ts` / `analyze-traces.ts` → `TtscBenchmarkGraphTraceAuditor` / `TtscBenchmarkGraphTraceAnalyzer`.
+- `generate-manifest.ts` / `reduce.ts` → `TtscBenchmarkGraphManifest` / `TtscBenchmarkGraphReduceCommand`.
 
 The first run packs the local `ttsc` workspace into tarballs, clones each fixture's three branches into `.work/`, installs the tarballs, runs `ttsc prepare`, then measures the matrix sequentially. Subsequent runs reuse the clones.
 
@@ -86,7 +101,7 @@ Cell IDs follow `project:branch:op:threading`, with `:tsgo:` inserted before the
 | `vscode` | `samchon/ttsc-benchmark-vscode` | application monorepo | npm |
 | `shopping-backend` | `samchon/shopping-backend` | plugin-heavy service (typia/nestia source plugins) | pnpm |
 
-Per-project commands, install/prepare overrides, and prerequisites live in `TtscBenchmarkPerformanceConfiguration`. The export-free `src/executable/performance.ts` only parses invocation state, constructs the reusable performance services, and starts the runner.
+Per-project commands, install/prepare overrides, and prerequisites live in `TtscBenchmarkPerformanceConfiguration`. The export-free `src/executable/performance/index.ts` only invokes `TtscBenchmarkPerformanceExecutable`; every reusable behavior lives in an equal-named class or namespace under `src/performance/`.
 
 ## CLI flags
 
@@ -138,7 +153,7 @@ Graph-only flags:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TTSC_BENCH_WORK` / `TTSC_GRAPH_BENCH_WORK` | `./.work` (`performance.ts`), `../graph-benchmark-work` (`graph/index.ts`) | Clone working directory. The graph runner defaults outside the repo so a measured agent does not inherit ttsc's `CLAUDE.md` / `AGENTS.md` from a parent directory. |
+| `TTSC_BENCH_WORK` / `TTSC_GRAPH_BENCH_WORK` | `./.work` (`performance/index.ts`), `../graph-benchmark-work` (`graph/index.ts`) | Clone working directory. The graph runner defaults outside the repo so a measured agent does not inherit ttsc's `CLAUDE.md` / `AGENTS.md` from a parent directory. |
 | `TTSC_BENCH_TGZ` | `/tmp/ttsc-tgz-<pid>` (`/tmp/ttsc-tgz` with `--no-pack`) | Tarball staging directory. |
 | `TTSC_BENCH_OUT` | `./.work/report.md` | Report destination; sibling `.json` is written alongside. |
 | `TTSC_BENCH_CHECKPOINT` | `<WORK>/benchmark.checkpoint.json` | Intermediate snapshot rewritten after each cell so an interrupted run is resumable. |
@@ -160,7 +175,7 @@ Graph-only flags:
 - Non-zero exits are classified from captured output. A `race` (TypeScript-Go data-race markers, `concurrent map`, `fatal error`, `panic:`, `DATA RACE`) is retried up to `RETRIES` times and the clean timing kept; a deterministic `error` is recorded as failed without retry.
 - Cells are measured **sequentially** so they do not compete for CPU.
 - `--sequential` is a separate, disk-cheap top-level mode: instead of cloning all fixtures up front, it clones one `(project, branch)`, measures its cells, deletes the clone, and moves to the next. The tarball pack runs once at the start. Per-project metadata (file count, legacy `typescript` version, host spec) is captured while each clone exists and reused for the final report. The published `website/public/benchmark/performance.json` is merged in place after every cycle, so an interrupted sequential run leaves a resumable snapshot just like batch mode. Verify-only runs skip the per-cycle website write to avoid noisy host-metadata-only commits.
-- Publication sweeps run on an external quiet host, not in the repository's GitHub Actions workflows. `merge-website.ts` can still fold partial `report.json` files into `website/public/benchmark/performance.json` by id: missing partials keep their previous cells intact, fresh partials replace by id, and only the freshest partial that _carries measurements_ rotates the top-level `date` / `host` block.
+- Publication sweeps run on an external quiet host, not in the repository's GitHub Actions workflows. `pnpm --dir experimental/benchmark performance:merge` can still fold partial `report.json` files into `website/public/benchmark/performance.json` by id: missing partials keep their previous cells intact, fresh partials replace by id, and only the freshest partial that _carries measurements_ rotates the top-level `date` / `host` block.
 - At startup the runner checks `loadavg[0] / cpus()` and warns when the ratio exceeds 0.5, the fastest cells (`ttsc:build:single`, ~2 to 8 s) drift 20 to 60 % on a busy host. Override with `TTSC_BENCH_REQUIRE_QUIET=1` to error instead, or `TTSC_BENCH_SKIP_LOAD_CHECK=1` to silence.
 
 ## Output

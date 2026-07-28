@@ -21,7 +21,9 @@ Read both only when changing shared fixture infrastructure or a surface that aff
 
 ## TypeScript Source Contract
 
-Keep every CLI entrypoint under `experimental/benchmark/src/executable`; those files export nothing. Outside that directory, each reusable module exposes exactly one `TtscBenchmark*` or `ITtscBenchmark*` symbol and its case-sensitive filename equals that symbol name. A data contract may merge one `ITtscBenchmark*` interface with its equal-named companion namespace.
+Keep every CLI entrypoint under `experimental/benchmark/src/executable`; those files export nothing. An executable is a bootstrap, not an implementation: it only imports one owning `TtscBenchmark*` class or namespace and calls its `main()` entrypoint. Keep it within 12 physical lines. Move parsing, orchestration, validation, and helpers into equal-named reusable modules.
+
+Outside that directory, each reusable module exposes exactly one `TtscBenchmark*` or `ITtscBenchmark*` symbol and its case-sensitive filename equals that symbol name. A data contract may merge one `ITtscBenchmark*` interface with its equal-named companion namespace.
 
 Executable surfaces are classes or namespaces. Never add a standalone exported function, constant, enum, or type alias. Put related functions, constants, guards, and subordinate types inside the owning `TtscBenchmark*` namespace; put companion types and guards for a data contract inside its `ITtscBenchmark*` namespace.
 
