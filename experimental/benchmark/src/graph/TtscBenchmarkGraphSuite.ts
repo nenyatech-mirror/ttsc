@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { TtscBenchmarkConstant } from "../TtscBenchmarkConstant.ts";
+import { TtscBenchmarkNumber } from "../TtscBenchmarkNumber.ts";
 import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import { TtscBenchmarkGraphWebsiteCell } from "./TtscBenchmarkGraphWebsiteCell.ts";
 import type { ITtscBenchmarkGraphProject } from "./structures/ITtscBenchmarkGraphProject.ts";
@@ -45,6 +46,7 @@ export namespace TtscBenchmarkGraphSuite {
   }
 
   interface IPromptResult {
+    exitCode: number | null;
     prompt: ITtscBenchmarkGraphPrompt;
     report: string;
     samples: IPublishedSample[];
@@ -140,14 +142,23 @@ export namespace TtscBenchmarkGraphSuite {
     const arm: "baseline" | "graph" = armArgument;
     const harness = arg("harness", "codex");
     const model = arg("model", harness === "codex" ? "gpt-5.4-mini" : "sonnet");
-    const runs = Number(arg("runs", arm === "baseline" ? "5" : "1"));
+    const runs = TtscBenchmarkNumber.parsePositive(
+      arg("runs", arm === "baseline" ? "5" : "1"),
+      "--runs",
+    );
     const maxRunRetries = arg(
       "max-run-retries",
       arm === "baseline" ? "4" : "0",
     );
     const family = arg("family", "dedicated");
-    const outer = Number(arg("concurrency", "4"));
-    const inner = Number(arg("inner-concurrency", String(runs)));
+    const outer = TtscBenchmarkNumber.parsePositive(
+      arg("concurrency", "4"),
+      "--concurrency",
+    );
+    const inner = TtscBenchmarkNumber.parsePositive(
+      arg("inner-concurrency", String(runs)),
+      "--inner-concurrency",
+    );
     const storePath = path.resolve(
       arg(
         "baseline-store",
@@ -335,7 +346,7 @@ export namespace TtscBenchmarkGraphSuite {
                 ? `  ${err.trim().split("\n").slice(-2).join(" | ")}`
                 : ""),
           );
-          resolve({ prompt, report, samples });
+          resolve({ exitCode: code, prompt, report, samples });
         });
       });
     }
@@ -365,6 +376,19 @@ export namespace TtscBenchmarkGraphSuite {
     );
 
     const results = await fanOut(prompts, runPrompt);
+    const incomplete = results.filter(
+      (result) => result.exitCode !== 0 || result.samples.length !== runs,
+    );
+    if (incomplete.length !== 0) {
+      throw new Error(
+        `graph suite has incomplete cells: ${incomplete
+          .map(
+            (result) =>
+              `${result.prompt.id} (${result.samples.length}/${runs}, exit ${result.exitCode ?? "signal"})`,
+          )
+          .join(", ")}`,
+      );
+    }
     publishWebsiteReports(results.map((result) => result.report));
 
     if (arm === "baseline") {
@@ -600,7 +624,12 @@ export namespace TtscBenchmarkGraphSuite {
     }
 
     function validMeasuredSample(sample: unknown): sample is IPublishedSample {
-      if (!isRecord(sample) || !(Number(sample.tokens ?? 0) > 0)) return false;
+      if (
+        !isRecord(sample) ||
+        !(Number(sample.tokens ?? 0) > 0) ||
+        sample.ok === false
+      )
+        return false;
       return PUBLISHED_SAMPLE_KEYS.every(
         (key) => sample[key] === undefined || typeof sample[key] === "number",
       );

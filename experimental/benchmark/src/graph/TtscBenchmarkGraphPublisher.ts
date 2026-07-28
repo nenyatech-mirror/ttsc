@@ -297,7 +297,7 @@ export namespace TtscBenchmarkGraphPublisher {
         rawModel,
       );
       const version = modelVersionId(rawModel);
-      const samples = sanitizeSamples(sourceReport.samples);
+      const samples = sanitizeSamples(sourceReport.samples, sourceReport.runs);
       if (samples.baseline.length === 0 && samples.graph.length === 0) {
         continue;
       }
@@ -371,7 +371,7 @@ export namespace TtscBenchmarkGraphPublisher {
     report: Record<string, unknown>,
     harness: string,
   ): void {
-    const samples = sanitizeSamples(report.samples);
+    const samples = sanitizeSamples(report.samples, report.runs);
     if (samples.baseline.length === 0 && samples.graph.length === 0) return;
     const rawModel =
       stringValue(report.modelVersion) ??
@@ -493,20 +493,47 @@ export namespace TtscBenchmarkGraphPublisher {
     } else context.out.agent.cells.push(cell);
   }
 
-  function sanitizeSamples(samples: unknown): IBenchmarkSamples {
+  function sanitizeSamples(
+    samples: unknown,
+    expectedRuns: unknown,
+  ): IBenchmarkSamples {
     const source = isRecord(samples) ? samples : {};
+    const baseline = Array.isArray(source.baseline) ? source.baseline : [];
+    const graph = Array.isArray(source.graph) ? source.graph : [];
+    if (baseline.some((sample) => !validMeasuredSample(sample))) {
+      throw new TypeError(
+        "graph agent report contains an invalid baseline sample",
+      );
+    }
+    if (graph.some((sample) => !validMeasuredSample(sample))) {
+      throw new TypeError(
+        "graph agent report contains an invalid graph sample",
+      );
+    }
+    if (Number.isInteger(expectedRuns) && Number(expectedRuns) > 0) {
+      const expected = Number(expectedRuns);
+      if (baseline.length !== 0 && baseline.length !== expected)
+        throw new TypeError(
+          `graph agent report has ${baseline.length}/${expected} baseline samples`,
+        );
+      if (graph.length !== 0 && graph.length !== expected)
+        throw new TypeError(
+          `graph agent report has ${graph.length}/${expected} graph samples`,
+        );
+    }
     return {
-      baseline: (Array.isArray(source.baseline) ? source.baseline : [])
-        .filter(validMeasuredSample)
-        .map(sanitizeSample),
-      graph: (Array.isArray(source.graph) ? source.graph : [])
-        .filter(validMeasuredSample)
-        .map(sanitizeSample),
+      baseline: baseline.filter(validMeasuredSample).map(sanitizeSample),
+      graph: graph.filter(validMeasuredSample).map(sanitizeSample),
     };
   }
 
   function validMeasuredSample(sample: unknown): sample is IPublishedSample {
-    if (!isRecord(sample) || !(Number(sample.tokens ?? 0) > 0)) return false;
+    if (
+      !isRecord(sample) ||
+      !(Number(sample.tokens ?? 0) > 0) ||
+      sample.ok === false
+    )
+      return false;
     return PUBLISHED_SAMPLE_KEYS.every(
       (key) => sample[key] === undefined || typeof sample[key] === "number",
     );

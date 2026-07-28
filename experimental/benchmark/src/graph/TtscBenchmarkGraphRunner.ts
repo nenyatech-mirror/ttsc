@@ -21,6 +21,7 @@ import path from "node:path";
 
 import { TtscBenchmarkCommandLine } from "../TtscBenchmarkCommandLine.ts";
 import { TtscBenchmarkConstant } from "../TtscBenchmarkConstant.ts";
+import { TtscBenchmarkNumber } from "../TtscBenchmarkNumber.ts";
 import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import { TtscBenchmarkGraphWebsiteCell } from "./TtscBenchmarkGraphWebsiteCell.ts";
 import type { ITtscBenchmarkAgentSample } from "./structures/ITtscBenchmarkAgentSample.ts";
@@ -277,7 +278,11 @@ export namespace TtscBenchmarkGraphRunner {
         parsed.values["prompt-families"] ??
         "dedicated",
     );
-    const runs = parsed.values.runs ?? "1";
+    const runCount = TtscBenchmarkNumber.parsePositive(
+      parsed.values.runs ?? "1",
+      "--runs",
+    );
+    const runs = String(runCount);
     const maxRunRetries = parseNonNegativeInteger(
       parsed.values["max-run-retries"] ?? "4",
       "--max-run-retries",
@@ -324,7 +329,7 @@ export namespace TtscBenchmarkGraphRunner {
       arm,
       tools,
       promptFamilies,
-      runs: Number(runs),
+      runs: runCount,
       maxRunRetries,
       daemon: daemon === "1" || daemon === "true",
       outDir,
@@ -691,7 +696,7 @@ export namespace TtscBenchmarkGraphRunner {
     }
 
     function validMeasuredSample(sample: ITtscBenchmarkAgentSample): boolean {
-      return Number(sample?.tokens ?? 0) > 0;
+      return Number(sample?.tokens ?? 0) > 0 && sample.ok !== false;
     }
 
     function sanitizeSample(
@@ -1262,7 +1267,18 @@ export namespace TtscBenchmarkGraphRunner {
     }
 
     function invalidWebsiteCellReason(cell: IWebsiteCell): string | null {
-      void cell;
+      if (arm !== "graph" && cell.samples.baseline.length !== runCount) {
+        return (
+          `baseline arm produced ${cell.samples.baseline.length}/${runCount} ` +
+          "valid samples"
+        );
+      }
+      if (arm !== "baseline" && cell.samples.graph.length !== runCount) {
+        return (
+          `graph arm produced ${cell.samples.graph.length}/${runCount} ` +
+          "valid samples"
+        );
+      }
       return null;
     }
 
