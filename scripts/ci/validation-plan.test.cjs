@@ -12,6 +12,7 @@ const {
   planForPaths,
 } = require("./validation-plan.cjs");
 const { PLATFORM_TARGETS, SCOPES } = require("../build-current.cjs");
+const { PACKAGE_BUILDS_BEFORE_PLATFORMS } = require("../build-platforms.cjs");
 
 const root = path.resolve(__dirname, "..", "..");
 const testTtscRequire = createRequire(
@@ -311,6 +312,72 @@ test("remaining workflow path filters match the repository contract", () => {
       1,
       `${action} must be configured exactly once`,
     );
+
+  const buildDocument = parseYaml(
+    fs.readFileSync(
+      path.join(root, ".github", "workflows", "build.yml"),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(
+    Object.keys(buildDocument.jobs),
+    ["Ubuntu"],
+    "the broad build job must also own wasm package smoke checks",
+  );
+  const buildSteps = buildDocument.jobs.Ubuntu.steps;
+  const buildRuns = buildSteps
+    .map((step) => (typeof step.run === "string" ? step.run : ""))
+    .filter(Boolean);
+  assert.equal(
+    buildRuns.filter((run) => run.trim() === "pnpm run build").length,
+    1,
+  );
+  assert.ok(
+    PACKAGE_BUILDS_BEFORE_PLATFORMS.includes("@ttsc/wasm"),
+    "the broad package build must produce wasm artifacts before smoke checks",
+  );
+  assert.equal(
+    buildRuns.some((run) => run.includes("pnpm --filter @ttsc/wasm build")),
+    false,
+    "the broad package build already builds @ttsc/wasm",
+  );
+  assert.ok(
+    buildRuns.some(
+      (run) =>
+        run.includes("test -f packages/wasm/dist/ttsc.wasm") &&
+        run.includes("test -d packages/wasm/shim-vendor/shim"),
+    ),
+    "the broad job must retain wasm dist assertions",
+  );
+  assert.ok(
+    buildRuns.some(
+      (run) =>
+        run.includes("pnpm pack --pack-destination /tmp") &&
+        run.includes("grep -q shim-vendor/shim/ast/shim.go") &&
+        run.includes("grep -q dist/ttsc.wasm"),
+    ),
+    "the broad job must retain wasm tarball smoke",
+  );
+  const stepIndex = (predicate) =>
+    buildSteps.findIndex(
+      (step) => typeof step.run === "string" && predicate(step.run),
+    );
+  const buildIndex = stepIndex((run) => run.trim() === "pnpm run build");
+  const releaseSmokeIndex = stepIndex((run) =>
+    run.includes("assert-ttscgraph-release-candidate.cjs"),
+  );
+  const distSmokeIndex = stepIndex((run) =>
+    run.includes("test -f packages/wasm/dist/ttsc.wasm"),
+  );
+  const tarballSmokeIndex = stepIndex((run) =>
+    run.includes("pnpm pack --pack-destination /tmp"),
+  );
+  assert.ok(
+    buildIndex < releaseSmokeIndex &&
+      releaseSmokeIndex < distSmokeIndex &&
+      distSmokeIndex < tarballSmokeIndex,
+    "the broad build must produce artifacts before every smoke assertion",
+  );
 });
 
 test("portable path normalization accepts git and Windows spellings", () => {
