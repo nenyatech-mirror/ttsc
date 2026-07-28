@@ -2,9 +2,10 @@
  * Cold index build-time benchmark for the graph tool axis: what _readiness_
  * costs before a tool can answer its first question, per (tool × fixture).
  *
- * The agent benchmark (`graph/index.ts`) measures what a question costs once a
- * tool is ready; this runner measures the readiness itself. Per cell it deletes
- * the tool's index, runs its build step once, and takes wall time:
+ * The agent benchmark (`src/executable/graph/index.ts`) measures what a
+ * question costs once a tool is ready; this runner measures the readiness
+ * itself. Per cell it deletes the tool's index, runs its build step once, and
+ * takes wall time:
  *
  * - `ttsc-graph`: `ttscgraph dump --cwd <fixture> --tsconfig <tsconfig>` — the
  *   MCP launcher runs exactly this at startup, so the agent's first question
