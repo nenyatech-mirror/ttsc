@@ -157,10 +157,10 @@ export namespace TtscBenchmarkGraphStructural {
           `(${report.coveredFiles}/${report.symbolFiles} symbol-bearing files cross-linked)`,
       );
       console.log(
-        `  load time:     ${report.loadMsMedian.toFixed(0)} ms (TtscBenchmarkNumber.median)`,
+        `  load time:     ${report.loadMsMedian.toFixed(0)} ms (median)`,
       );
       console.log(
-        `  graph build:   ${report.buildMsMedian.toFixed(0)} ms (TtscBenchmarkNumber.median), ` +
+        `  graph build:   ${report.buildMsMedian.toFixed(0)} ms (median), ` +
           `${(report.buildShareMedian * 100).toFixed(1)}% on top of the load it rides`,
       );
 
