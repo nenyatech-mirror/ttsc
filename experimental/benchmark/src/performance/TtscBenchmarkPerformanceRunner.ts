@@ -332,9 +332,11 @@ export class TtscBenchmarkPerformanceRunner {
     process.stdout.write(
       `Report written to ${this.options.paths.outputMarkdown}\n`,
     );
-    process.stdout.write(
-      `Website JSON written to ${this.options.paths.websiteJson}\n`,
-    );
+    if (!this.options.flags.has("--no-website")) {
+      process.stdout.write(
+        `Website JSON written to ${this.options.paths.websiteJson}\n`,
+      );
+    }
     process.stdout.write(
       `[timer] total benchmark ${this.options.process.formatDuration(
         this.options.process.elapsed(totalStart),
