@@ -378,6 +378,109 @@ test("remaining workflow path filters match the repository contract", () => {
       distSmokeIndex < tarballSmokeIndex,
     "the broad build must produce artifacts before every smoke assertion",
   );
+
+  const pluginCacheDocument = parseYaml(
+    fs.readFileSync(
+      path.join(root, ".github", "workflows", "plugin-cache.yml"),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(Object.keys(pluginCacheDocument.jobs), [
+    "cache-linux",
+    "cache-windows",
+  ]);
+  const expectedPluginJobs = {
+    "cache-linux": {
+      runner: "ubuntu-latest",
+      managers: ["pnpm", "yarn", "bun", "npm"],
+      bun: 1,
+    },
+    "cache-windows": {
+      runner: "windows-latest",
+      managers: ["npm", "pnpm"],
+      bun: 0,
+    },
+  };
+  for (const [jobName, expected] of Object.entries(expectedPluginJobs)) {
+    const job = pluginCacheDocument.jobs[jobName];
+    assert.equal(job["runs-on"], expected.runner);
+    assert.equal(
+      job.strategy,
+      undefined,
+      `${jobName} must not expand a matrix`,
+    );
+    for (const action of [
+      "actions/checkout",
+      "actions/setup-node",
+      "actions/setup-go",
+      "pnpm/action-setup",
+    ])
+      assert.equal(
+        job.steps.filter(
+          (step) =>
+            typeof step.uses === "string" && step.uses.startsWith(`${action}@`),
+        ).length,
+        1,
+        `${jobName} must configure ${action} exactly once`,
+      );
+    assert.equal(
+      job.steps.filter(
+        (step) =>
+          typeof step.uses === "string" &&
+          step.uses.startsWith("oven-sh/setup-bun@"),
+      ).length,
+      expected.bun,
+    );
+    const systemGo = job.steps.find(
+      (step) => step.name === "Use System Go For Source Plugin Builds",
+    );
+    assert.equal(systemGo.shell, "bash");
+    assert.equal(
+      systemGo.run,
+      'echo "TTSC_GO_BINARY=$(go env GOROOT)/bin/go" >> "$GITHUB_ENV"',
+    );
+    const build = job.steps.find(
+      (step) => step.name === "Build Current Platform",
+    );
+    assert.equal(build.run, "pnpm run build:current");
+    assert.equal(build.env.TTSC_BUILD_SCOPE, "plugin-cache");
+    const verification = job.steps.find(
+      (step) =>
+        typeof step.name === "string" &&
+        step.name.startsWith("Verify ") &&
+        step.name.endsWith(" Package Managers"),
+    );
+    assert.ok(verification, `${jobName} lost package-manager verification`);
+    assert.equal(verification.shell, "bash");
+    const verificationLines = [
+      "status=0",
+      ...expected.managers.map(
+        (manager) =>
+          `node scripts/ci/plugin-cache-persistence.mjs --pm=${manager} || status=1`,
+      ),
+      'exit "$status"',
+    ];
+    assert.deepEqual(
+      verification.run
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean),
+      verificationLines,
+      `${jobName} must run every manager before reporting failure`,
+    );
+    assert.deepEqual(
+      job.steps
+        .filter((step) => typeof step.run === "string")
+        .map((step) => step.run.trim()),
+      [
+        "pnpm install --frozen-lockfile",
+        'echo "TTSC_GO_BINARY=$(go env GOROOT)/bin/go" >> "$GITHUB_ENV"',
+        "pnpm run build:current",
+        verificationLines.join("\n"),
+      ],
+      `${jobName} must install and build exactly once before verification`,
+    );
+  }
 });
 
 test("portable path normalization accepts git and Windows spellings", () => {
