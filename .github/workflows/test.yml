@@ -9,6 +9,7 @@ on:
       - ".github/workflows/test.yml"
       - "config/**"
       - "experimental/**"
+      - "!experimental/benchmark/**"
       - "scripts/**"
       - "packages/**"
       - "tests/**"
@@ -21,6 +22,7 @@ on:
       - ".github/workflows/test.yml"
       - "config/**"
       - "experimental/**"
+      - "!experimental/benchmark/**"
       - "scripts/**"
       - "packages/**"
       - "tests/**"
@@ -277,10 +279,6 @@ jobs:
           - { name: unplugin, run: "pnpm --filter @ttsc/test-unplugin start" }
           - { name: metro, run: "pnpm --filter @ttsc/test-metro start" }
           - { name: graph, run: "pnpm --filter @ttsc/test-graph start" }
-          - {
-              name: graph-bench,
-              run: "pnpm --dir experimental/benchmark check && pnpm --dir experimental/benchmark graph:structural -- --runs=3",
-            }
     steps:
       - uses: actions/checkout@v4
 

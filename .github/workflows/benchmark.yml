@@ -1,0 +1,68 @@
+name: benchmark
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/benchmark.yml"
+      - "experimental/benchmark/assets/**"
+      - "experimental/benchmark/package.json"
+      - "experimental/benchmark/src/**"
+      - "experimental/benchmark/tsconfig.json"
+  pull_request:
+    paths:
+      - ".github/workflows/benchmark.yml"
+      - "experimental/benchmark/assets/**"
+      - "experimental/benchmark/package.json"
+      - "experimental/benchmark/src/**"
+      - "experimental/benchmark/tsconfig.json"
+
+concurrency:
+  group: benchmark-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  program:
+    name: program
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/ttsc/go.mod
+          cache-dependency-path: |
+            packages/ttsc/go.sum
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.4
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Source Contract And Types
+        run: pnpm --dir experimental/benchmark check
+
+      - name: Check Entrypoints
+        run: |
+          pnpm --dir experimental/benchmark performance -- --list
+          pnpm --dir experimental/benchmark graph -- --list
+          pnpm --dir experimental/benchmark graph:index -- --list
+
+      - name: Check Prompt Manifest
+        run: |
+          pnpm --dir experimental/benchmark graph:manifest
+          git diff --exit-code -- experimental/benchmark/assets/graph/questions/manifest.json
+
+      - name: Check Trace Audit
+        run: pnpm --dir experimental/benchmark graph:audit -- --self-test
+
+      - name: Check Structural Graph Benchmark
+        run: pnpm --dir experimental/benchmark graph:structural -- --runs=3
