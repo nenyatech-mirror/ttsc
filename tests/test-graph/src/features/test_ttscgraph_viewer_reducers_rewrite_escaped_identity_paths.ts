@@ -17,7 +17,7 @@ interface Reducer {
 
 const loadReducer = async (
   relativePath: string,
-  exported: "named" | "default",
+  exported: "named" | "default" | "namespace",
 ): Promise<Reducer> => {
   const repository = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -28,8 +28,14 @@ const loadReducer = async (
   )) as {
     reduce?: Reducer["reduce"];
     default?: { reduce?: Reducer["reduce"] };
+    TtscBenchmarkGraphReduce?: { reduce?: Reducer["reduce"] };
   };
-  const reduce = exported === "named" ? module.reduce : module.default?.reduce;
+  const reduce =
+    exported === "named"
+      ? module.reduce
+      : exported === "default"
+        ? module.default?.reduce
+        : module.TtscBenchmarkGraphReduce?.reduce;
   if (reduce === undefined) assert.fail(`${relativePath} exports reduce()`);
   return { reduce };
 };
@@ -54,7 +60,10 @@ export const test_ttscgraph_viewer_reducers_rewrite_escaped_identity_paths =
         "website/src/components/graph/TtscWebsiteGraphReduce.ts",
         "default",
       ),
-      await loadReducer("experimental/benchmark/graph/viewer.mjs", "named"),
+      await loadReducer(
+        "experimental/benchmark/src/graph/TtscBenchmarkGraphReduce.ts",
+        "namespace",
+      ),
     ];
     const file = "/work/a#b/src/main.ts";
     const id = "/work/a\\#b/src/main.ts#main:function";

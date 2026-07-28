@@ -1,6 +1,6 @@
 # Graph AI Benchmark
 
-Read this document before running or changing `experimental/benchmark/graph.mjs`, graph benchmark prompts or fixtures, trace auditing, comparator setup, or `website/public/benchmark/graph.json` publication.
+Read this document before running or changing `experimental/benchmark/src/executable/graph/index.ts`, graph benchmark prompts or fixtures, trace auditing, comparator setup, or `website/public/benchmark/graph.json` publication.
 
 ## Workload And Fixtures
 
@@ -23,11 +23,11 @@ The benchmark measures setup time; it must not omit required setup to make a com
 ## Run And Audit
 
 ```bash
-node experimental/benchmark/graph.mjs --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena
-node experimental/benchmark/graph.mjs --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1
-node experimental/benchmark/graph/audit-codex-traces.mjs --dir=experimental/benchmark/.work/graph/<timestamp>
-node experimental/benchmark/graph/audit-codex-traces.mjs --compare=<before>,<after>
-node experimental/benchmark/graph/audit-codex-traces.mjs --self-test
+pnpm --dir experimental/benchmark graph -- --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena
+pnpm --dir experimental/benchmark graph -- --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1
+pnpm --dir experimental/benchmark graph:audit -- --dir=.work/graph/<timestamp>
+pnpm --dir experimental/benchmark graph:audit -- --compare=<before>,<after>
+pnpm --dir experimental/benchmark graph:audit -- --self-test
 ```
 
 Use `--arm=baseline --tools=baseline` to refresh only the empty-MCP baseline. Use `--arm=graph --tools=ttsc-graph,codegraph,codebase-memory,serena` to add tool samples against published baselines.
@@ -47,16 +47,16 @@ The public graph dashboard stores one run per cell on the selected mid-size mode
 Parallel graph sweeps must use `--no-website` and unique `--out` directories. Publish completed suites afterward:
 
 ```bash
-node experimental/benchmark/graph/publish.mjs --from <out-dir>
+pnpm --dir experimental/benchmark graph:publish -- --from <out-dir>
 ```
 
 Never let concurrent runners write `graph.json` directly.
 
-`experimental/benchmark/graph/website-cell.mjs` is the single published-cell key. Key only by fields the website renders. Metadata such as fixture branch, reasoning effort, or setup time must not create a second visible copy of the same cell.
+`experimental/benchmark/src/graph/TtscBenchmarkGraphWebsiteCell.ts` is the single published-cell key. Key only by fields the website renders. Metadata such as fixture branch, reasoning effort, or setup time must not create a second visible copy of the same cell.
 
 ## Trace Audit
 
-Codex suites write `codex-trace-audit.json` automatically. Run `audit-codex-traces.mjs` directly only to re-audit existing output or compare before and after runs.
+Codex suites write `codex-trace-audit.json` automatically. Use the `graph:audit` package command only to re-audit existing output or compare before and after runs.
 
 The audit records exposed assistant messages, shell and MCP calls in timeline order, per-turn usage, and `reasoning_output_tokens`. Codex does not expose hidden reasoning text; never invent it.
 

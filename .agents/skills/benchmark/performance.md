@@ -1,10 +1,10 @@
 # Toolchain Performance Benchmark
 
-Read this document before running or changing `experimental/benchmark/performance.mjs`, editing its `legacy`, `ttsc`, or `ttsc-lint` fixture branches, or publishing `website/public/benchmark/performance.json`.
+Read this document before running or changing `experimental/benchmark/src/executable/performance/index.ts`, editing its `legacy`, `ttsc`, or `ttsc-lint` fixture branches, or publishing `website/public/benchmark/performance.json`.
 
 ## Workload
 
-The benchmark compares `ttsc + @ttsc/lint + ttsc format` with `tsc + eslint + prettier` on seven real TypeScript projects. The runner clones three branches per fixture into `experimental/benchmark/.work/`, warms the configured toolchain, replays each cell, and publishes medians to the dashboard at https://ttsc.dev/benchmark.
+The benchmark compares `ttsc + @ttsc/lint + ttsc format` with `tsc + eslint + prettier` on seven real TypeScript projects. The runner clones three branches per fixture into `experimental/benchmark/.work/`, warms the configured toolchain, replays each cell, and publishes raw samples for dashboard-side reduction at https://ttsc.dev/benchmark.
 
 Cell ID is `project:branch:op:threading`.
 
@@ -29,18 +29,18 @@ Application source must remain identical across the three branches. Tooling file
 
 Lint and format cells process exactly the program selected by `tsconfig.json`. Do not exclude files through ignore patterns or add out-of-program files; either change makes the cells incomparable.
 
-When the Legacy TypeScript headline major changes, update every fixture's `legacy` branch in the same release. Add a fixture by adding a repository with all three branches and a `PACKAGE_CONFIGS` entry in `performance.mjs`; do not multiplex unrelated fixtures inside one repository.
+When the Legacy TypeScript headline major changes, update every fixture's `legacy` branch in the same release. Add a fixture by adding a repository with all three branches and a project entry in `experimental/benchmark/src/performance/TtscBenchmarkPerformanceConfiguration.ts`; do not multiplex unrelated fixtures inside one repository.
 
 `type-fest` remains deliberately removed. Raw `tsgo` rows remain a launcher-overhead reference and are not eligible for the headline winner.
 
 ## Run Locally
 
 ```bash
-node experimental/benchmark/performance.mjs
-node experimental/benchmark/performance.mjs --project=vue --no-website
-node experimental/benchmark/performance.mjs --verify-only
-node experimental/benchmark/performance.mjs --list
-node experimental/benchmark/performance.mjs --sequential
+pnpm --dir experimental/benchmark performance
+pnpm --dir experimental/benchmark performance -- --project=vue --no-website
+pnpm --dir experimental/benchmark performance -- --verify-only
+pnpm --dir experimental/benchmark performance -- --list
+pnpm --dir experimental/benchmark performance -- --sequential
 ```
 
 Use `--no-website` for every targeted development run so a partial matrix cannot overwrite dashboard state.
@@ -49,7 +49,7 @@ Important control families:
 
 - **Scope:** `--project`, `--cell-filter`, `--lint-only`, `--format-only`, `--ttsc-build-only`.
 - **Setup:** `--setup-only`, `--no-setup`, `--no-install`, `--no-pack`, `--force-install`; `TTSC_BENCH_SKIP_PACK=1` is the environment equivalent of `--no-pack`.
-- **Sampling:** `TTSC_BENCH_RUNS` defaults to 5, `TTSC_BENCH_WARMUP` to 1, and `TTSC_BENCH_RETRIES` to 2 for race-classified failures. `report.json` retains the minimum and every raw sample in addition to the median.
+- **Sampling:** `TTSC_BENCH_RUNS` defaults to 5, `TTSC_BENCH_WARMUP` to 1, and `TTSC_BENCH_RETRIES` to 2 for race-classified failures. `report.json` retains every raw sample; the dashboard currently reduces them to the minimum at render time.
 - **Output:** `--no-website` skips dashboard merging, `--reset` discards prior measurements, `TTSC_BENCH_OUT` redirects the report, and `--verbose` enables child-process traces.
 - **Disk use:** `--sequential` or `TTSC_BENCH_SEQUENTIAL=1` holds one fixture branch at a time. It is incompatible with `--setup-only` and `--no-setup`.
 
@@ -62,7 +62,7 @@ Publish only from a quiet external host. `TTSC_BENCH_REQUIRE_QUIET=1` turns host
 Set `TTSC_BENCH_REQUIRE_QUIET` to `1` using the current shell's environment-variable syntax, then run:
 
 ```bash
-node experimental/benchmark/performance.mjs
+pnpm --dir experimental/benchmark performance
 ```
 
-After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `merge-website.mjs` only to combine audited partial `report.json` files by cell ID.
+After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `pnpm --dir experimental/benchmark performance:merge -- <partials-dir> <website-benchmark.json>` only to combine audited partial `report.json` files by cell ID.

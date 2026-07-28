@@ -85,7 +85,7 @@ corepack enable
 pnpm install
 
 rm -rf experimental/benchmark/.work
-node experimental/benchmark/performance.mjs
+pnpm --dir experimental/benchmark performance
 ```
 
 The runner defaults to **5 measured runs + 1 warmup** per cell. The dashboard takes the minimum across those samples, so more samples push the published number toward the noise-free best case rather than averaging it. Override with `TTSC_BENCH_RUNS` / `TTSC_BENCH_WARMUP` when you want a quicker spot-check (`TTSC_BENCH_RUNS=1 TTSC_BENCH_WARMUP=0` finishes a sweep in roughly half an hour but a single cold spike then sets the cell's number) or a steadier sampling run (e.g. `TTSC_BENCH_RUNS=10` doubles every sample and lowers the chance of an outlier squatting on the minimum). Results are written to `experimental/benchmark/.work/report.md`, `experimental/benchmark/.work/report.json`, and `website/public/benchmark/performance.json`.

@@ -31,7 +31,7 @@ type Reduce = (raw: RawDump) => ViewerPayload;
 
 const loadReducer = async (
   relativePath: string,
-  exported: "named" | "default",
+  exported: "named" | "default" | "namespace",
 ): Promise<Reduce> => {
   const repository = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -42,8 +42,14 @@ const loadReducer = async (
   )) as {
     reduce?: Reduce;
     default?: { reduce?: Reduce };
+    TtscBenchmarkGraphReduce?: { reduce?: Reduce };
   };
-  const reduce = exported === "named" ? module.reduce : module.default?.reduce;
+  const reduce =
+    exported === "named"
+      ? module.reduce
+      : exported === "default"
+        ? module.default?.reduce
+        : module.TtscBenchmarkGraphReduce?.reduce;
   if (typeof reduce !== "function")
     assert.fail(`${relativePath} exports reduce()`);
   return reduce;
@@ -122,8 +128,8 @@ export const test_ttscgraph_viewer_reducers_preserve_legacy_absolute_filenames =
       {
         name: "fixture",
         reduce: await loadReducer(
-          "experimental/benchmark/graph/viewer.mjs",
-          "named",
+          "experimental/benchmark/src/graph/TtscBenchmarkGraphReduce.ts",
+          "namespace",
         ),
       },
     ];
