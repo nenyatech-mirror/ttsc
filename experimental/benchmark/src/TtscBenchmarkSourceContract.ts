@@ -14,7 +14,7 @@ export namespace TtscBenchmarkSourceContract {
   const CLASS_IMPLICIT_PUBLIC_MEMBER_PATTERN =
     /^  (?!(?:private|protected|public)\b)(?:(?:abstract|async|declare|get|readonly|set|static)\s+)*(constructor|[A-Za-z_$][\w$]*)[!?]?\s*(?:<[^>{}]*>)?\s*(?:\(|:|=)/gm;
   const TOP_LEVEL_PRIVATE_DECLARATION_PATTERN =
-    /^(?:(?:abstract|async|declare)\s+)*(class|const|enum|function|interface|let|namespace|type|var)\s+([A-Za-z_$][\w$]*)/gm;
+    /^(?:(?:abstract|async|declare)\s+)*(class|const|enum|function|interface|let|namespace|type|var)\b(?:\s+([A-Za-z_$][\w$]*))?/gm;
   const TOP_LEVEL_EXPORT_PATTERN = /^export\b/gm;
   const OPENING_BRACE = String.fromCharCode(123);
   const CLOSING_BRACE = String.fromCharCode(125);
@@ -74,7 +74,7 @@ export namespace TtscBenchmarkSourceContract {
       }
       for (const declaration of privateTopLevelDeclarations)
         failures.push(
-          `${relative}: top-level ${declaration[1]} ${declaration[2]} must belong to the exported class or namespace`,
+          `${relative}: top-level ${declaration[1]} ${declaration[2] ?? "binding"} must belong to the exported class or namespace`,
         );
       if (exports.length === 0) {
         failures.push(
@@ -329,7 +329,9 @@ export namespace TtscBenchmarkSourceContract {
       const name: string = match[2]!;
       const index: number = openingBrace + 1 + (match.index ?? 0);
       failures.push(...checkLeadingJsDoc(relative, source, index, name));
-      if (kind === "interface")
+      if (kind === "class")
+        failures.push(...checkClassPublicMembers(relative, source, index));
+      else if (kind === "interface")
         failures.push(...checkInterfaceFields(relative, source, index));
     }
     return failures;
