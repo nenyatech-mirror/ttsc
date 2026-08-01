@@ -2,6 +2,8 @@ package graph
 
 import (
   "fmt"
+  "path/filepath"
+  "runtime"
   "strings"
 
   shimtspath "github.com/microsoft/typescript-go/shim/tspath"
@@ -12,19 +14,26 @@ import (
 // reject both an unportable filesystem root and a non-injective projection
 // before any JSON is written.
 type dumpPathMapper struct {
+  rawProject    string
   project       string
   caseSensitive bool
+  canonicalize  func(string) string
 
+  rawToWire      map[string]string
   physicalToWire map[string]string
   wireToPhysical map[string]string
   mappingErr     error
 }
 
 func newDumpPathMapper(project string) *dumpPathMapper {
-  normalized := shimtspath.NormalizePath(shimtspath.NormalizeSlashes(project))
+  raw := shimtspath.NormalizePath(shimtspath.NormalizeSlashes(project))
+  normalized := canonicalDumpPath(raw)
   mapper := &dumpPathMapper{
+    rawProject:     raw,
     project:        normalized,
     caseSensitive:  dumpPathRootIsCaseSensitive(normalized),
+    canonicalize:   canonicalDumpPath,
+    rawToWire:      map[string]string{},
     physicalToWire: map[string]string{},
     wireToPhysical: map[string]string{},
   }
@@ -58,17 +67,27 @@ func (m *dumpPathMapper) mapPath(file string) string {
     return normalized
   }
 
-  physical := normalized
-  if shimtspath.GetRootLength(physical) == 0 {
-    physical = shimtspath.GetNormalizedAbsolutePath(physical, m.project)
+  // A relative compiler path is relative to the project the caller named, so
+  // absolutize it against the raw spelling before collapsing aliases.
+  rawPhysical := normalized
+  if shimtspath.GetRootLength(rawPhysical) == 0 {
+    rawPhysical = shimtspath.GetNormalizedAbsolutePath(rawPhysical, m.rawProject)
   }
+  // One source rides the wire once per node, once per node id and twice per
+  // edge endpoint. Cache before canonicalization so a large graph pays the
+  // filesystem walk once per distinct raw path instead of once per fact.
+  rawKey := m.pathKey(rawPhysical)
+  if wire, ok := m.rawToWire[rawKey]; ok {
+    return wire
+  }
+  physical := m.canonicalize(rawPhysical)
   if !dumpPathRootsEqual(m.project, physical, m.caseSensitive) {
     m.fail(fmt.Errorf(
       "ttscgraph: source path %q cannot be represented relative to project %q because they are on different filesystem roots",
-      normalized,
+      rawPhysical,
       m.project,
     ))
-    return normalized
+    return rawPhysical
   }
   options := shimtspath.ComparePathsOptions{
     CurrentDirectory:          m.project,
@@ -78,12 +97,76 @@ func (m *dumpPathMapper) mapPath(file string) string {
   if shimtspath.GetRootLength(wire) != 0 {
     m.fail(fmt.Errorf(
       "ttscgraph: source path %q cannot be represented relative to project %q because they are on different filesystem roots",
-      normalized,
+      rawPhysical,
       m.project,
     ))
+    return rawPhysical
+  }
+  wire = m.claim(physical, wire)
+  m.rawToWire[rawKey] = wire
+  return wire
+}
+
+func (m *dumpPathMapper) pathKey(path string) string {
+  if !m.caseSensitive {
+    return strings.ToLower(path)
+  }
+  return path
+}
+
+// canonicalDumpPath collapses host filesystem aliases before the portable path
+// grammar is applied. On macOS one temporary project is observable as both
+// /var/... and /private/var/...; on Windows the same directory answers to an
+// 8.3 short spelling and its expanded name. Comparing those raw strings would
+// make an in-project source look like a sibling outside the project root.
+//
+// Resolution is anchored on the longest existing ancestor rather than the leaf.
+// A source the compiler names before it exists on disk — a `rootDirs` target, a
+// deleted-and-revisited file, a path the checker resolved through a container
+// that was removed — must still land on the same canonical base as its
+// neighbours; resolving only complete paths would leave exactly those inputs
+// spelled through the alias and reproduce the misprojection for them.
+//
+// Synthetic Windows and UNC fixtures in the mapper's own unit tests are not
+// host paths at all, so they keep their lexical spelling and continue to prove
+// the cross-root and injectivity rules on every CI host.
+func canonicalDumpPath(location string) string {
+  normalized := shimtspath.NormalizePath(shimtspath.NormalizeSlashes(location))
+  if normalized == "" || shimtspath.GetRootLength(normalized) == 0 {
     return normalized
   }
-  return m.claim(physical, wire)
+  if !dumpPathUsesHostFilesystem(normalized) {
+    return normalized
+  }
+  candidate := filepath.Clean(filepath.FromSlash(normalized))
+  suffix := []string{}
+  for {
+    physical, err := filepath.EvalSymlinks(candidate)
+    if err == nil {
+      for index := len(suffix) - 1; index >= 0; index-- {
+        physical = filepath.Join(physical, suffix[index])
+      }
+      return shimtspath.NormalizePath(shimtspath.NormalizeSlashes(physical))
+    }
+    parent := filepath.Dir(candidate)
+    if parent == candidate {
+      break
+    }
+    suffix = append(suffix, filepath.Base(candidate))
+    candidate = parent
+  }
+  return normalized
+}
+
+// dumpPathUsesHostFilesystem separates a real path on this host from a
+// synthetic path that only exercises another platform's grammar. A POSIX host
+// never owns `C:/...` or `//server/share/...`, and a Windows host never owns a
+// single-slash absolute path, so neither should reach the filesystem.
+func dumpPathUsesHostFilesystem(path string) bool {
+  if runtime.GOOS == "windows" {
+    return strings.HasPrefix(path, "//") || (len(path) >= 2 && path[1] == ':')
+  }
+  return strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//")
 }
 
 // claim records both directions of the projection. The reverse map is the
