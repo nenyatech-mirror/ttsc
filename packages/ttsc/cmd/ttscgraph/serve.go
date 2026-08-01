@@ -13,6 +13,7 @@ import (
   "slices"
   "sort"
   "strings"
+  "time"
 
   shimtsoptions "github.com/microsoft/typescript-go/shim/tsoptions"
   shimtspath "github.com/microsoft/typescript-go/shim/tspath"
@@ -45,7 +46,9 @@ const (
   serveModeUnchanged = "unchanged"
   // serveModeIncremental is edits applied onto the reused resident program.
   serveModeIncremental = "incremental"
-  // serveModeRebuild is edits applied but the program could not be reused.
+  // serveModeRebuild is edits applied but graph projection requires a complete
+  // rebuild, either because the program could not be reused or because a
+  // declaration-file boundary has no authored source shard of its own.
   serveModeRebuild = "rebuild"
   // serveModeError is a request that produced no snapshot. It is a transport
   // mode, not a computation mode: it exists so mode is never absent, because a
@@ -71,10 +74,15 @@ var serveCapabilities = fullSnapshotCapabilities
 
 type serveRequest struct {
   ID int `json:"id"`
+  // GraphSnapshotVersion opts into the incremental shard protocol. Omitted
+  // requests retain the schema-v6 full-dump response for existing
+  // @ttsc/graph clients.
+  GraphSnapshotVersion int `json:"graphSnapshotVersion,omitempty"`
 }
 
 type serveResponse struct {
-  Dump *graph.Dump `json:"dump,omitempty"`
+  Dump     *graph.Dump         `json:"dump,omitempty"`
+  Snapshot *serveGraphSnapshot `json:"snapshot,omitempty"`
   // Error is set when the request produced no snapshot; Mode is then
   // serveModeError.
   Error string `json:"error,omitempty"`
@@ -89,6 +97,8 @@ type serveResponse struct {
   Capabilities []string `json:"capabilities"`
   Changed      bool     `json:"changed"`
 }
+
+const graphPhaseTraceEnvironment = "SAMCHON_GRAPH_TTSC_PHASE_TRACE"
 
 // newServeResponse stamps the fields every response owes the client, so no exit
 // from the serve loop can forget one.
@@ -124,13 +134,17 @@ type graphSession struct {
   // generation, captured from the same parse that produced configHashes and
   // rootFiles so the published evidence and the invalidation state can never
   // describe different loads.
-  configDigests []graph.FileDigest
-  roots         []graph.RootFile
-  initialized   bool
-  // pendingDumpMode remembers a generation whose state was captured but whose
-  // dump failed. Until an input change lets the session rebuild, an unchanged
-  // request must retry that dump instead of falsely confirming the older graph.
-  pendingDumpMode string
+  configDigests           []graph.FileDigest
+  roots                   []graph.RootFile
+  initialized             bool
+  graphStore              *serveGraphStore
+  requestProtocol         int
+  requestProtocolSelected bool
+  // pending remembers a generation whose state was captured but whose selected
+  // projection failed. Until an input change lets the session rebuild, an
+  // unchanged request retries the same full or partial invalidation instead of
+  // falsely confirming the older client graph.
+  pending *graphChange
 }
 
 func newGraphSession(cwd, tsconfig string) (*graphSession, error) {
@@ -149,106 +163,187 @@ func (s *graphSession) Close() error {
 }
 
 func (s *graphSession) Snapshot() (*graph.Dump, string, bool, error) {
+  change, err := s.nextChange(false)
+  if err != nil {
+    return nil, "", false, err
+  }
+  if change == nil {
+    return nil, serveModeUnchanged, false, nil
+  }
+  dump, err := s.buildDump()
+  if err != nil {
+    s.pending = change
+    return nil, "", false, err
+  }
+  s.pending = nil
+  return &dump, change.mode, true, nil
+}
+
+type graphChange struct {
+  mode        string
+  files       []string
+  publicFiles []string
+  full        bool
+}
+
+// nextChange advances only the resident compiler and its captured input state.
+// Projection is deliberately outside this method so the legacy full-dump and
+// incremental shard protocols share exactly one invalidation decision without
+// forcing either representation onto the other.
+func (s *graphSession) nextChange(trackPublicShape bool) (*graphChange, error) {
   if !s.initialized {
     // The captured compiler state is initialized even when its first dump is
     // not publishable. Mark the attempt before building so a later request can
     // observe a config/source edit that repairs the path error instead of
     // retrying the stale Program forever.
     s.initialized = true
-    dump, err := s.buildDump()
-    if err != nil {
-      s.pendingDumpMode = serveModeInitial
-      return nil, "", false, err
-    }
-    s.pendingDumpMode = ""
-    return &dump, serveModeInitial, true, nil
+    return &graphChange{mode: serveModeInitial, full: true}, nil
   }
 
   configChanged, err := hashesChanged(s.configHashes)
   if err != nil {
-    return nil, "", false, err
+    return nil, err
   }
   if configChanged {
     if err := s.reload(); err != nil {
-      return nil, "", false, err
+      return nil, err
     }
-    return s.changedSnapshot(serveModeReload)
+    return &graphChange{mode: serveModeReload, full: true}, nil
   }
 
   if diskStatesChanged(s.auxStates) {
     if err := s.reload(); err != nil {
-      return nil, "", false, err
+      return nil, err
     }
-    return s.changedSnapshot(serveModeReload)
+    return &graphChange{mode: serveModeReload, full: true}, nil
   }
 
   roots, err := projectRootFiles(s.compiler.Program(), true)
   if err != nil {
-    return nil, "", false, err
+    return nil, err
   }
   if !slices.Equal(s.rootFiles, roots) {
     if err := s.reload(); err != nil {
-      return nil, "", false, err
+      return nil, err
     }
-    return s.changedSnapshot(serveModeReload)
+    return &graphChange{mode: serveModeReload, full: true}, nil
   }
 
   changed, deleted, err := changedSources(s.sourceHashes)
   if err != nil {
-    return nil, "", false, err
+    return nil, err
   }
   if deleted {
     if err := s.reload(); err != nil {
-      return nil, "", false, err
+      return nil, err
     }
-    return s.changedSnapshot(serveModeReload)
+    return &graphChange{mode: serveModeReload, full: true}, nil
   }
   if len(changed) == 0 {
-    if s.pendingDumpMode != "" {
-      return s.changedSnapshot(s.pendingDumpMode)
+    if s.pending != nil {
+      return s.pending, nil
     }
-    return nil, serveModeUnchanged, false, nil
+    return nil, nil
   }
   if s.compiler.Program().HasLinkedProgramPlugins() {
     if err := s.reload(); err != nil {
-      return nil, "", false, err
+      return nil, err
     }
-    return s.changedSnapshot(serveModeReload)
+    return &graphChange{mode: serveModeReload, full: true}, nil
   }
 
   mode := serveModeIncremental
+  full := false
   paths := make([]string, 0, len(changed))
   for path := range changed {
     paths = append(paths, path)
   }
   sort.Strings(paths)
+  oldShapes := make(map[string]string, len(paths))
+  for _, path := range paths {
+    source := s.compiler.Program().SourceFile(path)
+    if source == nil {
+      if err := s.reload(); err != nil {
+        return nil, err
+      }
+      return &graphChange{mode: serveModeReload, full: true}, nil
+    }
+    if source.IsDeclarationFile {
+      mode = serveModeRebuild
+      full = true
+      continue
+    }
+    if trackPublicShape {
+      shape, err := s.compiler.Program().DeclarationShapeDigest(source)
+      if err != nil {
+        return nil, err
+      }
+      oldShapes[path] = shape
+    }
+  }
   for _, path := range paths {
     if reused := s.compiler.Apply(path, changed[path]); !reused {
       mode = serveModeRebuild
+      full = true
     }
     current, exists := s.compiler.SourceText(path)
     expected := driver.ApplySourcePreambleToFile(path, changed[path], s.compiler.Program().SourcePreamble)
     if !exists || current != expected {
       if err := s.reload(); err != nil {
-        return nil, "", false, err
+        return nil, err
       }
-      return s.changedSnapshot(serveModeReload)
+      return &graphChange{mode: serveModeReload, full: true}, nil
+    }
+    source := s.compiler.Program().SourceFile(path)
+    if source == nil {
+      if err := s.reload(); err != nil {
+        return nil, err
+      }
+      return &graphChange{mode: serveModeReload, full: true}, nil
+    }
+    if source.IsDeclarationFile {
+      mode = serveModeRebuild
+      full = true
     }
   }
   if err := s.captureState(); err != nil {
-    return nil, "", false, err
+    // The compiler already accepted the edit. Preserve a full retry marker so
+    // a transient hashing/input failure cannot make the next request compare
+    // public shape against the uncommitted compiler generation and publish an
+    // incomplete closure.
+    s.pending = &graphChange{mode: serveModeRebuild, full: true}
+    return nil, err
   }
-  return s.changedSnapshot(mode)
-}
-
-func (s *graphSession) changedSnapshot(mode string) (*graph.Dump, string, bool, error) {
-  dump, err := s.buildDump()
-  if err != nil {
-    s.pendingDumpMode = mode
-    return nil, "", false, err
+  publicFiles := []string{}
+  if trackPublicShape && !full {
+    for _, path := range paths {
+      source := s.compiler.Program().SourceFile(path)
+      if source == nil {
+        return &graphChange{mode: serveModeRebuild, full: true}, nil
+      }
+      shape, err := s.compiler.Program().DeclarationShapeDigest(source)
+      if err != nil {
+        mode = serveModeRebuild
+        full = true
+        publicFiles = nil
+        break
+      }
+      if shape != oldShapes[path] {
+        publicFiles = append(publicFiles, path)
+      }
+    }
   }
-  s.pendingDumpMode = ""
-  return &dump, mode, true, nil
+  if s.pending != nil {
+    if s.pending.full {
+      mode = s.pending.mode
+      full = true
+      paths = nil
+    } else if !full {
+      paths = compactSortedStrings(append(paths, s.pending.files...))
+      publicFiles = compactSortedStrings(append(publicFiles, s.pending.publicFiles...))
+    }
+  }
+  return &graphChange{mode: mode, files: paths, publicFiles: publicFiles, full: full}, nil
 }
 
 func (s *graphSession) reload() error {
@@ -750,26 +845,86 @@ func serveSnapshots(input io.Reader, output io.Writer, cwd, tsconfig string) int
       fmt.Fprintf(stderr, "ttscgraph: unaddressable serve request: %v\n", err)
       return 1
     }
+    requestStarted := time.Now()
+    if request.GraphSnapshotVersion != 0 && request.GraphSnapshotVersion != graphSnapshotProtocolVersion {
+      if err := encodeServeResponseWithTrace(encoder, errorResponse(
+        request.ID,
+        fmt.Sprintf(
+          "ttscgraph: unsupported graph snapshot protocol v%d (supported: v%d)",
+          request.GraphSnapshotVersion,
+          graphSnapshotProtocolVersion,
+        ),
+      ), requestStarted, 0, 0, 0); err != nil {
+        fmt.Fprintf(stderr, "ttscgraph: write serve response: %v\n", err)
+        return 1
+      }
+      continue
+    }
+    var loadDuration time.Duration
     if session == nil {
+      loadStarted := time.Now()
       created, err := newGraphSession(cwd, tsconfig)
+      loadDuration = time.Since(loadStarted)
       if err != nil {
-        _ = encoder.Encode(errorResponse(request.ID, err.Error()))
+        if err := encodeServeResponseWithTrace(
+          encoder,
+          errorResponse(request.ID, err.Error()),
+          requestStarted,
+          loadDuration,
+          0,
+          0,
+        ); err != nil {
+          fmt.Fprintf(stderr, "ttscgraph: write serve response: %v\n", err)
+          return 1
+        }
         continue
       }
       session = created
     }
-    dump, mode, changed, err := session.Snapshot()
+    if session.requestProtocolSelected && session.requestProtocol != request.GraphSnapshotVersion {
+      if err := encodeServeResponseWithTrace(encoder, errorResponse(
+        request.ID,
+        "ttscgraph: graphSnapshotVersion cannot change within one resident session",
+      ), requestStarted, loadDuration, 0, 0); err != nil {
+        fmt.Fprintf(stderr, "ttscgraph: write serve response: %v\n", err)
+        return 1
+      }
+      continue
+    }
+    session.requestProtocol = request.GraphSnapshotVersion
+    session.requestProtocolSelected = true
+    var dump *graph.Dump
+    var snapshot *serveGraphSnapshot
+    var mode string
+    var changed bool
+    var semanticDuration time.Duration
+    var exportDuration time.Duration
+    var err error
+    if request.GraphSnapshotVersion == graphSnapshotProtocolVersion {
+      snapshot, mode, changed, semanticDuration, exportDuration, err = session.snapshotShardsWithTiming()
+    } else {
+      dump, mode, changed, err = session.Snapshot()
+    }
     response := newServeResponse(request.ID)
     response.Dump = dump
+    response.Snapshot = snapshot
     response.Mode = mode
     response.Changed = changed
     if err != nil {
       response.Error = err.Error()
       response.Dump = nil
+      response.Snapshot = nil
       response.Mode = serveModeError
       response.Changed = false
     }
-    if err := encoder.Encode(response); err != nil {
+    if err := encodeServeResponseWithTrace(
+      encoder,
+      response,
+      requestStarted,
+      loadDuration,
+      semanticDuration,
+      exportDuration,
+    ); err != nil {
       fmt.Fprintf(stderr, "ttscgraph: write serve response: %v\n", err)
       return 1
     }
@@ -779,4 +934,65 @@ func serveSnapshots(input io.Reader, output io.Writer, cwd, tsconfig string) int
     return 1
   }
   return 0
+}
+
+// encodeServeResponseWithTrace accounts for every addressed response, including
+// failures that occur before a graph session exists.
+func encodeServeResponseWithTrace(
+  encoder *json.Encoder,
+  response serveResponse,
+  requestStarted time.Time,
+  loadDuration time.Duration,
+  semanticDuration time.Duration,
+  exportDuration time.Duration,
+) error {
+  encodeStarted := time.Now()
+  if err := encoder.Encode(response); err != nil {
+    return err
+  }
+  writeServePhaseTrace(
+    response.ID,
+    response.Mode,
+    loadDuration,
+    semanticDuration,
+    exportDuration,
+    time.Since(encodeStarted),
+    time.Since(requestStarted),
+  )
+  return nil
+}
+
+// writeServePhaseTrace emits opt-in timings without source paths or payloads.
+func writeServePhaseTrace(
+  request int,
+  mode string,
+  load time.Duration,
+  semantic time.Duration,
+  export time.Duration,
+  encode time.Duration,
+  total time.Duration,
+) {
+  if os.Getenv(graphPhaseTraceEnvironment) != "1" {
+    return
+  }
+  phases := []struct {
+    name     string
+    duration time.Duration
+  }{
+    {name: "native-load", duration: load},
+    {name: "semantic-refresh", duration: semantic},
+    {name: "shard-export", duration: export},
+    {name: "encode", duration: encode},
+    {name: "producer-total", duration: total},
+  }
+  for _, phase := range phases {
+    fmt.Fprintf(
+      stderr,
+      "@samchon/graph: ttscgraph-phase owner=producer request=%d mode=%s phase=%s durationMs=%.3f\n",
+      request,
+      mode,
+      phase.name,
+      float64(phase.duration)/float64(time.Millisecond),
+    )
+  }
 }

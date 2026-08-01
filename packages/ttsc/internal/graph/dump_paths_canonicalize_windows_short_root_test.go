@@ -11,14 +11,9 @@ import (
 // selected through an 8.3 path still owns checker sources reported through the
 // expanded physical spelling.
 //
-// Windows reaches the same alias class as the macOS `/var` symlink through a
-// different mechanism, so the canonical base has to be derived from the
-// filesystem on both platforms rather than from POSIX symlinks alone.
-//
 //  1. Obtain the environment's temp spelling and its physical spelling.
 //  2. Skip hosts where Windows exposes only one spelling.
-//  3. Require a physical child and a not-yet-created child to stay
-//     project-relative.
+//  3. Require a physical child source to retain a project-relative identity.
 func TestDumpPathMapperCanonicalizesWindowsShortRoot(t *testing.T) {
   project := t.TempDir()
   physical, err := filepath.EvalSymlinks(project)

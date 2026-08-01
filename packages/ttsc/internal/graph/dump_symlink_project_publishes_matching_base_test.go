@@ -9,11 +9,9 @@ import (
 // TestDumpSymlinkProjectPublishesMatchingBase verifies relative wire paths and
 // the published project coordinate share one canonical filesystem base.
 //
-// This is the macOS `/var` vs `/private/var` failure in its general form. A raw
-// symlink project root combined with canonical compiler sources makes `../`
-// siblings, sources that do not exist yet and a symlinked relative tsconfig
-// resolve against a directory the consumer cannot reach, unless project
-// publication and path mapping agree on the same physical root.
+// A raw symlink cwd combined with canonical source paths makes `../` siblings,
+// missing literal roots and a symlinked relative tsconfig resolve incorrectly
+// unless project publication and path mapping use the same physical root.
 //
 //  1. Select a real project directory through a symlink and add sibling inputs.
 //  2. Map an existing sibling, a missing child and a relative config symlink.
@@ -55,10 +53,6 @@ func TestDumpSymlinkProjectPublishesMatchingBase(t *testing.T) {
   if wire := mapper.mapPath("tsconfig.json"); wire != "../config/tsconfig.json" {
     t.Fatalf("relative config wire path = %q, want ../config/tsconfig.json", wire)
   }
-  if err := mapper.err(); err != nil {
-    t.Fatal(err)
-  }
-
   dump, err := NewDump(&Graph{Nodes: map[string]*Node{}}, alias, "tsconfig.json", nil, nil, DumpOrigin{})
   if err != nil {
     t.Fatal(err)

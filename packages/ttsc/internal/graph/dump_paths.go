@@ -43,6 +43,62 @@ func newDumpPathMapper(project string) *dumpPathMapper {
   return mapper
 }
 
+// WireProject returns the canonical filesystem base that owns every relative
+// wire path emitted by this package.
+func WireProject(project string) (string, error) {
+  mapper := newDumpPathMapper(project)
+  return mapper.project, mapper.err()
+}
+
+// WirePath maps one compiler path into the portable schema-v6 vocabulary used
+// by dumps and resident graph shards. Callers that project a complete graph
+// keep one dumpPathMapper so collision detection spans every path; callers
+// shaping a single source/config coordinate use this helper and receive the
+// same filesystem-alias and cross-root behavior.
+func WirePath(project, file string) (string, error) {
+  mapper := newDumpPathMapper(project)
+  wire := mapper.mapPath(file)
+  return wire, mapper.err()
+}
+
+// WireNodeID maps the filesystem-bearing portions of one internal node ID into
+// the same portable vocabulary as NewDumpFacts. Resident stores use it when a
+// wire-level external reference count must be reconciled with the immutable
+// graph.Node cache, whose keys retain compiler-physical paths.
+func WireNodeID(project, id string) (string, error) {
+  ids, err := WireNodeIDs(project, []string{id})
+  return ids[id], err
+}
+
+// WireNodeIDs maps a set of internal node IDs through one path mapper. Sharing
+// the mapper preserves cross-ID collision detection and resolves each repeated
+// filesystem alias only once per snapshot generation.
+func WireNodeIDs(project string, ids []string) (map[string]string, error) {
+  mapper := newDumpPathMapper(project)
+  wireIDs := make(map[string]string, len(ids))
+  for _, id := range ids {
+    wire, err := wireNodeID(mapper, id)
+    if err != nil {
+      return nil, err
+    }
+    wireIDs[id] = wire
+  }
+  return wireIDs, mapper.err()
+}
+
+func wireNodeID(mapper *dumpPathMapper, id string) (string, error) {
+  parts, ok := parseNodeID(id)
+  if !ok {
+    return "", fmt.Errorf("ttscgraph: invalid internal graph node id %q", id)
+  }
+  name := parts.name
+  if parts.kind == NodeModule {
+    name = mapper.mapPath(name)
+  }
+  wire := nodeID(mapper.mapPath(parts.path), name, parts.kind)
+  return wire, nil
+}
+
 // mapPath returns one portable, slash-normalized coordinate:
 //
 //   - project files stay project-relative;
@@ -58,24 +114,18 @@ func (m *dumpPathMapper) mapPath(file string) string {
   if file == "" {
     return ""
   }
-  normalized := shimtspath.NormalizeSlashes(file)
+  normalized := shimtspath.NormalizePath(shimtspath.NormalizeSlashes(file))
   if strings.HasPrefix(normalized, "bundled:///") {
     return m.claim(normalized, normalized)
   }
-  normalized = shimtspath.NormalizePath(normalized)
   if m.project == "" || shimtspath.GetRootLength(m.project) == 0 {
     return normalized
   }
 
-  // A relative compiler path is relative to the project the caller named, so
-  // absolutize it against the raw spelling before collapsing aliases.
   rawPhysical := normalized
   if shimtspath.GetRootLength(rawPhysical) == 0 {
     rawPhysical = shimtspath.GetNormalizedAbsolutePath(rawPhysical, m.rawProject)
   }
-  // One source rides the wire once per node, once per node id and twice per
-  // edge endpoint. Cache before canonicalization so a large graph pays the
-  // filesystem walk once per distinct raw path instead of once per fact.
   rawKey := m.pathKey(rawPhysical)
   if wire, ok := m.rawToWire[rawKey]; ok {
     return wire
@@ -112,61 +162,6 @@ func (m *dumpPathMapper) pathKey(path string) string {
     return strings.ToLower(path)
   }
   return path
-}
-
-// canonicalDumpPath collapses host filesystem aliases before the portable path
-// grammar is applied. On macOS one temporary project is observable as both
-// /var/... and /private/var/...; on Windows the same directory answers to an
-// 8.3 short spelling and its expanded name. Comparing those raw strings would
-// make an in-project source look like a sibling outside the project root.
-//
-// Resolution is anchored on the longest existing ancestor rather than the leaf.
-// A source the compiler names before it exists on disk — a `rootDirs` target, a
-// deleted-and-revisited file, a path the checker resolved through a container
-// that was removed — must still land on the same canonical base as its
-// neighbours; resolving only complete paths would leave exactly those inputs
-// spelled through the alias and reproduce the misprojection for them.
-//
-// Synthetic Windows and UNC fixtures in the mapper's own unit tests are not
-// host paths at all, so they keep their lexical spelling and continue to prove
-// the cross-root and injectivity rules on every CI host.
-func canonicalDumpPath(location string) string {
-  normalized := shimtspath.NormalizePath(shimtspath.NormalizeSlashes(location))
-  if normalized == "" || shimtspath.GetRootLength(normalized) == 0 {
-    return normalized
-  }
-  if !dumpPathUsesHostFilesystem(normalized) {
-    return normalized
-  }
-  candidate := filepath.Clean(filepath.FromSlash(normalized))
-  suffix := []string{}
-  for {
-    physical, err := filepath.EvalSymlinks(candidate)
-    if err == nil {
-      for index := len(suffix) - 1; index >= 0; index-- {
-        physical = filepath.Join(physical, suffix[index])
-      }
-      return shimtspath.NormalizePath(shimtspath.NormalizeSlashes(physical))
-    }
-    parent := filepath.Dir(candidate)
-    if parent == candidate {
-      break
-    }
-    suffix = append(suffix, filepath.Base(candidate))
-    candidate = parent
-  }
-  return normalized
-}
-
-// dumpPathUsesHostFilesystem separates a real path on this host from a
-// synthetic path that only exercises another platform's grammar. A POSIX host
-// never owns `C:/...` or `//server/share/...`, and a Windows host never owns a
-// single-slash absolute path, so neither should reach the filesystem.
-func dumpPathUsesHostFilesystem(path string) bool {
-  if runtime.GOOS == "windows" {
-    return strings.HasPrefix(path, "//") || (len(path) >= 2 && path[1] == ':')
-  }
-  return strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//")
 }
 
 // claim records both directions of the projection. The reverse map is the
@@ -209,6 +204,51 @@ func (m *dumpPathMapper) fail(err error) {
 }
 
 func (m *dumpPathMapper) err() error { return m.mappingErr }
+
+// canonicalDumpPath collapses filesystem aliases for an existing path before
+// it enters the wire-coordinate mapper. TypeScript reports physical source
+// names, while a caller may select the same project through a symlink or a
+// Windows 8.3 spelling; comparing those raw strings would leak a producer-local
+// absolute path into an otherwise portable snapshot.
+//
+// Synthetic paths in mapper unit tests and missing paths retain their lexical
+// spelling. Real graph inputs exist by construction, so the best-effort branch
+// covers their physical identity without weakening the mapper's explicit
+// cross-root and collision checks.
+func canonicalDumpPath(location string) string {
+  normalized := shimtspath.NormalizePath(shimtspath.NormalizeSlashes(location))
+  if normalized == "" || shimtspath.GetRootLength(normalized) == 0 {
+    return normalized
+  }
+  if !dumpPathUsesHostFilesystem(normalized) {
+    return normalized
+  }
+  candidate := filepath.Clean(filepath.FromSlash(normalized))
+  suffix := []string{}
+  for {
+    physical, err := filepath.EvalSymlinks(candidate)
+    if err == nil {
+      for index := len(suffix) - 1; index >= 0; index-- {
+        physical = filepath.Join(physical, suffix[index])
+      }
+      return shimtspath.NormalizePath(shimtspath.NormalizeSlashes(physical))
+    }
+    parent := filepath.Dir(candidate)
+    if parent == candidate {
+      break
+    }
+    suffix = append(suffix, filepath.Base(candidate))
+    candidate = parent
+  }
+  return normalized
+}
+
+func dumpPathUsesHostFilesystem(path string) bool {
+  if runtime.GOOS == "windows" {
+    return strings.HasPrefix(path, "//") || (len(path) >= 2 && path[1] == ':')
+  }
+  return strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//")
+}
 
 // Windows drive and UNC roots use case-insensitive path comparison. POSIX
 // roots remain case-sensitive. This decision follows the path's own grammar so

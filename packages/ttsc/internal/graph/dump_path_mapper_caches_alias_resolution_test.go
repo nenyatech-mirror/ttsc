@@ -5,9 +5,8 @@ import "testing"
 // TestDumpPathMapperCachesAliasResolution verifies repeated graph facts do not
 // repeat filesystem canonicalization for the same raw source path.
 //
-// One source rides the wire once per node, once per node id and twice per edge
-// endpoint, so canonicalizing inside mapPath without a raw-path cache would
-// turn every fact of a large graph into a fresh EvalSymlinks walk.
+// A large graph maps one source through its node, IDs and many edge endpoints;
+// caching only after EvalSymlinks would turn those facts into repeated syscalls.
 //
 //  1. Install a counting canonicalizer on one mapper.
 //  2. Map the same absolute source path repeatedly.
