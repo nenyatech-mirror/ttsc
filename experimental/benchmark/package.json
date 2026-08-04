@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@ttsc/experimental-benchmark",
-  "version": "0.0.0",
+  "version": "0.24.0",
   "description": "Performance and graph benchmark harnesses for ttsc.",
   "type": "module",
   "devDependencies": {
