@@ -83,8 +83,14 @@ func runFix(opts *subcommandOpts) int {
   // kinds of findings in one pass — no filtering needed here.
   cascadeConverged := false
   for pass := 0; pass < maxFixPasses; pass++ {
+    // Fix reads the whole lint scope because it prints diagnostics once the
+    // cascade settles, and writes only the project's own files: an imported
+    // source reaches the report below, never the disk.
     findings := prog.runLintCycle(engine)
-    fixed, err := applyFindingFixes(opts.cwd, findings)
+    fixed, err := applyFindingFixes(
+      opts.cwd,
+      prog.projectWritableFindings(findings),
+    )
     if err != nil {
       fmt.Fprintln(os.Stderr, err)
       return 3

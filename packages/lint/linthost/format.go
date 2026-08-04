@@ -68,7 +68,9 @@ func runFormat(opts *subcommandOpts) int {
   totalFixes := 0
   cascadeConverged := false
   for pass := 0; pass < maxFormatPasses; pass++ {
-    findings := prog.runLintCycle(engine)
+    // Format's cycle stays inside the project's own sources, so every finding
+    // it sees is one it may write.
+    findings := prog.runWriteScopedCycle(engine)
     fixed, err := applyFindingFixes(opts.cwd, filterFormatFindings(findings))
     if err != nil {
       fmt.Fprintln(os.Stderr, err)

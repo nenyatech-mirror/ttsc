@@ -42,6 +42,15 @@ type program struct {
   checker      *shimchecker.Checker
   identity     publicrule.ProjectIdentity
   projectCycle *projectCycle
+  // projectRoots memoizes projectSourceFileNames, which resolves every
+  // selected file's path and therefore costs filesystem work. The tsconfig
+  // selection cannot change while one program is loaded — a config edit or a
+  // new or removed file forces a full reload upstream rather than an
+  // applyChange — while every read and every write consults the set at least
+  // once per cycle, and a fix or format cascade repeats that per pass. Filled
+  // lazily under the same single-threaded assumption projectCycle already
+  // makes, and read-only to its callers.
+  projectRoots map[string]struct{}
 }
 
 type loadProgramOptions struct {
@@ -274,11 +283,38 @@ func (p *program) runProjectCycle(engine *Engine) *projectCycle {
   return p.projectCycle
 }
 
+// runLintCycle walks everything the invocation reads: the project's own sources
+// and the TypeScript it imported. Every caller here reports its findings, so a
+// source the type-check pass read must be able to produce one.
 func (p *program) runLintCycle(engine *Engine) []*Finding {
+  return p.runCycleOver(engine, p.userSourceFiles())
+}
+
+// runWriteScopedCycle walks the project's own sources alone. It serves the
+// commands that edit files and report nothing: `format` and the LSP document
+// fix and format verbs.
+//
+// Such a command must not rewrite a sibling package it merely imports, and it
+// prints no diagnostic, so a finding outside the project has nowhere to go.
+// Reading wider would spend a full walk, once per cascade pass, on findings the
+// command discards. Scope is enforced by what these commands read rather than
+// by filtering afterwards, which leaves projectWritableFindings to `fix` alone.
+func (p *program) runWriteScopedCycle(engine *Engine) []*Finding {
+  return p.runCycleOver(engine, p.projectSourceFiles())
+}
+
+// runCycleOver evaluates the project rules and the file rules over one file set,
+// memoizing the project cycle on the program so a second verb against the same
+// program does not re-evaluate a rule. The caller owns the scope decision.
+//
+// That memo makes the scope a property of the program, not of the call: the
+// first cycle fixes the population every later verb observes. One loaded
+// program therefore serves one scope, and a caller must not ask the same
+// program for both a lint cycle and a write-scoped one.
+func (p *program) runCycleOver(engine *Engine, files []*shimast.SourceFile) []*Finding {
   if p == nil || engine == nil {
     return nil
   }
-  files := p.userSourceFiles()
   if p.projectCycle == nil {
     p.projectCycle = engine.evaluateProject(p.identity, files, p.checker)
   }
@@ -348,19 +384,59 @@ func (p *program) applyChange(absPath string) bool {
   return reused
 }
 
-// userSourceFiles returns the tsconfig-selected source files the lint engine
-// owns. The tsconfig file list is the boundary: imported libraries, generated
-// output, and JSON modules may still appear in Program.SourceFiles(), but lint
-// and format should not walk them unless the project selected them as TS/JS
-// source roots.
+// userSourceFiles returns the source files the lint engine reads for one cycle:
+// the tsconfig-selected TS/JS roots plus every TypeScript source the Program
+// pulled in through an import.
+//
+// The tsconfig file list alone is not the boundary. `ttsc` type-checks a
+// first-party sibling workspace package that resolves to its own `src`, so a
+// reporting pass restricted to the file list would hold a second, narrower view
+// of the single Program the invocation loaded — the file is checked but never
+// linted, and never reaches a project rule's ctx.Sources (samchon/ttsc#1065).
+// A consumer cannot close that gap from configuration either: adding the
+// sibling to `include` also changes what the project emits.
+//
+// The widening admits authored TypeScript only — `.ts`, `.tsx`, `.mts`, `.cts`
+// that are not declaration files. Everything else stays selection-driven:
+//   - a declaration file is typings rather than authored source, and the bundled
+//     `lib.*.d.ts` set plus every published package's `.d.ts` reach
+//     Program.SourceFiles() as well;
+//   - JavaScript enters the Program only under `allowJs`, where the project's own
+//     file list already selects the JS it owns;
+//   - a JSON module carries no lint source at all.
+//
+// A project that selects any of those explicitly keeps them, exactly as before.
+// A published dependency reaches the Program through its typings, so its own
+// `.ts` sources stay out without a dependency-shaped rule here.
 func (p *program) userSourceFiles() []*shimast.SourceFile {
-  roots := p.userSourceFileNames()
+  roots := p.projectSourceFileNames()
   out := make([]*shimast.SourceFile, 0)
   for _, f := range p.tsProgram.SourceFiles() {
     if f == nil {
       continue
     }
-    if _, ok := roots[canonicalProjectPath(p.cwd, f.FileName())]; !ok {
+    if p.selectedByProject(roots, f.FileName()) {
+      out = append(out, f)
+      continue
+    }
+    if isImportedLintSourceFile(f) {
+      out = append(out, f)
+    }
+  }
+  return out
+}
+
+// projectSourceFiles returns the Program's copy of the files the tsconfig itself
+// selected — the project's own sources, the set `format` walks and the set any
+// lint write stays inside.
+func (p *program) projectSourceFiles() []*shimast.SourceFile {
+  roots := p.projectSourceFileNames()
+  out := make([]*shimast.SourceFile, 0, len(roots))
+  for _, f := range p.tsProgram.SourceFiles() {
+    if f == nil {
+      continue
+    }
+    if !p.selectedByProject(roots, f.FileName()) {
       continue
     }
     out = append(out, f)
@@ -368,15 +444,88 @@ func (p *program) userSourceFiles() []*shimast.SourceFile {
   return out
 }
 
-func (p *program) userSourceFileNames() map[string]struct{} {
-  out := make(map[string]struct{})
-  if p == nil || p.parsed == nil || p.parsed.ParsedConfig == nil {
-    return out
+// projectSourceFileNames returns the canonical paths of the TS/JS files the
+// tsconfig itself selected, indexed under both the configured spelling and the
+// resolved one.
+//
+// This is the narrow half of the boundary above. `format` reads nothing else at
+// all, and `fix` reads wider but writes only here, because a project must not
+// rewrite a sibling package's sources merely because it imports them. See
+// projectWritableFindings.
+//
+// Both spellings are indexed because a project can be reached through a
+// junction, a symlink, or a Windows 8.3 short name, and the Program need not
+// report a file under the spelling the config used. Before the read scope
+// widened, an alias mismatch merely dropped the file from every pass. Now it
+// would leave the file readable and unwritable, turning a fixable diagnostic
+// into one `fix` refuses to touch, so ownership resolves the alias.
+func (p *program) projectSourceFileNames() map[string]struct{} {
+  if p == nil {
+    return map[string]struct{}{}
   }
-  for _, fileName := range p.parsed.ParsedConfig.FileNames {
-    if isLintSourceFileName(fileName) {
-      out[canonicalProjectPath(p.cwd, fileName)] = struct{}{}
+  if p.projectRoots != nil {
+    return p.projectRoots
+  }
+  out := make(map[string]struct{})
+  if p.parsed != nil && p.parsed.ParsedConfig != nil {
+    for _, fileName := range p.parsed.ParsedConfig.FileNames {
+      if !isLintSourceFileName(fileName) {
+        continue
+      }
+      absolute := absoluteProjectPath(p.cwd, fileName)
+      out[canonicalProjectPath(p.cwd, absolute)] = struct{}{}
+      out[canonicalProjectPath(p.cwd, realProjectPath(absolute))] = struct{}{}
     }
+  }
+  p.projectRoots = out
+  return out
+}
+
+// selectedByProject reports whether the tsconfig selected fileName, resolving
+// the path only when its own spelling misses.
+//
+// Indexing both spellings above already catches the ordinary link, so this
+// fallback exists for a Program spelling that matches neither, such as a
+// Windows 8.3 short name. It costs one resolution per file the config did not
+// select, paid by the imported set on every cycle, against the rule walk those
+// same files are about to receive.
+func (p *program) selectedByProject(
+  roots map[string]struct{},
+  fileName string,
+) bool {
+  if p == nil || len(roots) == 0 {
+    return false
+  }
+  if _, ok := roots[canonicalProjectPath(p.cwd, fileName)]; ok {
+    return true
+  }
+  resolved := realProjectPath(absoluteProjectPath(p.cwd, fileName))
+  _, ok := roots[canonicalProjectPath(p.cwd, resolved)]
+  return ok
+}
+
+// projectWritableFindings keeps the findings whose file this project may write:
+// the ones sitting in a tsconfig-selected source, dropping every edit aimed at a
+// source the Program reached only through an import.
+//
+// This is `fix`'s guard alone, because `fix` is the one command that must read
+// wider than it writes: it prints the diagnostics that survive the cascade, so
+// an imported source has to reach its report while its edit must not reach
+// disk. The package that owns the file fixes it from its own run, under its own
+// config. Commands that only write walk the narrow set to begin with. A finding
+// without a source file (a project rule's detached report) never reaches disk
+// either and is dropped with them.
+func (p *program) projectWritableFindings(findings []*Finding) []*Finding {
+  roots := p.projectSourceFileNames()
+  out := make([]*Finding, 0, len(findings))
+  for _, finding := range findings {
+    if finding == nil || finding.File == nil {
+      continue
+    }
+    if !p.selectedByProject(roots, finding.File.FileName()) {
+      continue
+    }
+    out = append(out, finding)
   }
   return out
 }
@@ -388,9 +537,33 @@ func canonicalProjectPath(cwd, fileName string) string {
   return filepath.ToSlash(filepath.Clean(fileName))
 }
 
+// isImportedLintSourceFile reports whether a Program source file the tsconfig
+// did not select is authored TypeScript the lint pass must still read.
+func isImportedLintSourceFile(file *shimast.SourceFile) bool {
+  if file == nil || file.IsDeclarationFile {
+    return false
+  }
+  return isTypeScriptSourceFileName(file.FileName())
+}
+
+// isLintSourceFileName reports whether a tsconfig-selected file is a lint/format
+// source root. The project's own selection governs here, so both TypeScript and
+// JavaScript qualify: a project that lists `.js` under `allowJs` owns it.
 func isLintSourceFileName(fileName string) bool {
   switch strings.ToLower(filepath.Ext(fileName)) {
   case ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs":
+    return true
+  default:
+    return false
+  }
+}
+
+// isTypeScriptSourceFileName reports whether a path names TypeScript source.
+// `.d.ts` shares the `.ts` extension, so callers pair this with the source
+// file's IsDeclarationFile flag rather than reading the suffix twice.
+func isTypeScriptSourceFileName(fileName string) bool {
+  switch strings.ToLower(filepath.Ext(fileName)) {
+  case ".ts", ".tsx", ".mts", ".cts":
     return true
   default:
     return false

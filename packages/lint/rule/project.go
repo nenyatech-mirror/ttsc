@@ -170,7 +170,18 @@ type ProjectReporter interface {
 }
 
 // ProjectContext contains the immutable inputs for one project-rule check.
-// Sources is a defensive copy of the Program's tsconfig-selected user sources.
+//
+// Sources is a defensive copy of the user sources the host read for this cycle:
+// the project's own tsconfig-selected files plus every TypeScript source the
+// Program pulled in through an import, minus globally ignored paths. A rule
+// that declares a population by glob therefore sees a first-party sibling
+// workspace package the same way the type-check pass does, instead of an empty
+// population that would silently report full coverage.
+//
+// A format run is the exception. It writes files and reports nothing, so it
+// walks the project's own file list alone and a rule evaluated there receives
+// that narrower population. Draw a conclusion that must hold across the
+// workspace from a lint or check run.
 type ProjectContext struct {
   Identity ProjectIdentity
   Sources  []*shimast.SourceFile

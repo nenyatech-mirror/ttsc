@@ -981,7 +981,11 @@ func lspWorkspaceEditForSeededCommand(
       prog.close()
       return nil, 0
     }
-    findings := filterFindingsForPath(prog.runLintCycle(engine), tempTarget)
+    // This command edits a document, so it walks the project's own sources the
+    // way `format` does. Reading the imported TypeScript the lint cycle covers
+    // would widen nothing here: the edit is bounded to one target below, and a
+    // read-scope widening must not open a write the project never had.
+    findings := filterFindingsForPath(prog.runWriteScopedCycle(engine), tempTarget)
     prog.close()
     if opts.command == commandFormatDocument {
       findings = filterFormatFindings(findings)
