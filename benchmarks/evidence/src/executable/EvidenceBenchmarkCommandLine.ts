@@ -17,6 +17,7 @@ import type { ITtscEvidenceBenchmarkCheckpoint } from "../structures/ITtscEviden
 import type { ITtscEvidenceBenchmarkInputIdentity } from "../structures/ITtscEvidenceBenchmarkInputIdentity";
 import type { ITtscEvidenceBenchmarkOutput } from "../structures/ITtscEvidenceBenchmarkOutput";
 import type { ITtscEvidenceBenchmarkRunState } from "../structures/ITtscEvidenceBenchmarkRunState";
+import type { ITtscEvidenceBenchmarkWorkspaceArtifact } from "../structures/ITtscEvidenceBenchmarkWorkspaceArtifact";
 import type { ITtscEvidenceBenchmarkWorkspaceResult } from "../structures/ITtscEvidenceBenchmarkWorkspaceResult";
 import type { EvidenceBenchmarkArm } from "../typings/EvidenceBenchmarkArm";
 import type { EvidenceBenchmarkEffort } from "../typings/EvidenceBenchmarkEffort";
@@ -43,6 +44,7 @@ interface ITtscEvidenceBenchmarkCell {
   runId: string;
   benchmarkRevision: string;
   evidenceArtifactSha256?: string;
+  toolchainArtifacts?: ITtscEvidenceBenchmarkToolchainArtifact[];
   model: string;
   effort: EvidenceBenchmarkEffort;
   runtime?: EvidenceBenchmarkRuntime.IAssignment;
@@ -63,6 +65,25 @@ interface ITtscEvidenceBenchmarkCell {
   reviewLedger?: "backend";
 }
 
+/**
+ * One locally packed workspace package a cell measured, as retained.
+ *
+ * A launch packs this repository's own toolchain instead of letting the
+ * measured workspace install a published release, so the run record has to say
+ * which packages that covered and which bytes each one was. Without it a report
+ * can only claim the workspace used the tree under test.
+ */
+interface ITtscEvidenceBenchmarkToolchainArtifact {
+  /** Package name the prepared workspace resolves to the archive. */
+  name: string;
+
+  /** Archive location inside the workspace, POSIX-relative to its root. */
+  dependency: string;
+
+  /** Lowercase hexadecimal SHA-256 of the archive as it was installed. */
+  sha256: string;
+}
+
 interface ITtscEvidenceBenchmarkRecordPaths {
   root: string;
   workspace: string;
@@ -77,6 +98,26 @@ interface ITtscEvidenceBenchmarkStateFile {
 }
 
 const EVIDENCE_BENCHMARK_PACKAGE_NAME = "@ttsc/evidence";
+
+/**
+ * Workspace package directories a launch packs for both arms.
+ *
+ * Upstream this benchmark resolves `ttsc` and `@ttsc/lint` from a catalog
+ * because they are external dependencies there. Here they are the workspace
+ * itself, and a measured tree that installed them from the registry would
+ * report on the last published release instead of the tree under test.
+ *
+ * The platform package is in the list because `ttsc` loads its native Go
+ * compiler from it as an optional dependency. Packing `ttsc` alone would put a
+ * locally built JavaScript wrapper in front of a published compiler binary,
+ * which is a pairing that exists nowhere else and measures neither side.
+ */
+const EVIDENCE_BENCHMARK_TOOLCHAIN_DIRECTORIES: readonly string[] = [
+  "packages/ttsc",
+  "packages/lint",
+  "packages/unplugin",
+  `packages/ttsc-${process.platform}-${process.arch}`,
+];
 
 const main = async (): Promise<void> => {
   const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
@@ -234,20 +275,28 @@ const main = async (): Promise<void> => {
     return;
   }
 
-  const temporary: string | undefined =
-    cell.arm === "evidence"
-      ? fs.mkdtempSync(path.join(os.tmpdir(), "evidence-benchmark-"))
-      : undefined;
+  // Both arms pack the toolchain, so the staging directory is unconditional
+  // where it used to exist for the Evidence archive alone.
+  const temporary: string = fs.mkdtempSync(
+    path.join(os.tmpdir(), "evidence-benchmark-"),
+  );
   const archive: string | undefined =
-    temporary === undefined ? undefined : path.join(temporary, "evidence.tgz");
+    cell.arm === "evidence" ? path.join(temporary, "evidence.tgz") : undefined;
   let prepared: ITtscEvidenceBenchmarkWorkspaceResult;
   try {
     await EvidenceBenchmarkRuntime.assertAvailable([cell.runtime!]);
+    const toolchain: ITtscEvidenceBenchmarkWorkspaceArtifact[] =
+      await packEvidenceBenchmarkToolchain(repository, temporary);
+    cell.toolchainArtifacts = toolchain.map((artifact) => ({
+      name: artifact.name,
+      dependency: `.benchmark-deps/${path.basename(artifact.archive)}`,
+      sha256: sha256(artifact.archive),
+    }));
     if (archive !== undefined) {
       const retainedArchive: string | undefined =
         process.env.EVIDENCE_BENCHMARK_ARCHIVE;
       if (retainedArchive === undefined)
-        await packEvidence(repository, archive);
+        await packWorkspacePackage(repository, "packages/evidence", archive);
       else {
         const source: string = path.resolve(retainedArchive);
         if (!fs.statSync(source).isFile())
@@ -276,10 +325,10 @@ const main = async (): Promise<void> => {
               name: EVIDENCE_BENCHMARK_PACKAGE_NAME,
               archive,
             },
+      toolchain,
     });
   } finally {
-    if (temporary !== undefined)
-      fs.rmSync(temporary, { recursive: true, force: true });
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
 
   if (
@@ -359,6 +408,9 @@ const runFromBackendStartCheckpoint = async (props: {
     throw new Error("Checkpoint source lacks an exact backend-start boundary.");
   requested.benchmarkRevision = sourceCell.benchmarkRevision;
   requested.evidenceArtifactSha256 = sourceCell.evidenceArtifactSha256;
+  // The derived run restores the source workspace rather than preparing one, so
+  // it measures the archives that workspace already carries.
+  requested.toolchainArtifacts = sourceCell.toolchainArtifacts;
   requested.runtime = sourceCell.runtime;
   if (requested.runtime !== undefined)
     await EvidenceBenchmarkRuntime.assertAvailable([requested.runtime]);
@@ -467,6 +519,20 @@ const runBenchmark = async (
     assertRegularFile(archive);
     if (sha256(archive) !== cell.evidenceArtifactSha256)
       throw new Error("Evidence benchmark artifact no longer matches its SHA.");
+  }
+  // The toolchain archives decide which compiler every measured command runs,
+  // so a resumed or derived run proves they are still the bytes the cell pinned
+  // for the same reason the Evidence archive does.
+  for (const artifact of cell.toolchainArtifacts ?? []) {
+    const archive: string = path.join(
+      records.workspace,
+      ...artifact.dependency.split("/"),
+    );
+    assertRegularFile(archive);
+    if (sha256(archive) !== artifact.sha256)
+      throw new Error(
+        `Benchmark toolchain artifact ${artifact.name} no longer matches its SHA.`,
+      );
   }
   const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
   const environment: NodeJS.ProcessEnv = sanitizeBenchmarkEnvironment(
@@ -823,8 +889,16 @@ export const assertEvidenceBenchmarkRecoveryRevision = (
 const sha256 = (file: string): string =>
   crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
-const packEvidence = async (
+/**
+ * Packs one workspace package of this repository into `archive`.
+ *
+ * @param repository Repository root the package directory is resolved against.
+ * @param directory POSIX-relative package directory, such as `packages/ttsc`.
+ * @param archive Absolute destination path of the produced tarball.
+ */
+const packWorkspacePackage = async (
   repository: string,
+  directory: string,
   archive: string,
 ): Promise<void> => {
   const entrypoint: string | undefined = process.env.npm_execpath;
@@ -837,7 +911,7 @@ const packEvidence = async (
       process.execPath,
       [entrypoint, "pack", "--out", archive],
       {
-        cwd: path.join(repository, "packages", "evidence"),
+        cwd: path.join(repository, ...directory.split("/")),
         env: process.env,
         shell: false,
         windowsHide: true,
@@ -851,13 +925,51 @@ const packEvidence = async (
         reject(
           new Error(
             [
-              "Evidence package pack exited with",
+              `Package pack of ${directory} exited with`,
               `code ${String(exitCode)} and signal ${String(signal)}.`,
             ].join(" "),
           ),
         );
     });
   });
+};
+
+/**
+ * Packs every toolchain package of
+ * {@link EVIDENCE_BENCHMARK_TOOLCHAIN_DIRECTORIES} into `temporary`.
+ *
+ * Each dependency name comes from the packed package's own manifest rather than
+ * from a constant beside the directory list. A package renamed in this
+ * repository would otherwise bind the workspace to a name nothing publishes,
+ * and pnpm would install the registry copy of the old one without complaint.
+ */
+const packEvidenceBenchmarkToolchain = async (
+  repository: string,
+  temporary: string,
+): Promise<ITtscEvidenceBenchmarkWorkspaceArtifact[]> => {
+  const artifacts: ITtscEvidenceBenchmarkWorkspaceArtifact[] = [];
+  for (const directory of EVIDENCE_BENCHMARK_TOOLCHAIN_DIRECTORIES) {
+    const location: string = path.join(repository, ...directory.split("/"));
+    if (!fs.existsSync(location) || !fs.statSync(location).isDirectory())
+      throw new Error(
+        `Benchmark toolchain package directory is missing: ${directory}.`,
+      );
+    const manifest: string = path.join(location, "package.json");
+    if (!fs.existsSync(manifest))
+      throw new Error(
+        `Benchmark toolchain package has no manifest: ${directory}.`,
+      );
+    const { name } = typia.assert<{ name: string }>(
+      JSON.parse(fs.readFileSync(manifest, "utf8")),
+    );
+    const archive: string = path.join(
+      temporary,
+      `${path.basename(directory)}.tgz`,
+    );
+    await packWorkspacePackage(repository, directory, archive);
+    artifacts.push({ name, archive });
+  }
+  return artifacts;
 };
 
 const initializeAppendOnly = (file: string): void => {

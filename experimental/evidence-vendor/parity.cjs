@@ -143,7 +143,7 @@ const EXCEPTIONS = new Map([
   ],
   [
     "benchmarks/evidence/src/EvidenceBenchmarkWorkspace.ts",
-    "re-rooted through EvidenceBenchmarkLayout, and `workspacePackageVersions` is restored because a workspace never lists itself in a catalog",
+    "re-rooted through EvidenceBenchmarkLayout, `workspacePackageVersions` is restored because a workspace never lists itself in a catalog, and the delivered workspace overrides the toolchain to locally packed archives because this repository is ttsc, where upstream's registry resolution would measure a published release",
   ],
   [
     "benchmarks/evidence/src/EvidenceBenchmarkCheckpoint.ts",
@@ -159,7 +159,15 @@ const EXCEPTIONS = new Map([
   ],
   [
     "benchmarks/evidence/src/executable/EvidenceBenchmarkCommandLine.ts",
-    "re-rooted through EvidenceBenchmarkLayout",
+    "re-rooted through EvidenceBenchmarkLayout, and packs the workspace toolchain per cell because this repository is ttsc, so the benchmark installs `ttsc`, `@ttsc/lint`, `@ttsc/unplugin`, and the platform package from locally packed archives rather than the registry",
+  ],
+  [
+    "benchmarks/evidence/src/structures/ITtscEvidenceBenchmarkWorkspaceArtifact.ts",
+    "no longer Evidence-only: this repository is ttsc, so the same archive shape also carries the workspace toolchain both arms install locally",
+  ],
+  [
+    "benchmarks/evidence/src/structures/ITtscEvidenceBenchmarkWorkspaceRequest.ts",
+    "carries the toolchain archives because this repository is ttsc, so the benchmark installs the workspace toolchain from locally packed archives rather than the registry",
   ],
   [
     "benchmarks/evidence/src/executable/EvidenceBenchmarkDashboard.ts",

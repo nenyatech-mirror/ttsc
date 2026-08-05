@@ -26,4 +26,20 @@ export interface ITtscEvidenceBenchmarkWorkspaceRequest {
 
   /** Evidence package archive, required only by the Evidence arm. */
   artifact?: ITtscEvidenceBenchmarkWorkspaceArtifact;
+
+  /**
+   * Locally packed workspace toolchain archives, installed into both arms.
+   *
+   * This repository builds the compiler the measured workspace runs, so a
+   * launch packs `ttsc`, `@ttsc/lint`, `@ttsc/unplugin`, and the platform
+   * package `ttsc` loads its native binary from, and passes them here. Both
+   * arms receive the identical set: the toolchain is the tree under test, not
+   * an arm treatment, and an arm that resolved it from the registry would
+   * measure a published release instead.
+   *
+   * Omitting it leaves those names to the workspace catalog, which resolves
+   * them from the registry. That is the right answer only where this repository
+   * is not the one that publishes them.
+   */
+  toolchain?: readonly ITtscEvidenceBenchmarkWorkspaceArtifact[];
 }
