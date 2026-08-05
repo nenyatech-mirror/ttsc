@@ -1,5 +1,5 @@
-import type { IDiagnosis } from "{{apiPackageName}}";
 import { HttpException, type HttpExceptionOptions } from "@nestjs/common";
+import type { IDiagnosis } from "{{apiPackageName}}";
 
 /** Creates consistently shaped HTTP exceptions. */
 export namespace ErrorUtil {

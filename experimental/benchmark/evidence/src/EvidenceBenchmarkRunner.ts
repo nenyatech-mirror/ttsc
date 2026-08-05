@@ -238,6 +238,40 @@ export namespace EvidenceBenchmarkRunner {
     let resumeSnapshotRecordIndex: number | undefined;
     let resumeAdoptedUndispatchedGoal = false;
     let resumeNativeCompletedInterruptedGoal = false;
+    /**
+     * Objective the thread still holds when an operator warning supersedes it.
+     *
+     * `warn` drops the retained Goal record so this run recomposes the
+     * objective with the warning, because `thread/goal/set` is the only channel
+     * into the thread. The thread meanwhile still holds the Goal that record
+     * described, and the dropped record took the turn ID and the counters that
+     * named it, so the resume has nothing retained to reconcile against and
+     * every replay reads as drift.
+     *
+     * The superseded objective is recoverable without it: the same instruction
+     * bytes composed without the warning. So a warned resume proves its
+     * boundary from the thread instead — counters identical to the last durable
+     * write, and a held objective identical to this composition — and then
+     * clears that Goal and issues the warned one.
+     */
+    const supersededObjectiveText: string | undefined = (() => {
+      if (fresh || forking) return undefined;
+      const record: ITtscEvidenceBenchmarkGoalRecord = current();
+      if (record.goal !== null || record.tokenUsageTurnId !== null)
+        return undefined;
+      const warning = state.operatorWarnings?.find(
+        (candidate) => candidate.instructionIndex === record.index,
+      );
+      const entry = entries[record.index];
+      if (warning === undefined || entry === undefined) return undefined;
+      return EvidenceBenchmarkInstruction.objective({
+        arm: state.arm,
+        instructionsRoot: props.instructionsRoot,
+        entry,
+      }).objectiveText;
+    })();
+    let supersededUsageTurnId: string | undefined;
+    let resumeSupersededGoal = false;
     let resumeUsageReplay:
       | {
           turnId: string;
@@ -681,6 +715,20 @@ export namespace EvidenceBenchmarkRunner {
               publish();
               return;
             }
+            // A superseded Goal replays the interrupted turn the dropped record
+            // named. Equality with the last durable write is the whole proof
+            // that nothing ran past it, and the Goal snapshot that follows
+            // decides whether this is the warned boundary.
+            if (
+              supersededObjectiveText !== undefined &&
+              record.goal === null &&
+              record.tokenUsageTurnId === null &&
+              sameUsage(usage, state.threadTokenUsage)
+            ) {
+              supersededUsageTurnId = params.turnId;
+              publish();
+              return;
+            }
             if (
               currentCanAdoptReplay &&
               usageAdvanced(usage, state.threadTokenUsage)
@@ -748,6 +796,27 @@ export namespace EvidenceBenchmarkRunner {
             );
           const retained: ITtscEvidenceBenchmarkGoalRecord | undefined =
             record.goal !== null ? record : previous;
+          // Decided before the undispatched boundary, because a warned Goal
+          // that consumed nothing still leaves the thread holding the objective
+          // this record no longer carries, and adopting it there would validate
+          // the superseded text against the warned one.
+          if (
+            supersededObjectiveText !== undefined &&
+            record.goal === null &&
+            record.tokenUsageTurnId === null &&
+            supersededUsageTurnId !== undefined &&
+            isRetainedGoalStatus(goal.status) &&
+            goal.threadId === state.sessionId &&
+            sameNativeGoalObjective(goal.objective, supersededObjectiveText)
+          ) {
+            resumeSnapshot = structuredClone(goal);
+            resumeSnapshotRecordIndex = record.index;
+            resumeSupersededGoal = true;
+            resumeSnapshotPending = false;
+            resolveResumeSnapshot();
+            publish();
+            return;
+          }
           const previousBoundaryComplete: boolean =
             record.index === 0
               ? previous === undefined
@@ -1024,7 +1093,7 @@ export namespace EvidenceBenchmarkRunner {
     try {
       await request("initialize", {
         clientInfo: {
-          name: "@samchon/evidence-benchmark",
+          name: "@ttsc/evidence-benchmark",
           version: "0.4.4",
         },
         capabilities: {
@@ -1155,7 +1224,37 @@ export namespace EvidenceBenchmarkRunner {
               instructionIndex: record.index,
               nativeGoal: goal,
             });
-          else if (record.goal === null) {
+          else if (resumeSupersededGoal) {
+            if (
+              supersededObjectiveText === undefined ||
+              resumeSnapshotRecordIndex !== record.index ||
+              record.goal !== null ||
+              record.tokenUsageTurnId !== null ||
+              goal.threadId !== sessionId ||
+              !isRetainedGoalStatus(goal.status) ||
+              !sameNativeGoalObjective(goal.objective, supersededObjectiveText)
+            )
+              finish("interrupted", {
+                name: "EvidenceBenchmarkResumeInterruption",
+                message:
+                  "Retained state has no exact superseded Goal boundary.",
+                instructionIndex: record.index,
+                nativeGoal: goal,
+                nativeGoalSnapshot: resumeSnapshot,
+              });
+            else {
+              // Cleared before the warned objective is set, so the thread never
+              // holds two Goals. The buffered lifecycle describes the turn the
+              // superseded Goal owned, which the reissued boundary does not,
+              // and replaying it would validate that Goal against this record's
+              // recomposed objective.
+              await request("thread/goal/clear", { threadId: sessionId });
+              await notifications;
+              resumeLifecycle.splice(0);
+              resumeReconciled = true;
+              if (outcome === undefined) await beginGoal();
+            }
+          } else if (record.goal === null) {
             const previous: ITtscEvidenceBenchmarkGoalRecord | undefined =
               state.goals.find(
                 (candidate) => candidate.index === record.index - 1,

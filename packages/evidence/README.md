@@ -1,5 +1,7 @@
 # `@ttsc/evidence`
 
+![Logo](https://raw.githubusercontent.com/samchon/lint-plugin-evidence/master/og.jpg)
+
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/samchon/ttsc/blob/master/LICENSE) [![NPM Version](https://img.shields.io/npm/v/@ttsc/evidence.svg)](https://www.npmjs.com/package/@ttsc/evidence) [![NPM Downloads](https://img.shields.io/npm/dm/@ttsc/evidence.svg)](https://www.npmjs.com/package/@ttsc/evidence) [![Build Status](https://github.com/samchon/ttsc/actions/workflows/build.yml/badge.svg)](https://github.com/samchon/ttsc/actions/workflows/build.yml) [![Discord Badge](https://img.shields.io/badge/discord-samchon-d91965?style=flat&labelColor=5866f2&logo=discord&logoColor=white&link=https://discord.gg/E94XhzrUCZ)](https://discord.gg/E94XhzrUCZ)
 
 The evidence graph for the AI coding era: the guardrail for goal mode.
@@ -515,6 +517,6 @@ Your [donation](https://github.com/sponsors/samchon) encourages `@ttsc/evidence`
 - [`ttsc`](https://github.com/samchon/ttsc): the `typescript-go` toolchain this plugin runs on.
 - [`@ttsc/lint`](https://github.com/samchon/ttsc/tree/master/packages/lint): the lint engine that links this rule into the compiler.
 
-Evidence Graph began as an independent package while its rule model and adoption path matured. It now ships from the `ttsc` repository as `@ttsc/evidence`, so its rules compile against the `@ttsc/lint` contributor API in this tree rather than against a published release.
+Evidence Graph is being developed as an independent package while its rule model and adoption path mature. Once complete and stable, it may move into the `ttsc` repository as the official `@ttsc/lint-plugin-evidence` package.
 
 The longer-term plan also reaches beyond TypeScript: a standalone, language-agnostic evidence checker that can enforce the same graph across documents and code in any programming language, without depending on a single compiler or lint engine.

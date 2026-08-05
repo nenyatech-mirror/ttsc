@@ -10,7 +10,7 @@
 //
 // In this workspace the replace directives point at the sibling packages, so
 // the Go tests compile against the ttsc and @ttsc/lint sources in this tree
-// rather than a published release — which is the reason the package lives here.
+// rather than a published release. That is the reason the package lives here.
 module github.com/samchon/ttsc/packages/evidence
 
 go 1.26

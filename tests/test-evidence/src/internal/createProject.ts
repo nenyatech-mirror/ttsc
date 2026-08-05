@@ -86,6 +86,7 @@ export const createProject = (
   // compiler resolvable from the consuming project — it is a real consumer
   // requirement, not a test artifact.
   const modules: string = path.join(directory, "node_modules");
+  fs.mkdirSync(path.join(modules, "@samchon"), { recursive: true });
   fs.mkdirSync(path.join(modules, "@ttsc"), { recursive: true });
   linkEvidencePackage(modules);
   linkDirectory(

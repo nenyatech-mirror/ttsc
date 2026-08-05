@@ -26,7 +26,7 @@ Instructions remain in the benchmark repository. The runner reads each Markdown 
 Start a new cell from the repository root:
 
 ```bash
-pnpm --filter @samchon/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> [run-id]
+pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> [run-id]
 ```
 
 Omit `run-id` to create a cell under `benchmark/output/<subject>/<engine>/<arm>/runs/<run-id>/`. Pass an existing run ID only to resume that exact engine, subject, arm, model, effort, workspace, and session; the runner compares all of them against the retained cell and refuses on any difference.
@@ -42,7 +42,7 @@ Three options change what a run does:
 After `backend-start` completes, the runner stores a workspace and native-turn checkpoint before starting `backend-review`. If a later instruction proves defective, create a new run from that point:
 
 ```bash
-pnpm --filter @samchon/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> --from-backend-start <source-run-id>
+pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> --from-backend-start <source-run-id>
 ```
 
 The derived run verifies the retained cell and exact completed `backend-start` boundary, restores that workspace and reinstalls its dependencies, reapplies the current non-product instruction surface — `AGENTS.md` and `.agents/` — forks the native thread through the retained terminal turn, and reads the current downstream instructions. An explicit operator launch does not reject the checkpoint because repository inputs changed after it was created.
@@ -56,7 +56,7 @@ Only the Plain arm stops for a verdict. It stops after every Backend, Frontend, 
 The runner produces the verdict itself: at the boundary it spawns a fresh Codex thread on the cell's own model and effort, which reads the attempt's stage log and the measured workspace and returns a decision. Three attempts are permitted at one boundary, and a resume retries a failed one. Only after the third failure does the run require a hand-written verdict:
 
 ```bash
-pnpm --filter @samchon/evidence-benchmark supervise <subject> <run-id> <verdict.json>
+pnpm --filter @ttsc/evidence-benchmark supervise <subject> <run-id> <verdict.json>
 ```
 
 A verdict carries `decision` and `rationale` only; the runner refuses one carrying `feedback`, so no verdict text ever reaches the cell. A failing scope receives the identical prescribed reminder, and eight supplementation attempts are permitted before the run retains `quality-failed`.
@@ -66,7 +66,7 @@ A verdict carries `decision` and `rationale` only; the runner refuses one carryi
 An operator warning is a separate channel with its own command:
 
 ```bash
-pnpm --filter @samchon/evidence-benchmark warn <subject> <evidence|plain> <run-id> <warning.json>
+pnpm --filter @ttsc/evidence-benchmark warn <subject> <evidence|plain> <run-id> <warning.json>
 ```
 
 The cell must be stopped first. The runner refuses feedback that names the machinery outside the workspace, because a cell told it is being measured stops being a measurement.
@@ -76,8 +76,8 @@ The cell must be stopped first. The runner refuses feedback that names the machi
 Raw run records and measured workspaces stay under the ignored `benchmark/output/` directory. Generate the tracked latest-run aggregate and comparison charts with:
 
 ```bash
-pnpm --filter @samchon/evidence-benchmark audit-suspensions
-pnpm --filter @samchon/evidence-benchmark report
+pnpm --filter @ttsc/evidence-benchmark audit-suspensions
+pnpm --filter @ttsc/evidence-benchmark report
 ```
 
 The suspension audit compares each latest run with Windows Kernel-Power disconnected-standby intervals. It records an interval in the run's `suspensions.json` only when retained events prove the same native process existed on both sides and emitted nothing during the interval. Reports exclude those verified intervals from total and stage work time without modifying `state.json`. The audit is Windows-only and throws elsewhere rather than reporting zero intervals.
@@ -91,7 +91,7 @@ Pass repeated `--run-id <run-id>` arguments to both commands to audit and publis
 The live campaign dashboard is a separate command that takes no arguments and always renders the latest launched run of each cell:
 
 ```bash
-pnpm --filter @samchon/evidence-benchmark dashboard
+pnpm --filter @ttsc/evidence-benchmark dashboard
 ```
 
 ## Instruction sequence

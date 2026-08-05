@@ -243,9 +243,10 @@ export namespace EvidenceBenchmarkWorkspace {
    * A template asks for a version by package name. In the repository this
    * benchmark came from, `ttsc` and its plugins were catalog entries, because
    * they were external dependencies there. Here they are the workspace itself,
-   * and a workspace never lists itself in a catalog. Reading their manifests is
-   * what keeps a template's `{{version:ttsc}}` answerable without asking this
-   * repository to duplicate its own version numbers into a catalog.
+   * and a workspace never lists itself in a catalog. Reading their manifests
+   * keeps `{{version:ttsc}}` answerable without asking this repository to
+   * duplicate its own version numbers into a catalog that exists for
+   * externals.
    */
   function repositoryCatalogVersions(repository: string): Map<string, string> {
     const parsed: unknown = YAML.parse(

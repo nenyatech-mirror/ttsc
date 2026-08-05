@@ -2,7 +2,7 @@
   "private": true,
   "name": "@ttsc/evidence-benchmark",
   "version": "0.24.0",
-  "description": "Agent benchmark for @ttsc/evidence: does an unattended agent actually satisfy a requirement, and what does enforcement cost.",
+  "description": "Minimal Codex runner for the Evidence benchmark.",
   "exports": {
     "./runner": "./src/EvidenceBenchmarkRunner.ts",
     "./workspace": "./src/EvidenceBenchmarkWorkspace.ts"

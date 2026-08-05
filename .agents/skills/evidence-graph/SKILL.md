@@ -1,6 +1,6 @@
 ---
 name: evidence-graph
-description: Defines the evidence graph domain model for @ttsc/evidence — the tag grammar, node kinds, hierarchy, reference resolution, obligation coverage, reference policies, and exclusions. Use before changing rule semantics, the tag grammar, the configuration surface, or a diagnostic message; do not use for the mechanics of the Go rule API or the contributor descriptor, which the development and project skills own.
+description: Defines the evidence graph domain model for @ttsc/evidence — the tag grammar, node kinds, hierarchy, reference resolution, obligation coverage, reference policies, and exclusions. Use before changing rule semantics, the tag grammar, the configuration surface, or a diagnostic message; do not use for the mechanics of the Go rule API, which the lint-rule-authoring skill owns.
 ---
 
 # Evidence Graph

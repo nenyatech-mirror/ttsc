@@ -1,7 +1,4 @@
-import {
-  evidence,
-  type ITtscEvidenceGraphConfig,
-} from "@ttsc/evidence";
+import { type ITtscEvidenceGraphConfig, evidence } from "@ttsc/evidence";
 import type { ITtscLintConfig } from "@ttsc/lint";
 
 /**

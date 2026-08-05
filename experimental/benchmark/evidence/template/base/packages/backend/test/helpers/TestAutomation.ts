@@ -1,5 +1,5 @@
-import * as api from "{{apiPackageName}}";
 import { DynamicExecutor } from "@nestia/e2e";
+import * as api from "{{apiPackageName}}";
 
 import { MyConfiguration } from "../../src/MyConfiguration";
 

@@ -1,5 +1,5 @@
-import * as api from "{{apiPackageName}}";
 import typia from "typia";
+import * as api from "{{apiPackageName}}";
 
 /**
  * Validate that the generated health accessor reaches the running backend.

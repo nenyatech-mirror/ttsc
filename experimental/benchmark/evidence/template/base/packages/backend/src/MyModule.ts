@@ -2,9 +2,7 @@ import { DynamicModule } from "@nestia/core";
 import type { ModuleMetadata } from "@nestjs/common/interfaces";
 import path from "node:path";
 
-/**
- * Owns the one controller population shared by runtime and Nestia generation.
- */
+/** Owns the one controller population shared by runtime and Nestia generation. */
 export namespace MyModule {
   /**
    * Discovers every runtime controller and mounts shared Nest metadata.
