@@ -7,6 +7,7 @@ import typia from "typia";
 
 import { EvidenceBenchmarkCheckpoint } from "../EvidenceBenchmarkCheckpoint";
 import { EvidenceBenchmarkInstruction } from "../EvidenceBenchmarkInstruction";
+import { EvidenceBenchmarkLayout } from "../EvidenceBenchmarkLayout";
 import { EvidenceBenchmarkRunner } from "../EvidenceBenchmarkRunner";
 import { EvidenceBenchmarkRuntime } from "../EvidenceBenchmarkRuntime";
 import { EvidenceBenchmarkStageLog } from "../EvidenceBenchmarkStageLog";
@@ -78,7 +79,7 @@ interface ITtscEvidenceBenchmarkStateFile {
 const EVIDENCE_BENCHMARK_PACKAGE_NAME = "@ttsc/evidence";
 
 const main = async (): Promise<void> => {
-  const repository: string = path.resolve(__dirname, "../../..");
+  const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
   const options: ITtscEvidenceBenchmarkArguments =
     parseEvidenceBenchmarkArguments(process.argv.slice(2));
   const runnerRevision: string = readEvidenceBenchmarkRevision(repository);
@@ -102,8 +103,7 @@ const main = async (): Promise<void> => {
     reviewLedger: options.reviewLedger,
   };
   const output: string = path.join(
-    repository,
-    "benchmark",
+    EvidenceBenchmarkLayout.assetsRoot(repository),
     "output",
     requestedCell.subject,
     requestedCell.engine,
@@ -468,7 +468,7 @@ const runBenchmark = async (
     if (sha256(archive) !== cell.evidenceArtifactSha256)
       throw new Error("Evidence benchmark artifact no longer matches its SHA.");
   }
-  const repository: string = path.resolve(__dirname, "../../..");
+  const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
   const environment: NodeJS.ProcessEnv = sanitizeBenchmarkEnvironment(
     process.env,
   );
@@ -520,7 +520,10 @@ const runBenchmark = async (
         state,
         cwd: records.workspace,
         runRoot: records.root,
-        instructionsRoot: path.join(repository, "benchmark", "instructions"),
+        instructionsRoot: path.join(
+          EvidenceBenchmarkLayout.assetsRoot(repository),
+          "instructions",
+        ),
         model: cell.model,
         effort: cell.effort,
         runnerRevision,
@@ -591,8 +594,7 @@ const evidenceBenchmarkOutputPath = (
   runId: string,
 ): string =>
   path.join(
-    repository,
-    "benchmark",
+    EvidenceBenchmarkLayout.assetsRoot(repository),
     "output",
     subject,
     engine,

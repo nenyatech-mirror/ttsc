@@ -71,9 +71,9 @@ That run is finished. It never resumes, and it continues only as a checkpoint-de
 
 Each cell gets a new ignored workspace, prepared before any model use:
 
-1. Copy `benchmark/template/base` and render its variables.
-2. Apply `benchmark/template/<arm>` over it. Both arms get an overlay — each splices its own `AGENTS.md` and review skill — but only Evidence adds the package, claims, tags, and graph guidance.
-3. Copy `benchmark/requirements/<subject>/` byte-for-byte into the workspace's `docs/analysis/`.
+1. Copy `experimental/benchmark/evidence/template/base` and render its variables.
+2. Apply `experimental/benchmark/evidence/template/<arm>` over it. Both arms get an overlay — each splices its own `AGENTS.md` and review skill — but only Evidence adds the package, claims, tags, and graph guidance.
+3. Copy `experimental/benchmark/evidence/requirements/<subject>/` byte-for-byte into the workspace's `docs/analysis/`.
 4. For Evidence only, install the locally packed Evidence archive and pin its SHA-256 to the cell. Plain never reads or installs it.
 5. Run `pnpm install`.
 6. Initialize the workspace as a Git repository and commit the prepared baseline.
@@ -95,7 +95,7 @@ The runner strips the variable from every child environment, so a measured cell 
 
 ## The Objective Sequence
 
-One native session receives its arm's frozen base sequence, read from `benchmark/instructions/<arm>/<scope>/<step>.md`:
+One native session receives its arm's frozen base sequence, read from `experimental/benchmark/evidence/instructions/<arm>/<scope>/<step>.md`:
 
 `backend-start` → `backend-review` → `backend-final` → `frontend-start` → `frontend-review` → `frontend-final` → `overall-review` → `overall-final`
 

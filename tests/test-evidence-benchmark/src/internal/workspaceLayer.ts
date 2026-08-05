@@ -16,7 +16,8 @@ import path from "node:path";
  * a claim that goes quiet when enabled fails instead of passing.
  *
  * Every layer is written into the materialized temporary workspace. Nothing
- * here writes to `benchmark/template/**`, which is frozen.
+ * here writes to `experimental/benchmark/evidence/template/**`, which is
+ * frozen.
  */
 export const materializeClaimLayer = (props: {
   readonly workspace: string;

@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { EvidenceBenchmarkCheckpoint } from "../EvidenceBenchmarkCheckpoint";
+import { EvidenceBenchmarkLayout } from "../EvidenceBenchmarkLayout";
 import { EvidenceBenchmarkSupervision } from "../EvidenceBenchmarkSupervision";
 
 const main = (): void => {
@@ -16,11 +17,10 @@ const main = (): void => {
     process.argv.length !== 5
   )
     throw new Error("Usage: pnpm supervise <subject> <run-id> <verdict.json>");
-  const repository: string = path.resolve(__dirname, "../../..");
+  const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
   const verdict = EvidenceBenchmarkSupervision.decide({
     runRoot: path.join(
-      repository,
-      "benchmark",
+      EvidenceBenchmarkLayout.assetsRoot(repository),
       "output",
       subject,
       "codex",
@@ -28,7 +28,10 @@ const main = (): void => {
       "runs",
       runId,
     ),
-    instructionsRoot: path.join(repository, "benchmark", "instructions"),
+    instructionsRoot: path.join(
+      EvidenceBenchmarkLayout.assetsRoot(repository),
+      "instructions",
+    ),
     verdictFile,
     subject,
     inputIdentity: EvidenceBenchmarkCheckpoint.identifyInputs({

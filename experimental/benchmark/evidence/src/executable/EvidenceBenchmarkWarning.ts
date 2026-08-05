@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { EvidenceBenchmarkLayout } from "../EvidenceBenchmarkLayout";
 import { EvidenceBenchmarkSupervision } from "../EvidenceBenchmarkSupervision";
 
 const main = (): void => {
@@ -18,11 +19,10 @@ const main = (): void => {
     throw new Error(
       "Usage: pnpm warn <subject> <evidence|plain> <run-id> <warning.json>",
     );
-  const repository: string = path.resolve(__dirname, "../../..");
+  const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
   const verdict = EvidenceBenchmarkSupervision.warn({
     runRoot: path.join(
-      repository,
-      "benchmark",
+      EvidenceBenchmarkLayout.assetsRoot(repository),
       "output",
       subject,
       "codex",
@@ -30,7 +30,10 @@ const main = (): void => {
       "runs",
       runId,
     ),
-    instructionsRoot: path.join(repository, "benchmark", "instructions"),
+    instructionsRoot: path.join(
+      EvidenceBenchmarkLayout.assetsRoot(repository),
+      "instructions",
+    ),
     warningFile,
     subject,
   });

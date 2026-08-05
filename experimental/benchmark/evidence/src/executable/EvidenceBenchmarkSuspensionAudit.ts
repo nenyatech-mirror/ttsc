@@ -1,9 +1,10 @@
 import path from "node:path";
 
+import { EvidenceBenchmarkLayout } from "../EvidenceBenchmarkLayout";
 import { auditWindowsEvidenceBenchmarkSuspensions } from "../EvidenceBenchmarkSuspensionAudit";
 import type { ITtscEvidenceBenchmarkSuspensionAuditResult } from "../EvidenceBenchmarkSuspensionAudit";
 
-const repository: string = path.resolve(__dirname, "../../..");
+const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
 const args: string[] = process.argv.slice(2);
 const runIds: string[] = [];
 for (let index: number = 0; index < args.length; ++index) {

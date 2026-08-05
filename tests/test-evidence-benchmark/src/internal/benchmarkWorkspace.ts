@@ -15,8 +15,9 @@ import { repositoryRoot } from "./suiteRoot";
  * One subject is enough and the smallest is the cheapest: what a case asserts
  * is that a population is non-empty and that its units are the ones the
  * documents on disk declare, and neither property is subject-specific. The
- * expectation is derived from whatever `benchmark/requirements/<subject>/`
- * contains, so choosing a subject fixes the cost, not the assertion.
+ * expectation is derived from whatever
+ * `experimental/benchmark/evidence/requirements/<subject>/` contains, so
+ * choosing a subject fixes the cost, not the assertion.
  */
 const SUBJECT = "todo";
 
@@ -141,10 +142,10 @@ const git = (cwd: string, argumentList: readonly string[]): string => {
 /**
  * Creates the one temporary directory every prepared workspace lives under.
  *
- * `benchmark/output/` is where a measured run is retained and is never written
- * by a test, so these trees go to the OS temporary directory. The removal is
- * registered on process exit rather than in each case's `finally`, because the
- * workspaces outlive individual cases by design.
+ * `experimental/benchmark/evidence/output/` is where a measured run is retained
+ * and is never written by a test, so these trees go to the OS temporary
+ * directory. The removal is registered on process exit rather than in each
+ * case's `finally`, because the workspaces outlive individual cases by design.
  */
 const suiteTemporaryDirectory = (): string => {
   if (suiteDirectory !== undefined) return suiteDirectory;

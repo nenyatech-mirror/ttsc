@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import typia from "typia";
 
+import { EvidenceBenchmarkLayout } from "./EvidenceBenchmarkLayout";
 import type { ITtscEvidenceBenchmarkCheckpointStorage } from "./structures/ITtscEvidenceBenchmarkCheckpointStorage";
 import type { ITtscEvidenceBenchmarkInputIdentity } from "./structures/ITtscEvidenceBenchmarkInputIdentity";
 import type { ITtscEvidenceBenchmarkWorkspaceIdentity } from "./structures/ITtscEvidenceBenchmarkWorkspaceIdentity";
@@ -50,19 +51,41 @@ export namespace EvidenceBenchmarkCheckpoint {
     const repository: string = path.resolve(props.repository);
     return {
       templateSha256: hashRoots([
-        ["base", path.join(repository, "benchmark", "template", "base")],
-        [props.arm, path.join(repository, "benchmark", "template", props.arm)],
+        [
+          "base",
+          path.join(
+            EvidenceBenchmarkLayout.assetsRoot(repository),
+            "template",
+            "base",
+          ),
+        ],
+        [
+          props.arm,
+          path.join(
+            EvidenceBenchmarkLayout.assetsRoot(repository),
+            "template",
+            props.arm,
+          ),
+        ],
       ]),
       requirementsSha256: hashRoots([
         [
           props.subject,
-          path.join(repository, "benchmark", "requirements", props.subject),
+          path.join(
+            EvidenceBenchmarkLayout.assetsRoot(repository),
+            "requirements",
+            props.subject,
+          ),
         ],
       ]),
       instructionsSha256: hashRoots([
         [
           props.arm,
-          path.join(repository, "benchmark", "instructions", props.arm),
+          path.join(
+            EvidenceBenchmarkLayout.assetsRoot(repository),
+            "instructions",
+            props.arm,
+          ),
         ],
       ]),
     };

@@ -5,6 +5,7 @@ import path from "node:path";
 import typia from "typia";
 
 import { collectEvidenceBenchmarkApiCost } from "./EvidenceBenchmarkApiCost";
+import { EvidenceBenchmarkLayout } from "./EvidenceBenchmarkLayout";
 import { EvidenceBenchmarkStageLog } from "./EvidenceBenchmarkStageLog";
 import type { ITtscEvidenceBenchmarkApiCost } from "./structures/ITtscEvidenceBenchmarkApiCost";
 import type {
@@ -138,7 +139,7 @@ export const collectEvidenceBenchmarkReport = (
   includeApiCost: boolean = false,
 ): ITtscEvidenceBenchmarkReport => {
   const scanned: IDashboardRun[] = scanRuns(
-    path.join(repository, "benchmark", "output"),
+    path.join(EvidenceBenchmarkLayout.assetsRoot(repository), "output"),
   );
   const latest: IDashboardRun[] =
     runIds === undefined

@@ -1,8 +1,6 @@
-import path from "node:path";
-
 import type { IRunResult } from "../internal/IRunResult";
 import { runScript } from "../internal/runScript";
-import { repositoryRoot } from "../internal/suiteRoot";
+import { benchmarkRoot } from "../internal/suiteRoot";
 
 /**
  * Verifies the command line still executes when launched as its own entry.
@@ -24,7 +22,7 @@ import { repositoryRoot } from "../internal/suiteRoot";
 export const test_benchmark_command_line_runs_from_its_own_entry =
   async (): Promise<void> => {
     const result: IRunResult = runScript({
-      cwd: path.join(repositoryRoot, "benchmark"),
+      cwd: benchmarkRoot,
       script: "start",
       timeout: 300_000,
     });

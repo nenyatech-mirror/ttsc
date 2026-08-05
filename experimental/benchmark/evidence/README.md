@@ -12,7 +12,7 @@ Each cell uses a new ignored workspace.
 
 1. Copy the shared base template into the workspace and render its variables.
 2. Apply the arm overlay. Both arms splice their own `AGENTS.md` and review skill; only Evidence adds the package, claims, tags, and graph guidance.
-3. Copy the selected `benchmark/requirements/<subject>/` directory exactly into `docs/analysis/`. Treat its paths and bytes as opaque input.
+3. Copy the selected `experimental/benchmark/evidence/requirements/<subject>/` directory exactly into `docs/analysis/`. Treat its paths and bytes as opaque input.
 4. Add the locally packed Evidence `.tgz` only for the Evidence arm, and record its SHA-256 on the cell.
 5. Run `pnpm install`.
 6. Initialize the workspace as a Git repository and commit the prepared baseline.
@@ -29,7 +29,7 @@ Start a new cell from the repository root:
 pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> [run-id]
 ```
 
-Omit `run-id` to create a cell under `benchmark/output/<subject>/<engine>/<arm>/runs/<run-id>/`. Pass an existing run ID only to resume that exact engine, subject, arm, model, effort, workspace, and session; the runner compares all of them against the retained cell and refuses on any difference.
+Omit `run-id` to create a cell under `experimental/benchmark/evidence/output/<subject>/<engine>/<arm>/runs/<run-id>/`. Pass an existing run ID only to resume that exact engine, subject, arm, model, effort, workspace, and session; the runner compares all of them against the retained cell and refuses on any difference.
 
 The launcher also reads the repository `HEAD` as the campaign's benchmark revision and refuses to start while anything is uncommitted or untracked.
 
@@ -73,7 +73,7 @@ The cell must be stopped first. The runner refuses feedback that names the machi
 
 ## Publishable reports
 
-Raw run records and measured workspaces stay under the ignored `benchmark/output/` directory. Generate the tracked latest-run aggregate and comparison charts with:
+Raw run records and measured workspaces stay under the ignored `experimental/benchmark/evidence/output/` directory. Generate the tracked latest-run aggregate and comparison charts with:
 
 ```bash
 pnpm --filter @ttsc/evidence-benchmark audit-suspensions
@@ -82,7 +82,7 @@ pnpm --filter @ttsc/evidence-benchmark report
 
 The suspension audit compares each latest run with Windows Kernel-Power disconnected-standby intervals. It records an interval in the run's `suspensions.json` only when retained events prove the same native process existed on both sides and emitted nothing during the interval. Reports exclude those verified intervals from total and stage work time without modifying `state.json`. The audit is Windows-only and throws elsewhere rather than reporting zero intervals.
 
-The command writes `benchmark/aggregate/summary.json`, stable per-cell JSON under `benchmark/aggregate/cells/<model>/<subject>/<arm>.json`, and the `tokens.svg` and `time.svg` charts. Every artifact renders or copies values from the same retained aggregate without recalculating them.
+The command writes `experimental/benchmark/evidence/aggregate/summary.json`, stable per-cell JSON under `experimental/benchmark/evidence/aggregate/cells/<model>/<subject>/<arm>.json`, and the `tokens.svg` and `time.svg` charts. Every artifact renders or copies values from the same retained aggregate without recalculating them.
 
 The report reconstructs OpenRouter API-equivalent USD cost from each native request's token categories and context tier, then publishes it only when those requests exactly match the retained total.
 

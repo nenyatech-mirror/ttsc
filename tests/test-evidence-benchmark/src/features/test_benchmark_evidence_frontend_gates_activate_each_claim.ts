@@ -23,7 +23,7 @@ import { materializeClaimLayer } from "../internal/workspaceLayer";
 
 /** The skill document that prescribes the staged unlock this walk covers. */
 const INSTRUCTION =
-  "benchmark/template/evidence/.agents/skills/evidence/frontend.md";
+  "experimental/benchmark/evidence/template/evidence/.agents/skills/evidence/frontend.md";
 
 /**
  * Verifies every staged frontend claim activates in its instructed order, and

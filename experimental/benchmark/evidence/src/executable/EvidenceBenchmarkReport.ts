@@ -1,11 +1,15 @@
 import path from "node:path";
 
+import { EvidenceBenchmarkLayout } from "../EvidenceBenchmarkLayout";
 import { writeEvidenceBenchmarkReport } from "../EvidenceBenchmarkReport";
 import type { ITtscEvidenceBenchmarkReport } from "../structures/ITtscEvidenceBenchmarkReport";
 
-const repository: string = path.resolve(__dirname, "../../..");
+const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
 const args: string[] = process.argv.slice(2);
-let output: string = path.join(repository, "benchmark", "aggregate");
+let output: string = path.join(
+  EvidenceBenchmarkLayout.assetsRoot(repository),
+  "aggregate",
+);
 const runIds: string[] = [];
 let outputAssigned: boolean = false;
 for (let i: number = 0; i < args.length; ++i) {

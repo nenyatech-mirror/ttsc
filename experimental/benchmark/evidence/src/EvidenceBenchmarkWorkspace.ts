@@ -5,6 +5,7 @@ import path from "node:path";
 import typia from "typia";
 import YAML from "yaml";
 
+import { EvidenceBenchmarkLayout } from "./EvidenceBenchmarkLayout";
 import { EvidenceBenchmarkRuntime } from "./EvidenceBenchmarkRuntime";
 import type { ITtscEvidenceBenchmarkWorkspaceArtifact } from "./structures/ITtscEvidenceBenchmarkWorkspaceArtifact";
 import type { ITtscEvidenceBenchmarkWorkspaceRequest } from "./structures/ITtscEvidenceBenchmarkWorkspaceRequest";
@@ -30,8 +31,8 @@ export namespace EvidenceBenchmarkWorkspace {
     );
     try {
       const template: string = path.resolve(
-        request.repository,
-        "benchmark/template",
+        EvidenceBenchmarkLayout.assetsRoot(request.repository),
+        "template",
       );
       fs.copyFileSync(
         path.join(template, "base", "AGENTS.md"),
@@ -94,8 +95,8 @@ export namespace EvidenceBenchmarkWorkspace {
     let settled: string | undefined;
     try {
       const template: string = path.resolve(
-        request.repository,
-        "benchmark/template",
+        EvidenceBenchmarkLayout.assetsRoot(request.repository),
+        "template",
       );
       fs.cpSync(path.join(template, "base"), workspace, { recursive: true });
       renderBase(workspace, request.variables);
@@ -105,8 +106,8 @@ export namespace EvidenceBenchmarkWorkspace {
         request.variables,
       );
       const requirements: string = path.resolve(
-        request.repository,
-        "benchmark/requirements",
+        EvidenceBenchmarkLayout.assetsRoot(request.repository),
+        "requirements",
         request.project,
       );
       const analysis: string = path.join(workspace, "docs", "analysis");

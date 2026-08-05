@@ -28,7 +28,7 @@ import { materializeClaimLayer } from "../internal/workspaceLayer";
 
 /** The skill document that prescribes the staged unlock this walk covers. */
 const INSTRUCTION =
-  "benchmark/template/evidence/.agents/skills/evidence/backend.md";
+  "experimental/benchmark/evidence/template/evidence/.agents/skills/evidence/backend.md";
 
 /**
  * Verifies every staged backend claim really activates when its marker is
