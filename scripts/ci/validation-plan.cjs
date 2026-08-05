@@ -18,7 +18,10 @@ const LANES = [
     needsGo: true,
     // The evidence Go tests stat `packages/evidence/lib`, so the lane that
     // runs them has to build the package that produces it.
-    build: "pnpm --filter ttsc build && pnpm --filter @ttsc/evidence build",
+    build:
+      "pnpm --filter ttsc build && " +
+      "pnpm --filter @ttsc/lint build && " +
+      "pnpm --filter @ttsc/evidence build",
     run: "pnpm run test:go && pnpm --filter ttsc go:vet",
   },
   {

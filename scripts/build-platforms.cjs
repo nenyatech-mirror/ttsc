@@ -10,6 +10,7 @@ const PACKAGE_BUILDS_BEFORE_PLATFORMS = [
   "@ttsc/factory",
   "@ttsc/banner",
   "@ttsc/lint",
+  "@ttsc/evidence",
   "@ttsc/unplugin",
   "@ttsc/metro",
   "@ttsc/wasm",

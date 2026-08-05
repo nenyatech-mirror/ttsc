@@ -60,7 +60,29 @@ test("a leaf package selects shared quality and its own executor", () => {
     "ttsc-native",
     "lint-1",
     "lint-2",
+    // The evidence rules link into this engine, so a contributor-API change
+    // that breaks them has to fail here rather than after a release.
+    "evidence",
   ]);
+  // Both evidence suites share one lane, and neither directory name is the
+  // lane id, so each is pinned rather than inferred.
+  assert.deepEqual(ids(["packages/evidence/src/index.ts"]), [
+    "go",
+    "typecheck",
+    "evidence",
+  ]);
+  assert.deepEqual(ids(["tests/test-evidence/src/index.ts"]), [
+    "typecheck",
+    "evidence",
+  ]);
+  assert.deepEqual(ids(["tests/test-evidence-benchmark/src/index.ts"]), [
+    "typecheck",
+    "evidence",
+  ]);
+  assert.deepEqual(
+    ids(["experimental/benchmark/evidence/src/EvidenceBenchmarkWorkspace.ts"]),
+    ["typecheck", "evidence"],
+  );
 });
 
 test("compiler and platform changes select verified reverse consumers", () => {
@@ -114,10 +136,7 @@ test("compiler and platform changes select verified reverse consumers", () => {
 
 test("platform integrations reuse only the physical rows they need", () => {
   assert.equal(PLATFORM_ROWS.length, 6);
-  assert.equal(
-    PLATFORM_ROWS.filter((row) => row.representative).length,
-    3,
-  );
+  assert.equal(PLATFORM_ROWS.filter((row) => row.representative).length, 3);
   assert.ok(
     PLATFORM_INTEGRATION_PATHS.experimental.includes("packages/ttsc-*/**"),
   );
@@ -133,9 +152,8 @@ test("platform integrations reuse only the physical rows they need", () => {
     watch.every((row) => row.watch && !row.experimental && !row.vscode),
   );
 
-  const vscode = planForPaths([
-    "packages/vscode/src/extension.ts",
-  ]).platformMatrix.include;
+  const vscode = planForPaths(["packages/vscode/src/extension.ts"])
+    .platformMatrix.include;
   assert.deepEqual(
     vscode.map((row) => row.name),
     ["linux-x64", "darwin-x64", "win32-x64"],
@@ -147,26 +165,24 @@ test("platform integrations reuse only the physical rows they need", () => {
   assert.deepEqual(vscodeHarness.laneIds, ["typecheck"]);
   assert.equal(vscodeHarness.platformMatrix.include.length, 3);
 
-  const experimental = planForPaths([
-    "experimental/install/src/index.ts",
-  ]).platformMatrix.include;
+  const experimental = planForPaths(["experimental/install/src/index.ts"])
+    .platformMatrix.include;
   assert.equal(experimental.length, 6);
   assert.ok(
-    experimental.every(
-      (row) => row.experimental && !row.watch && !row.vscode,
-    ),
+    experimental.every((row) => row.experimental && !row.watch && !row.vscode),
   );
 
-  const sourceMap = planForPaths([
-    "experimental/source-map/src/index.ts",
-  ]).platformMatrix.include;
-  assert.deepEqual(sourceMap.map((row) => row.name), ["linux-x64"]);
+  const sourceMap = planForPaths(["experimental/source-map/src/index.ts"])
+    .platformMatrix.include;
+  assert.deepEqual(
+    sourceMap.map((row) => row.name),
+    ["linux-x64"],
+  );
   assert.equal(sourceMap[0].source_map, true);
   assert.equal(sourceMap[0].build, false);
 
-  const pluginCache = planForPaths([
-    "scripts/ci/plugin-cache-persistence.mjs",
-  ]).platformMatrix.include;
+  const pluginCache = planForPaths(["scripts/ci/plugin-cache-persistence.mjs"])
+    .platformMatrix.include;
   assert.deepEqual(
     pluginCache.map((row) => row.name),
     ["linux-x64", "win32-x64"],
@@ -174,9 +190,7 @@ test("platform integrations reuse only the physical rows they need", () => {
   assert.ok(
     pluginCache.every(
       (row) =>
-        row.plugin_cache &&
-        row.build &&
-        row.build_scope === "plugin-cache",
+        row.plugin_cache && row.build && row.build_scope === "plugin-cache",
     ),
   );
   assert.equal(pluginCache[0].setup_bun, true);
@@ -257,11 +271,11 @@ test("every E2E directory has exactly one normal topology owner", () => {
 });
 
 test("lane identities and workflow matrix names stay unique", () => {
-  assert.equal(LANES.length, 12, "full main matrix must stay consolidated");
+  assert.equal(LANES.length, 13, "full main matrix must stay consolidated");
   assert.equal(
     LANES.filter((lane) => lane.build === "pnpm run build:current").length,
-    7,
-    "full logical plan must keep seven scoped native builds",
+    8,
+    "full logical plan must keep eight scoped native builds",
   );
   assert.equal(new Set(LANES.map((lane) => lane.id)).size, LANES.length);
   assert.equal(new Set(LANES.map((lane) => lane.name)).size, LANES.length);
@@ -346,9 +360,7 @@ test("remaining workflow path filters match the repository contract", () => {
     "ci",
   ]);
   assert.equal(
-    fs.existsSync(
-      path.join(root, ".github", "workflows", "experimental.yml"),
-    ),
+    fs.existsSync(path.join(root, ".github", "workflows", "experimental.yml")),
     false,
   );
   assert.equal(
@@ -357,9 +369,7 @@ test("remaining workflow path filters match the repository contract", () => {
   );
   for (const workflow of ["bun", "plugin-cache", "source-map"])
     assert.equal(
-      fs.existsSync(
-        path.join(root, ".github", "workflows", `${workflow}.yml`),
-      ),
+      fs.existsSync(path.join(root, ".github", "workflows", `${workflow}.yml`)),
       false,
     );
   assert.equal(eventPaths(testWorkflow, "push"), null);
