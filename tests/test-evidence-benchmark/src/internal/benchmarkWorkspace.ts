@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { EvidenceBenchmarkWorkspace } from "../../../../benchmark/src/EvidenceBenchmarkWorkspace";
-import type { EvidenceBenchmarkArm } from "../../../../benchmark/src/typings/EvidenceBenchmarkArm";
+import { EvidenceBenchmarkWorkspace } from "../../../../experimental/benchmark/evidence/src/EvidenceBenchmarkWorkspace";
+import type { EvidenceBenchmarkArm } from "../../../../experimental/benchmark/evidence/src/typings/EvidenceBenchmarkArm";
 import type { IBenchmarkWorkspace } from "./IBenchmarkWorkspace";
 import { packEvidenceArchive } from "./packEvidenceArchive";
 import { repositoryRoot } from "./suiteRoot";

@@ -32,6 +32,10 @@ catalogs:
     "@rollup/plugin-node-resolve": ^16.0.3
     rollup: ^4.56.0
   samchon:
+    nestia: &nestia ^12.1.0
+    "@nestia/core": *nestia
+    "@nestia/fetcher": *nestia
+    "@nestia/sdk": *nestia
     typia: &typia 13.2.0
     "@typia/interface": *typia
     "@typia/mcp": *typia

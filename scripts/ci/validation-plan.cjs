@@ -16,7 +16,9 @@ const LANES = [
     id: "go",
     name: "go",
     needsGo: true,
-    build: "pnpm --filter ttsc build",
+    // The evidence Go tests stat `packages/evidence/lib`, so the lane that
+    // runs them has to build the package that produces it.
+    build: "pnpm --filter ttsc build && pnpm --filter @ttsc/evidence build",
     run: "pnpm run test:go && pnpm --filter ttsc go:vet",
   },
   {
@@ -450,6 +452,12 @@ function planForPaths(files) {
       add(["evidence", "go"], file);
       continue;
     }
+    if (file.startsWith("experimental/benchmark/evidence/")) {
+      // `tests/test-evidence-benchmark` imports this source directly, so the
+      // suite that proves it has to run when it changes.
+      add(["evidence"], file);
+      continue;
+    }
     if (file.startsWith("packages/banner/")) {
       add(["package-defenses", "ttsc-native", "bundler-defenses"], file);
       continue;
@@ -516,6 +524,12 @@ function planForPaths(files) {
       }
       if (lane === "lint") {
         add(LINT_LANE_IDS, file);
+        continue;
+      }
+      // Both evidence suites share one lane, and the benchmark suite's
+      // directory name is not the lane id.
+      if (lane === "evidence-benchmark") {
+        add(["evidence"], file);
         continue;
       }
       if (LANE_BY_ID.has(lane)) {

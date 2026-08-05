@@ -236,7 +236,17 @@ export namespace EvidenceBenchmarkWorkspace {
     fs.writeFileSync(target, output);
   }
 
-  /** Flattens every repository catalog group into one package-to-version map. */
+  /**
+   * Flattens every repository catalog group into one package-to-version map,
+   * then adds the workspace's own packages.
+   *
+   * A template asks for a version by package name. In the repository this
+   * benchmark came from, `ttsc` and its plugins were catalog entries, because
+   * they were external dependencies there. Here they are the workspace itself,
+   * and a workspace never lists itself in a catalog. Reading their manifests is
+   * what keeps a template's `{{version:ttsc}}` answerable without asking this
+   * repository to duplicate its own version numbers into a catalog.
+   */
   function repositoryCatalogVersions(repository: string): Map<string, string> {
     const parsed: unknown = YAML.parse(
       fs.readFileSync(path.join(repository, "pnpm-workspace.yaml"), "utf8"),
@@ -254,7 +264,40 @@ export namespace EvidenceBenchmarkWorkspace {
           );
         versions.set(name, version);
       }
+    for (const [name, version] of workspacePackageVersions(repository))
+      if (!versions.has(name)) versions.set(name, `^${version}`);
     return versions;
+  }
+
+  /** Every `name`/`version` pair declared by a package inside `repository`. */
+  function workspacePackageVersions(repository: string): Map<string, string> {
+    const found: Map<string, string> = new Map();
+    for (const group of ["packages", "experimental"])
+      for (const entry of readDirectoryQuietly(path.join(repository, group))) {
+        const manifest: string = path.join(
+          repository,
+          group,
+          entry,
+          "package.json",
+        );
+        if (!fs.existsSync(manifest)) continue;
+        const parsed: unknown = JSON.parse(fs.readFileSync(manifest, "utf8"));
+        const { name, version } = typia.assert<{
+          name?: string;
+          version?: string;
+        }>(parsed);
+        if (name !== undefined && version !== undefined)
+          found.set(name, version);
+      }
+    return found;
+  }
+
+  function readDirectoryQuietly(directory: string): string[] {
+    try {
+      return fs.readdirSync(directory);
+    } catch {
+      return [];
+    }
   }
 
   function markdownBody(source: string): string {
