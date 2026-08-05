@@ -501,6 +501,9 @@ importers:
       '@nestia/e2e':
         specifier: catalog:utils
         version: 12.0.0
+      '@prisma/prisma-schema-wasm':
+        specifier: catalog:prisma
+        version: 7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356
       '@ttsc/evidence':
         specifier: workspace:*
         version: link:../../packages/evidence
@@ -516,6 +519,9 @@ importers:
       typescript:
         specifier: catalog:typescript
         version: 7.0.2
+      yaml:
+        specifier: catalog:utils
+        version: 2.9.0
 
   tests/test-evidence-benchmark:
     devDependencies:

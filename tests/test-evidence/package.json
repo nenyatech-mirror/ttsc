@@ -8,10 +8,12 @@
   },
   "devDependencies": {
     "@nestia/e2e": "catalog:utils",
+    "@prisma/prisma-schema-wasm": "catalog:prisma",
     "@ttsc/evidence": "workspace:*",
     "@ttsc/lint": "workspace:*",
     "@types/node": "catalog:utils",
     "ttsc": "workspace:*",
-    "typescript": "catalog:typescript"
+    "typescript": "catalog:typescript",
+    "yaml": "catalog:utils"
   }
 }

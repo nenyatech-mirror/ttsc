@@ -29,7 +29,12 @@ const LANES = [
     name: "windows-go",
     os: "windows-latest",
     needsGo: true,
-    build: "pnpm --filter ttsc build",
+    // Same reason as the `go` lane: `pnpm run test:go` includes the evidence
+    // rule tests, and those stat `packages/evidence/lib`.
+    build:
+      "pnpm --filter ttsc build && " +
+      "pnpm --filter @ttsc/lint build && " +
+      "pnpm --filter @ttsc/evidence build",
     run:
       "node --test packages/ttsc/scripts/check-flags.test.cjs && " +
       "pnpm run test:go",

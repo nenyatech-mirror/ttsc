@@ -86,9 +86,19 @@ export const createProject = (
   // compiler resolvable from the consuming project — it is a real consumer
   // requirement, not a test artifact.
   const modules: string = path.join(directory, "node_modules");
-  fs.mkdirSync(path.join(modules, "@samchon"), { recursive: true });
   fs.mkdirSync(path.join(modules, "@ttsc"), { recursive: true });
+  fs.mkdirSync(path.join(modules, "@prisma"), { recursive: true });
   linkEvidencePackage(modules);
+  // The package's own runtime dependencies. Its `lib` is junctioned in, and a
+  // fixture cannot rely on Node walking that link back into the workspace to
+  // find them: the loaders are reached through ttsc's runtime hooks, which
+  // serve a module under the path it was requested by. Link them beside the
+  // package the way a real install would.
+  linkDirectory(
+    resolveDependency("@prisma/prisma-schema-wasm"),
+    path.join(modules, "@prisma", "prisma-schema-wasm"),
+  );
+  linkDirectory(resolveDependency("yaml"), path.join(modules, "yaml"));
   linkDirectory(
     resolveDependency("@ttsc/lint"),
     path.join(modules, "@ttsc", "lint"),
