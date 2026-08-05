@@ -60,11 +60,28 @@ export default {
   plugins: { evidence },
   rules: {
     "evidence/graph": ["error", { claims: [] }],
+    "evidence/documented": "error",
+    "evidence/singular": "error",
+    "evidence/todo": "error",
   },
 };
 ```
 
-The `claims` array is the whole configuration surface: each entry selects a population of hosts and the references they must acknowledge. See the package README for the full option reference.
+## The four rules
+
+`evidence/graph` carries the graph itself. Its `claims` array is the whole configuration surface: each entry selects a population of hosts and the references they must acknowledge. The rule is project-scoped, so its entry must carry no `files` selector; the host rejects one that does. Scope a file rule in its own entry when you need to.
+
+The other three are file rules.
+
+- `evidence/documented` requires a JSDoc block on every selected export, because a block is the only place a citation can live.
+- `evidence/singular` keeps one public identity per file, named after the file.
+- `evidence/todo` reports every remaining JSDoc `@todo` tag in a linted file, exported or not. A `@todo` is a contract the declaration has not realized yet, so each tag fails the build with its own text until the work is done and the tag removed.
+
+An eligible carrier that genuinely should not acknowledge a target says so with `@evidenceExclude` rather than staying silent, so the omission is a decision on the record instead of a gap.
+
+Violations surface in every `ttsc` build, every `--noEmit` check, and every `ttsx` run, in the same stream as type errors. There is no separate CI job.
+
+See the [package README](https://github.com/samchon/ttsc/blob/master/packages/evidence/README.md) for the full option reference and the tag grammar.
 
 ## Related
 
