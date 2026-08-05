@@ -7,6 +7,12 @@ node_modules/
 # committing it puts those bytes in the baseline, in every checkpoint snapshot
 # that copies and hashes the workspace, and in the `.git` tree holding both.
 .benchmark-deps/
+# ttsc extracts its platform package here when it repairs a missing native
+# binary. One cell of eight hit it, most likely install contention while eight
+# workspaces pulled the same 47 MB archive at once. It is 3.7k extracted files
+# of compiler, so counting it as authored work misreports the cell by two
+# orders of magnitude, and committing it would put it in the retained record.
+.ttsc-repair-*/
 
 # Local environment
 .env
