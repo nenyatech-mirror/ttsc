@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { TtscBenchmarkCommandLine } from "./TtscBenchmarkCommandLine.ts";
+import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
 import { TtscBenchmarkGraphReduce } from "./TtscBenchmarkGraphReduce.ts";
 import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import { TtscBenchmarkObject } from "./TtscBenchmarkObject.ts";
@@ -41,13 +42,12 @@ export namespace TtscBenchmarkGraphReduceCommand {
    * @param entrypointDirectory Directory containing the reduce bootstrap.
    */
   export function main(entrypointDirectory: string): void {
-    const benchmarkRoot: string = path.resolve(
-      entrypointDirectory,
-      "..",
-      "..",
-      "..",
-    );
-    const repositoryRoot: string = path.resolve(benchmarkRoot, "..", "..");
+    // Resolved from the package rather than counted up from the bootstrap.
+    // Counting was correct only while the executables sat one directory deeper,
+    // and it failed silently when they moved: every path below stayed a valid
+    // string and pointed one level outside the repository.
+    const benchmarkRoot: string = TtscBenchmarkConstant.ROOT;
+    const repositoryRoot: string = TtscBenchmarkConstant.REPOSITORY_ROOT;
     const publicGraphDirectory: string = path.join(
       repositoryRoot,
       "website",

@@ -31,6 +31,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
 import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import type { ITtscBenchmarkGraphProject } from "./structures/ITtscBenchmarkGraphProject.ts";
 
@@ -109,8 +110,12 @@ export namespace TtscBenchmarkGraphIndexTime {
       input?: string;
     }
 
-    const benchmarkRoot = path.resolve(entrypointDirectory, "..", "..", "..");
-    const repoRoot = path.resolve(benchmarkRoot, "..", "..");
+    // Resolved from the package rather than counted up from the bootstrap.
+    // Counting was correct only while the executables sat one directory deeper,
+    // and it failed silently when they moved: every path below stayed a valid
+    // string and pointed one level outside the repository.
+    const benchmarkRoot = TtscBenchmarkConstant.ROOT;
+    const repoRoot = TtscBenchmarkConstant.REPOSITORY_ROOT;
     const ttscDir = path.join(repoRoot, "packages", "ttsc");
     const workDir = TtscBenchmarkGraph.resolveWorkDir(repoRoot);
     const websiteJson = path.join(

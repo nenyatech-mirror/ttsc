@@ -26,6 +26,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
 import { TtscBenchmarkGraphWebsiteCell } from "./TtscBenchmarkGraphWebsiteCell.ts";
 import { ITtscBenchmarkGraphWebsiteAgentCell } from "./structures/ITtscBenchmarkGraphWebsiteAgentCell.ts";
 
@@ -138,13 +139,12 @@ export namespace TtscBenchmarkGraphPublisher {
    * @param entrypointDirectory - Absolute directory of the CLI bootstrap.
    */
   export function main(entrypointDirectory: string): void {
-    const benchmarkRoot: string = path.resolve(
-      entrypointDirectory,
-      "..",
-      "..",
-      "..",
-    );
-    const repositoryRoot: string = path.resolve(benchmarkRoot, "..", "..");
+    // Resolved from the package rather than counted up from the bootstrap.
+    // Counting was correct only while the executables sat one directory deeper,
+    // and it failed silently when they moved: every path below stayed a valid
+    // string and pointed one level outside the repository.
+    const benchmarkRoot: string = TtscBenchmarkConstant.ROOT;
+    const repositoryRoot: string = TtscBenchmarkConstant.REPOSITORY_ROOT;
     const websiteJson: string = path.resolve(
       repositoryRoot,
       "website",

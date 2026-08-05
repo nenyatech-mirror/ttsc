@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
 import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import { TtscBenchmarkObject } from "./TtscBenchmarkObject.ts";
 
@@ -32,13 +33,12 @@ export namespace TtscBenchmarkGraphStructural {
    * @param entrypointDirectory Directory containing the executable bootstrap.
    */
   export function main(entrypointDirectory: string): void {
-    const benchmarkRoot: string = path.resolve(
-      entrypointDirectory,
-      "..",
-      "..",
-      "..",
-    );
-    const repoRoot: string = path.resolve(benchmarkRoot, "..", "..");
+    // Resolved from the package rather than counted up from the bootstrap.
+    // Counting was correct only while the executables sat one directory deeper,
+    // and it failed silently when they moved: every path below stayed a valid
+    // string and pointed one level outside the repository.
+    const benchmarkRoot: string = TtscBenchmarkConstant.ROOT;
+    const repoRoot: string = TtscBenchmarkConstant.REPOSITORY_ROOT;
     const ttscDir: string = path.join(repoRoot, "packages", "ttsc");
     const workRoot: string = path.join(benchmarkRoot, ".work");
     const args: Record<string, string> = parseArgs(process.argv.slice(2));
