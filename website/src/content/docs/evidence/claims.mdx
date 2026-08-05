@@ -251,6 +251,8 @@ const graph: ITtscEvidenceGraphConfig = {
 };
 ```
 
+`prisma/schema/exclude.schema` sits in that first `files` list on purpose. It is a lint-only file outside the Prisma generation glob, so it adds no model to the schema and exists to hold unattached top-level `/// @evidenceExclude` declarations. [Evidence Tags](/docs/evidence/tags#where-an-exclusion-may-sit) covers that carrier.
+
 Every matched file is parsed together as one schema, because a Prisma schema folder is a single namespace whose files reference each other. Targets carry a `prisma:` prefix and stay one whitespace-free token: `prisma:Sale` for a model, `prisma:Sale.price` for a member. A model name is unique across the folder, so a target never names the file its model sits in and moving a model between files cannot break a citation.
 
 The `model`, `column`, and `relation` split follows Prisma's own resolution rather than the schema text, which is what classifies a relation back-reference such as `Seller.sales` correctly even though it carries no `@relation` attribute. A view arrives among the datamodel's models and is therefore a `model` unit. Enums, composite types, and indexes are outside the unit model.
@@ -284,7 +286,7 @@ Three opt-in properties tighten a single reference:
 
 Counting is by identity, not by text. Repeated tags for one unit count once, merged declarations and overload sets remain one host, and an aggregate target contributes every selected descendant in its scope, so citing a parent of two selected units counts as two.
 
-The constraints belong to one reference and never pool. An exclusion the Swagger reference above refuses may still satisfy a Markdown reference in the same claim, and two references over the same files stay independent.
+The constraints belong to one reference and never pool. An exclusion the package reference above refuses may still satisfy a Markdown reference in the same claim, and two references over the same files stay independent.
 
 ## Exclusion carriers
 
