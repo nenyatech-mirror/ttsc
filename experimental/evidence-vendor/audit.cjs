@@ -7,7 +7,7 @@ process.chdir(ROOT);
 const TREES = [
   "packages/evidence/src",
   "packages/evidence/native",
-  "experimental/benchmark/evidence/src",
+  "benchmarks/evidence/src",
   "tests/test-evidence/src",
   "tests/test-evidence-benchmark/src",
   ".agents/skills/evidence-graph",
@@ -15,7 +15,7 @@ const TREES = [
 ];
 const DOCS = [
   "packages/evidence/README.md",
-  "experimental/benchmark/evidence/README.md",
+  "benchmarks/evidence/README.md",
   "website/src/content/docs/lint/evidence.mdx",
 ];
 const walk = (d, o = []) => {
@@ -55,15 +55,14 @@ for (const f of ALL) {
 // B. bare specifiers versus the manifest that must declare them
 const OWNER = {
   "packages/evidence/src": "packages/evidence/package.json",
-  "experimental/benchmark/evidence/src":
-    "experimental/benchmark/evidence/package.json",
+  "benchmarks/evidence/src": "benchmarks/evidence/package.json",
   "tests/test-evidence/src": "tests/test-evidence/package.json",
   "tests/test-evidence-benchmark/src":
     "tests/test-evidence-benchmark/package.json",
 };
 // A suite that imports another package's source inherits that package's imports.
 const INHERITS = {
-  "tests/test-evidence-benchmark/src": ["experimental/benchmark/evidence/src"],
+  "tests/test-evidence-benchmark/src": ["benchmarks/evidence/src"],
 };
 const declared = (mf) => {
   const m = JSON.parse(fs.readFileSync(mf, "utf8"));
@@ -197,10 +196,7 @@ for (const entry of [
   "tests/test-evidence-benchmark/src/index.ts",
 ])
   if (fs.existsSync(entry)) visit(norm(entry));
-for (const tree of [
-  "experimental/benchmark/evidence/src",
-  "packages/evidence/src",
-])
+for (const tree of ["benchmarks/evidence/src", "packages/evidence/src"])
   for (const f of walk(tree)) {
     if (!/\.tsx?$/.test(f)) continue;
     if (!read.has(norm(f))) add("unread", tree, f.slice(tree.length + 1));

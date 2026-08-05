@@ -29,9 +29,9 @@
 // `codex` (logged in) and `go` on PATH, and a built `@ttsc/graph` (packages/graph/lib).
 //
 // Usage:
-//   pnpm --dir experimental/benchmark graph:agent:codex -- --prompt-family=dedicated --repo=excalidraw --runs=4
-//   pnpm --dir experimental/benchmark graph:agent:codex -- --prompt-family=common --repo=vscode --runs=4
-//   pnpm --dir experimental/benchmark graph:agent:codex -- --prompt-id=typeorm-dedicated-v1 --runs=4
+//   pnpm --dir benchmarks/graph agent:codex -- --prompt-family=dedicated --repo=excalidraw --runs=4
+//   pnpm --dir benchmarks/graph agent:codex -- --prompt-family=common --repo=vscode --runs=4
+//   pnpm --dir benchmarks/graph agent:codex -- --prompt-id=typeorm-dedicated-v1 --runs=4
 import cp from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -40,9 +40,9 @@ import path from "node:path";
 
 import { TtscBenchmarkCommandLine } from "./TtscBenchmarkCommandLine.ts";
 import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
+import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import { TtscBenchmarkObject } from "./TtscBenchmarkObject.ts";
-import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import type { ITtscBenchmarkAgentSample } from "./structures/ITtscBenchmarkAgentSample.ts";
 import type { ITtscBenchmarkGraphPrompt } from "./structures/ITtscBenchmarkGraphPrompt.ts";
 import type { ITtscBenchmarkGraphRepository } from "./structures/ITtscBenchmarkGraphRepository.ts";

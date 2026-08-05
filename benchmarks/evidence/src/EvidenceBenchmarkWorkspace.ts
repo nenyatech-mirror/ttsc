@@ -268,7 +268,7 @@ export namespace EvidenceBenchmarkWorkspace {
    */
   function workspacePackageVersions(repository: string): Map<string, string> {
     const found: Map<string, string> = new Map();
-    for (const group of ["packages", "experimental"])
+    for (const group of ["packages", "benchmarks"])
       for (const entry of readDirectoryQuietly(path.join(repository, group))) {
         const manifest: string = path.join(
           repository,

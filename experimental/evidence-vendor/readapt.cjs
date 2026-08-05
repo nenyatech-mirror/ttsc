@@ -8,9 +8,16 @@ process.chdir(ROOT);
 const TREES = [
   "packages/evidence/src",
   "packages/evidence/native",
-  "experimental/benchmark/evidence/src",
+  "benchmarks/evidence/src",
   "tests/test-evidence/src",
   "tests/test-evidence-benchmark/src",
+];
+// The two vendored skills nest one level below their host skill, so upstream's
+// own shape survives the copy. They take the identifier rewrites of step 1 and
+// the root rewrite of step 6, but never the file renames of step 2.
+const SKILL_TREES = [
+  ".agents/skills/project/evidence",
+  ".agents/skills/benchmark/evidence",
 ];
 const TEXT = new Set([
   ".ts",
@@ -59,7 +66,7 @@ const RULES = [
     "TtscEvidenceGraph$1Symbol",
   ],
   [/@samchon\/lint-plugin-evidence/g, "@ttsc/evidence"],
-  [/@samchon\/evidence-benchmark/g, "@ttsc/evidence-benchmark"],
+  [/@samchon\/evidence-benchmark/g, "@ttsc/benchmark-evidence"],
   [
     /github\.com\/samchon\/lint-plugin-evidence\/packages\/evidence/g,
     "github.com/samchon/ttsc/packages/evidence",
@@ -102,8 +109,8 @@ const RULES = [
   ],
 ];
 let textChanged = 0;
-for (const tree of TREES)
-  for (const file of walk(tree)) {
+for (const tree of [...TREES, ...SKILL_TREES, "benchmarks/evidence/README.md"])
+  for (const file of fs.statSync(tree).isDirectory() ? walk(tree) : [tree]) {
     if (!TEXT.has(path.extname(file))) continue;
     const before = fs.readFileSync(file, "utf8");
     let after = before;
@@ -114,6 +121,38 @@ for (const tree of TREES)
     }
   }
 console.log("1. text rewritten:", textChanged);
+
+// ------------------------------------------------- 1b. the delivered template
+// The template is the workspace a measured agent is handed, and the Evidence
+// arm's `lint.config.ts` imports the plugin by name. Left at upstream's name it
+// asks for `@samchon/lint-plugin-evidence` while `injectEvidence` installs the
+// packed `@ttsc/evidence`, so the arm that exists to exercise the plugin cannot
+// resolve it.
+//
+// Only the package identity is rewritten here. The rest of RULES must not run
+// over this tree: its path literals describe the workspace the benchmark
+// generates rather than this repository, and its prose is a frozen input the
+// measured agent reads.
+const IDENTITY = [
+  [/@samchon\/lint-plugin-evidence/g, "@ttsc/evidence"],
+  [/\bIEvidence/g, "ITtscEvidence"],
+  [
+    /\bEvidenceGraph(Markdown|Prisma|TypeScript)Symbol\b/g,
+    "TtscEvidenceGraph$1Symbol",
+  ],
+];
+let templateChanged = 0;
+for (const file of walk("benchmarks/evidence/template")) {
+  if (!TEXT.has(path.extname(file))) continue;
+  const before = fs.readFileSync(file, "utf8");
+  let after = before;
+  for (const [re, to] of IDENTITY) after = after.replace(re, to);
+  if (after !== before) {
+    fs.writeFileSync(file, after, "utf8");
+    templateChanged++;
+  }
+}
+console.log("1b. template files re-identified:", templateChanged);
 
 // -------------------------------------------------------------- 2. filenames
 const renamed = (base) => {
@@ -150,11 +189,7 @@ const LAYOUT = `import path from "node:path";
  */
 export namespace EvidenceBenchmarkLayout {
   /** Path of this package relative to the repository that contains it. */
-  const PACKAGE_PATH: readonly string[] = [
-    "experimental",
-    "benchmark",
-    "evidence",
-  ];
+  const PACKAGE_PATH: readonly string[] = ["benchmarks", "evidence"];
 
   /**
    * Absolute path of the repository this package was loaded from.
@@ -181,7 +216,7 @@ export namespace EvidenceBenchmarkLayout {
     path.join(repository, ...PACKAGE_PATH);
 }
 `;
-const BENCH = "experimental/benchmark/evidence/src";
+const BENCH = "benchmarks/evidence/src";
 fs.writeFileSync(`${BENCH}/EvidenceBenchmarkLayout.ts`, LAYOUT, "utf8");
 const joined = /path\.join\(\s*([A-Za-z_$][\w$.]*)\s*,\s*"benchmark"\s*,/g;
 const resolved =
@@ -272,7 +307,7 @@ console.log("3. benchmark files re-rooted:", layoutFiles);
    */
   function workspacePackageVersions(repository: string): Map<string, string> {
     const found: Map<string, string> = new Map();
-    for (const group of ["packages", "experimental"])
+    for (const group of ["packages", "benchmarks"])
       for (const entry of readDirectoryQuietly(path.join(repository, group))) {
         const manifest: string = path.join(
           repository,
@@ -351,8 +386,7 @@ edit("tests/test-evidence-benchmark/src/internal/suiteRoot.ts", [
  */
 export const benchmarkRoot: string = path.resolve(
   repositoryRoot,
-  "experimental",
-  "benchmark",
+  "benchmarks",
   "evidence",
 );`,
     `export const benchmarkRoot`,
@@ -373,29 +407,27 @@ for (const f of [
   "tests/test-evidence-benchmark/src/features/test_benchmark_evidence_backend_gates_activate_each_claim.ts",
   "tests/test-evidence-benchmark/src/features/test_benchmark_evidence_frontend_gates_activate_each_claim.ts",
 ])
-  edit(f, [
-    [`"benchmark/template/`, `"experimental/benchmark/evidence/template/`],
-  ]);
+  edit(f, [[`"benchmark/template/`, `"benchmarks/evidence/template/`]]);
 for (const [f, from, to] of [
   [
     "tests/test-evidence-benchmark/src/internal/benchmarkWorkspace.ts",
     "`benchmark/requirements/<subject>/`",
-    "`experimental/benchmark/evidence/requirements/<subject>/`",
+    "`benchmarks/evidence/requirements/<subject>/`",
   ],
   [
     "tests/test-evidence-benchmark/src/internal/benchmarkWorkspace.ts",
     "`benchmark/output/` is where",
-    "`experimental/benchmark/evidence/output/` is where",
+    "`benchmarks/evidence/output/` is where",
   ],
   [
     "tests/test-evidence-benchmark/src/internal/requirementDocuments.ts",
     "`benchmark/requirements/<subject>/`",
-    "`experimental/benchmark/evidence/requirements/<subject>/`",
+    "`benchmarks/evidence/requirements/<subject>/`",
   ],
   [
     "tests/test-evidence-benchmark/src/internal/workspaceLayer.ts",
     "`benchmark/template/**`",
-    "`experimental/benchmark/evidence/template/**`",
+    "`benchmarks/evidence/template/**`",
   ],
   [
     "tests/test-evidence-benchmark/src/internal/suiteRoot.ts",
@@ -480,7 +512,7 @@ for (const f of walk("tests/test-evidence-benchmark/src")) {
   const before = fs.readFileSync(f, "utf8");
   const after = before.replace(
     /(\.\.\/)+benchmark\/src\//g,
-    "../../../../experimental/benchmark/evidence/src/",
+    "../../../../benchmarks/evidence/src/",
   );
   if (after !== before) {
     fs.writeFileSync(f, after, "utf8");
@@ -513,3 +545,59 @@ console.log(
   missing.length,
 );
 for (const m of missing.slice(0, 12)) console.log("   ", m);
+
+// ------------------------------------------------------------- 6. skill roots
+// Upstream's benchmark sits at `<repository>/benchmark`, so one root answered
+// both "which repository" and "where are the benchmark's own assets". Here the
+// package is `benchmarks/evidence`, and a skill that still says
+// `benchmark/requirements/**` sends an operator to a path this repository does
+// not have. Anchored edits cannot cover this: upstream restructures these
+// documents, and a file that did not exist on the previous copy carries no
+// anchor. The rewrite is therefore a sweep, and `audit.cjs` re-measures it.
+const SKILL_ASSETS =
+  /(?<![\w/-])benchmark\/(aggregate|instructions|output|requirements|src|template)\b/g;
+const ROOTED_DOCS = [
+  ...SKILL_TREES.flatMap((tree) => walk(tree)),
+  "benchmarks/evidence/README.md",
+];
+let skillPaths = 0;
+for (const file of ROOTED_DOCS) {
+  if (path.extname(file) !== ".md") continue;
+  const before = fs.readFileSync(file, "utf8");
+  const after = before.replace(SKILL_ASSETS, "benchmarks/evidence/$1");
+  if (after !== before) {
+    fs.writeFileSync(file, after, "utf8");
+    skillPaths++;
+  }
+}
+
+// Two skills named `evidence` would collide, and the benchmark skill's upstream
+// name is the host skill's name here. Both take their path from
+// `.agents/skills/` instead.
+const FRONTMATTER = [
+  [
+    ".agents/skills/benchmark/evidence/SKILL.md",
+    "name: benchmark\n",
+    "name: benchmark/evidence\n",
+  ],
+  [
+    ".agents/skills/project/evidence/SKILL.md",
+    "name: evidence-graph\n",
+    "name: project/evidence\n",
+  ],
+  // The Go rule API is owned here by the `@ttsc/lint` contributor contract;
+  // upstream's `lint-rule-authoring` skill is not vendored.
+  [
+    ".agents/skills/project/evidence/SKILL.md",
+    "which the lint-rule-authoring skill owns",
+    "which the `@ttsc/lint` contributor contract in packages/lint/README.md owns",
+  ],
+];
+for (const [file, from, to] of FRONTMATTER) {
+  const text = fs.readFileSync(file, "utf8");
+  if (text.includes(to)) continue;
+  if (!text.includes(from))
+    throw new Error(`${file}: anchor not found: ${from}`);
+  fs.writeFileSync(file, text.replace(from, to), "utf8");
+}
+console.log("6. skill files re-rooted:", skillPaths, "| frontmatter re-named");

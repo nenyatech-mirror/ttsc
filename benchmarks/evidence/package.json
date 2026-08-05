@@ -1,6 +1,6 @@
 {
   "private": true,
-  "name": "@ttsc/evidence-benchmark",
+  "name": "@ttsc/benchmark-evidence",
   "version": "0.24.0",
   "description": "Minimal Codex runner for the Evidence benchmark.",
   "exports": {
@@ -8,12 +8,13 @@
     "./workspace": "./src/EvidenceBenchmarkWorkspace.ts"
   },
   "scripts": {
-    "audit-suspensions": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkSuspensionAudit.ts",
-    "start": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkCommandLine.ts",
-    "supervise": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkSupervision.ts",
-    "warn": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkWarning.ts",
-    "dashboard": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkDashboard.ts",
-    "report": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkReport.ts",
+    "audit-suspensions": "node ../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkSuspensionAudit.ts",
+    "start": "node ../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkCommandLine.ts",
+    "supervise": "node ../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkSupervision.ts",
+    "warn": "node ../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkWarning.ts",
+    "dashboard": "node ../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkDashboard.ts",
+    "report": "node ../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkReport.ts",
+    "reconcile": "node ../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkReconcile.ts",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

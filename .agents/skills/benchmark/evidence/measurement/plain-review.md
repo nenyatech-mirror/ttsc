@@ -16,7 +16,7 @@ The retained status is `awaiting-review-verdict`, and the cell cannot continue u
 
 At the boundary the runner spawns a fresh Codex thread on the cell's own model and effort. It reads the attempt's stage log and the measured workspace, returns a decision, and the cell continues in the same command.
 
-The inspection costs what a model run costs, and its tokens and time join the cell's `Cost` and `Work time`; [dashboard.md](measurement-dashboard.md) owns how that appears. Every attempt is retained under `inspection/<NN>-<stage>-<attempt>.*`, so a retry never overwrites the evidence of the attempt before it.
+The inspection costs what a model run costs, and its tokens and time join the cell's `Cost` and `Work time`; [dashboard.md](dashboard.md) owns how that appears. Every attempt is retained under `inspection/<NN>-<stage>-<attempt>.*`, so a retry never overwrites the evidence of the attempt before it.
 
 ## Keep The Inspector Outside The Cell
 
@@ -66,14 +66,14 @@ After the third failure the run stays at `awaiting-review-verdict` and a resume 
 ```
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark supervise <subject> <run-id> <verdict.json>
+pnpm --filter @ttsc/benchmark-evidence supervise <subject> <run-id> <verdict.json>
 ```
 
 Then resume the same run command.
 
 A hand-written verdict answers the same two questions and obeys the same rules: no `feedback` property, and the reasoning stays in the retained `rationale`, which the cell never sees.
 
-An operator warning is a different channel with its own command and contents, and [intervention-warning.md](intervention-warning.md) owns it. Do not reach for a verdict to deliver one.
+An operator warning is a different channel with its own command and contents, and [intervention/warning.md](../intervention/warning.md) owns it. Do not reach for a verdict to deliver one.
 
 ## Optional: The Backend Review Ledger
 
@@ -82,7 +82,7 @@ An operator warning is a different channel with its own command and contents, an
 It is Plain-only and needs a detached `backend-start` checkpoint thread, so it attaches to an existing run ID or a `--from-backend-start` derivation, never to a fresh cell:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark start codex <subject> plain <model> <effort> --review-ledger --from-backend-start <source-run-id>
+pnpm --filter @ttsc/benchmark-evidence start codex <subject> plain <model> <effort> --review-ledger --from-backend-start <source-run-id>
 ```
 
 During `backend-review` the runner holds the cell's sandbox read-only and injects six tools as the only mechanisms that receive review credit:

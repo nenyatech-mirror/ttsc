@@ -1,4 +1,4 @@
-import type { EvidenceBenchmarkArm } from "../../../../experimental/benchmark/evidence/src/typings/EvidenceBenchmarkArm";
+import type { EvidenceBenchmarkArm } from "../../../../benchmarks/evidence/src/typings/EvidenceBenchmarkArm";
 
 /** A prepared benchmark workspace, standing on disk exactly as a launch left it. */
 export interface IBenchmarkWorkspace {

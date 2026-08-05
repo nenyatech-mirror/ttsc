@@ -31,7 +31,6 @@ export const repositoryRoot: string = path.resolve(suiteRoot, "..", "..");
  */
 export const benchmarkRoot: string = path.resolve(
   repositoryRoot,
-  "experimental",
-  "benchmark",
+  "benchmarks",
   "evidence",
 );

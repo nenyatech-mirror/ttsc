@@ -3,9 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
-import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import { TtscBenchmarkGraphWebsiteCell } from "./TtscBenchmarkGraphWebsiteCell.ts";
+import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import type { ITtscBenchmarkGraphProject } from "./structures/ITtscBenchmarkGraphProject.ts";
 import type { ITtscBenchmarkGraphPrompt } from "./structures/ITtscBenchmarkGraphPrompt.ts";
 import { ITtscBenchmarkGraphWebsiteAgentCell } from "./structures/ITtscBenchmarkGraphWebsiteAgentCell.ts";

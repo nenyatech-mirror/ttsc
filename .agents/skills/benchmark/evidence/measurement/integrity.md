@@ -2,7 +2,7 @@
 
 A cell edits its own workspace. That is the measurement, not a violation of it.
 
-Only the edits the cell's **own** instructions forbid void the measurement. The rules that bind the operator in [intervention-boundary.md](intervention-boundary.md) do not bind a cell, and reading one as the other punishes a cell for doing exactly what it was told to do.
+Only the edits the cell's **own** instructions forbid void the measurement. The rules that bind the operator in [intervention/boundary.md](../intervention/boundary.md) do not bind a cell, and reading one as the other punishes a cell for doing exactly what it was told to do.
 
 ## What Governs A Cell
 
@@ -49,7 +49,7 @@ Raising any other severity, or lowering this one again, is a hit.
    },
 ```
 
-The cell's own review skill is stricter than that, and deliberately so: `review/backend.md` and `review/frontend.md` tell a Plain cell that any difference from the baseline in an API or backend configuration file is a finding to report and restore, naming a changed dependency among them. **That stricter rule is the cell's to apply, not yours.** A cell that installs a package and never reconciles it has failed its own review, which its review verdict judges. Warning it would inject a finding, and [intervention-warning.md](intervention-warning.md) forbids the warning channel from carrying one.
+The cell's own review skill is stricter than that, and deliberately so: `review/backend.md` and `review/frontend.md` tell a Plain cell that any difference from the baseline in an API or backend configuration file is a finding to report and restore, naming a changed dependency among them. **That stricter rule is the cell's to apply, not yours.** A cell that installs a package and never reconciles it has failed its own review, which its review verdict judges. Warning it would inject a finding, and [intervention/warning.md](../intervention/warning.md) forbids the warning channel from carrying one.
 
 So neither belongs in an operator report. A subagent that flags either is producing a false positive that costs a cell a warning it did not earn — and, in the dependency case, tells it something its own review was supposed to reach on its own.
 
@@ -138,6 +138,6 @@ Together these files decide what each Program contains and where a package resol
 
 ## On A Confirmed Hit
 
-Warn the cell and resume it. Never restart it, and never repair the workspace yourself. [intervention-warning.md](intervention-warning.md) owns the channel and its contents.
+Warn the cell and resume it. Never restart it, and never repair the workspace yourself. [intervention/warning.md](../intervention/warning.md) owns the channel and its contents.
 
 Quote the diff you read in the report. A hit asserted without the diff is the kind of unproven claim this product exists to reject.

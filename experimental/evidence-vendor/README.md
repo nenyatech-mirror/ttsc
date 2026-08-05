@@ -1,47 +1,52 @@
 # Evidence vendoring tools
 
-`@ttsc/evidence`, its benchmark, and its two feature suites are vendored from `samchon/evidence` (published upstream as `@samchon/lint-plugin-evidence`). Upstream keeps moving, so the copy has to be repeatable rather than hand-made.
+`@ttsc/evidence`, its benchmark, and its two feature suites are vendored from `samchon/lint-plugin-evidence` (published as `@samchon/lint-plugin-evidence`). Upstream keeps moving, so the copy has to be repeatable rather than hand-made.
 
 These scripts are branch-local tooling for the migration pull request. They are not part of any build, lane, or published package.
 
 ## Refreshing the vendored trees
 
-Upstream is expected at `D:/github/samchon/evidence` (edit the constants if it lives elsewhere).
+Upstream is expected at `D:/github/samchon/lint-plugin-evidence` (edit the constants if it lives elsewhere).
 
 ```bash
 # 1. Copy. Never exclude a directory named `lib` — the benchmark template ships
 #    frontend sources in `src/lib`, and excluding it silently delivers a
 #    workspace whose entry cannot resolve `@/lib/client`.
-robocopy <upstream>/benchmark/src            experimental/benchmark/evidence/src        /MIR /XD node_modules .git
-robocopy <upstream>/benchmark/template       experimental/benchmark/evidence/template   /MIR /XD node_modules .git
-robocopy <upstream>/benchmark/requirements   experimental/benchmark/evidence/requirements /MIR /XD node_modules .git
-robocopy <upstream>/benchmark/instructions   experimental/benchmark/evidence/instructions /MIR /XD node_modules .git
-robocopy <upstream>/packages/evidence/src    packages/evidence/src                      /MIR /XD node_modules .git
-robocopy <upstream>/packages/evidence/native packages/evidence/native                   /MIR /XD node_modules .git
-robocopy <upstream>/tests/test-evidence/src  tests/test-evidence/src                    /MIR /XD node_modules .git
-robocopy <upstream>/tests/test-benchmark/src tests/test-evidence-benchmark/src          /MIR /XD node_modules .git
+robocopy <upstream>/benchmark/src            benchmarks/evidence/src          /MIR /XD node_modules .git
+robocopy <upstream>/benchmark/template       benchmarks/evidence/template     /MIR /XD node_modules .git
+robocopy <upstream>/benchmark/requirements   benchmarks/evidence/requirements /MIR /XD node_modules .git
+robocopy <upstream>/benchmark/instructions   benchmarks/evidence/instructions /MIR /XD node_modules .git
+robocopy <upstream>/packages/evidence/src    packages/evidence/src            /MIR /XD node_modules .git
+robocopy <upstream>/packages/evidence/native packages/evidence/native         /MIR /XD node_modules .git
+robocopy <upstream>/tests/test-evidence/src  tests/test-evidence/src          /MIR /XD node_modules .git
+robocopy <upstream>/tests/test-benchmark/src tests/test-evidence-benchmark/src /MIR /XD node_modules .git
+
+# The two skills nest one level below their host skill, so upstream's own
+# two-level shape survives the copy and every relative link inside it still
+# resolves. Nothing re-flattens them and nothing rewrites their links.
+robocopy <upstream>/.agents/skills/benchmark .agents/skills/benchmark/evidence /MIR /XD node_modules .git
+copy     <upstream>/.agents/skills/evidence-graph/SKILL.md .agents/skills/project/evidence/SKILL.md
 
 # 2. Re-apply every adaptation. Idempotent; ends in a measurement.
 node experimental/evidence-vendor/readapt.cjs
 
-# 3. Re-flatten the benchmark operation skill and repair its sibling links.
-node experimental/evidence-vendor/flatten-skill.cjs
-node experimental/evidence-vendor/fix-skill-links.cjs
-
-# 4. Formatters. Go first, because upstream Go is tab-indented and this
+# 3. Formatters. Go first, because upstream Go is tab-indented and this
 #    repository pins two spaces and checks it.
 bash ./.vscode/gofmt-2spaces.sh -w packages/evidence/native/*.go
 npx prettier --write "packages/evidence/src/**/*.ts" \
-  "experimental/benchmark/evidence/src/**/*.ts" \
+  "benchmarks/evidence/src/**/*.ts" \
   "tests/test-evidence/src/**/*.ts" \
   "tests/test-evidence-benchmark/src/**/*.ts" \
-  ".agents/skills/evidence-*/*.md"
+  ".agents/skills/project/evidence/*.md" \
+  ".agents/skills/benchmark/evidence/**/*.md"
 
-# 5. Sweep for assumptions the copy carried over.
+# 4. Sweep for assumptions the copy carried over, then prove that every
+#    remaining difference from upstream is a declared adaptation.
 node experimental/evidence-vendor/audit.cjs
+node experimental/evidence-vendor/parity.cjs
 ```
 
-Do not run Prettier over `experimental/benchmark/evidence/{template,requirements,instructions}`. `.prettierignore` exempts them, and the reason is in that file.
+Do not run Prettier over `benchmarks/evidence/{template,requirements,instructions}`. `.prettierignore` exempts them, and the reason is in that file.
 
 ## What `readapt.cjs` does
 

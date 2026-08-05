@@ -12,7 +12,7 @@ Each cell uses a new ignored workspace.
 
 1. Copy the shared base template into the workspace and render its variables.
 2. Apply the arm overlay. Both arms splice their own `AGENTS.md` and review skill; only Evidence adds the package, claims, tags, and graph guidance.
-3. Copy the selected `experimental/benchmark/evidence/requirements/<subject>/` directory exactly into `docs/analysis/`. Treat its paths and bytes as opaque input.
+3. Copy the selected `benchmarks/evidence/requirements/<subject>/` directory exactly into `docs/analysis/`. Treat its paths and bytes as opaque input.
 4. Add the locally packed Evidence `.tgz` only for the Evidence arm, and record its SHA-256 on the cell.
 5. Run `pnpm install`.
 6. Initialize the workspace as a Git repository and commit the prepared baseline.
@@ -26,10 +26,10 @@ Instructions remain in the benchmark repository. The runner reads each Markdown 
 Start a new cell from the repository root:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> [run-id]
+pnpm --filter @ttsc/benchmark-evidence start codex <subject> <evidence|plain> <model> <effort> [run-id]
 ```
 
-Omit `run-id` to create a cell under `experimental/benchmark/evidence/output/<subject>/<engine>/<arm>/runs/<run-id>/`. Pass an existing run ID only to resume that exact engine, subject, arm, model, effort, workspace, and session; the runner compares all of them against the retained cell and refuses on any difference.
+Omit `run-id` to create a cell under `benchmarks/evidence/output/<subject>/<engine>/<arm>/runs/<run-id>/`. Pass an existing run ID only to resume that exact engine, subject, arm, model, effort, workspace, and session; the runner compares all of them against the retained cell and refuses on any difference.
 
 The launcher also reads the repository `HEAD` as the campaign's benchmark revision and refuses to start while anything is uncommitted or untracked.
 
@@ -42,7 +42,7 @@ Three options change what a run does:
 After `backend-start` completes, the runner stores a workspace and native-turn checkpoint before starting `backend-review`. If a later instruction proves defective, create a new run from that point:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> --from-backend-start <source-run-id>
+pnpm --filter @ttsc/benchmark-evidence start codex <subject> <evidence|plain> <model> <effort> --from-backend-start <source-run-id>
 ```
 
 The derived run verifies the retained cell and exact completed `backend-start` boundary, restores that workspace and reinstalls its dependencies, reapplies the current non-product instruction surface — `AGENTS.md` and `.agents/` — forks the native thread through the retained terminal turn, and reads the current downstream instructions. An explicit operator launch does not reject the checkpoint because repository inputs changed after it was created.
@@ -56,7 +56,7 @@ Only the Plain arm stops for a verdict. It stops after every Backend, Frontend, 
 The runner produces the verdict itself: at the boundary it spawns a fresh Codex thread on the cell's own model and effort, which reads the attempt's stage log and the measured workspace and returns a decision. Three attempts are permitted at one boundary, and a resume retries a failed one. Only after the third failure does the run require a hand-written verdict:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark supervise <subject> <run-id> <verdict.json>
+pnpm --filter @ttsc/benchmark-evidence supervise <subject> <run-id> <verdict.json>
 ```
 
 A verdict carries `decision` and `rationale` only; the runner refuses one carrying `feedback`, so no verdict text ever reaches the cell. A failing scope receives the identical prescribed reminder, and eight supplementation attempts are permitted before the run retains `quality-failed`.
@@ -66,23 +66,23 @@ A verdict carries `decision` and `rationale` only; the runner refuses one carryi
 An operator warning is a separate channel with its own command:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark warn <subject> <evidence|plain> <run-id> <warning.json>
+pnpm --filter @ttsc/benchmark-evidence warn <subject> <evidence|plain> <run-id> <warning.json>
 ```
 
 The cell must be stopped first. The runner refuses feedback that names the machinery outside the workspace, because a cell told it is being measured stops being a measurement.
 
 ## Publishable reports
 
-Raw run records and measured workspaces stay under the ignored `experimental/benchmark/evidence/output/` directory. Generate the tracked latest-run aggregate and comparison charts with:
+Raw run records and measured workspaces stay under the ignored `benchmarks/evidence/output/` directory. Generate the tracked latest-run aggregate and comparison charts with:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark audit-suspensions
-pnpm --filter @ttsc/evidence-benchmark report
+pnpm --filter @ttsc/benchmark-evidence audit-suspensions
+pnpm --filter @ttsc/benchmark-evidence report
 ```
 
 The suspension audit compares each latest run with Windows Kernel-Power disconnected-standby intervals. It records an interval in the run's `suspensions.json` only when retained events prove the same native process existed on both sides and emitted nothing during the interval. Reports exclude those verified intervals from total and stage work time without modifying `state.json`. The audit is Windows-only and throws elsewhere rather than reporting zero intervals.
 
-The command writes `experimental/benchmark/evidence/aggregate/summary.json`, stable per-cell JSON under `experimental/benchmark/evidence/aggregate/cells/<model>/<subject>/<arm>.json`, and the `tokens.svg` and `time.svg` charts. Every artifact renders or copies values from the same retained aggregate without recalculating them.
+The command writes `benchmarks/evidence/aggregate/summary.json`, stable per-cell JSON under `benchmarks/evidence/aggregate/cells/<model>/<subject>/<arm>.json`, and the `tokens.svg` and `time.svg` charts. Every artifact renders or copies values from the same retained aggregate without recalculating them.
 
 The report reconstructs OpenRouter API-equivalent USD cost from each native request's token categories and context tier, then publishes it only when those requests exactly match the retained total.
 
@@ -91,7 +91,7 @@ Pass repeated `--run-id <run-id>` arguments to both commands to audit and publis
 The live campaign dashboard is a separate command that takes no arguments and always renders the latest launched run of each cell:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark dashboard
+pnpm --filter @ttsc/benchmark-evidence dashboard
 ```
 
 ## Instruction sequence

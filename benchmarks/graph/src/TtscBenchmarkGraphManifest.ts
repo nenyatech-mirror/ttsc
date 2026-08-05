@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
 import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 
 /** Regenerates the graph prompt manifest from the checked-in question files. */
@@ -27,18 +28,13 @@ export namespace TtscBenchmarkGraphManifest {
    * The generated document preserves repository order and pins every prompt by
    * SHA-256 without embedding answers or scoring policy.
    *
-   * @param entrypointDirectory Directory containing the executable bootstrap.
+   * Resolves the corpus through {@link TtscBenchmarkConstant.QUESTIONS_ROOT}
+   * rather than counting directories up from the bootstrap. Counting was wrong
+   * the moment the package moved, and it stayed wrong silently: a manifest
+   * generated against a missing corpus still writes a file.
    */
-  export function main(entrypointDirectory: string): void {
-    const questionDirectory: string = path.resolve(
-      entrypointDirectory,
-      "..",
-      "..",
-      "..",
-      "assets",
-      "graph",
-      "questions",
-    );
+  export function main(): void {
+    const questionDirectory: string = TtscBenchmarkConstant.QUESTIONS_ROOT;
     const has = (relativePath: string): boolean =>
       fs.existsSync(path.join(questionDirectory, relativePath));
     const sha = (relativePath: string): string =>

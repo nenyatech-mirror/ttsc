@@ -56,11 +56,11 @@ Branch, commit, pull request, check, and merge flow, `.agents/skills/pull-reques
 
 ### Evidence Graph
 
-The domain model `@ttsc/evidence` enforces: the `@evidence` tag grammar, node kinds, hierarchy, reference resolution, obligation coverage, reference policies, and exclusions, `.agents/skills/evidence-graph/SKILL.md`. Read before changing evidence rule semantics, the tag grammar, its configuration surface, or any of its diagnostics; the Go rule API itself is the contributor contract in `packages/lint/README.md`.
+The domain model `@ttsc/evidence` enforces: the `@evidence` tag grammar, node kinds, hierarchy, reference resolution, obligation coverage, reference policies, and exclusions, `.agents/skills/project/evidence/SKILL.md`. Read before changing evidence rule semantics, the tag grammar, its configuration surface, or any of its diagnostics; the Go rule API itself is the contributor contract in `packages/lint/README.md`.
 
 ### Evidence Benchmark Operation
 
-Setting up, launching, supervising, recovering, and reporting an `@ttsc/evidence` benchmark campaign, `.agents/skills/evidence-benchmark/SKILL.md`. Read whenever operating, supervising, or reporting one of its runs. It is separate from the `benchmark` skill, which owns ttsc's own performance and graph harnesses; this one measures how a coding agent behaves with and without the evidence graph, and its measurement and intervention perspectives are never interchangeable.
+Setting up, launching, supervising, recovering, and reporting an `@ttsc/evidence` benchmark campaign, `.agents/skills/benchmark/evidence/SKILL.md`. Read whenever operating, supervising, or reporting one of its runs. It is separate from the `benchmark` skill, which owns ttsc's own performance and graph harnesses; this one measures how a coding agent behaves with and without the evidence graph, and its measurement and intervention perspectives are never interchangeable.
 
 ### Benchmark Measurement
 
@@ -80,10 +80,11 @@ Update AGENTS.md only for repository-contract changes: a new skill area, a renam
 
 ### Skills
 
-- **Location.** `.agents/skills/<kebab-name>/SKILL.md`. No numeric prefix. Each file opens with YAML frontmatter whose `name` matches the directory and whose third-person `description` states what the skill covers and when to use it.
+- **Location.** `.agents/skills/<kebab-name>/SKILL.md`. No numeric prefix. Each file opens with YAML frontmatter whose `name` matches its path below `.agents/skills/` and whose third-person `description` states what the skill covers and when to use it.
+- **A vendored skill nests under the skill that owns its subject.** `project/evidence` and `benchmark/evidence` come from `samchon/lint-plugin-evidence`, and nesting them one level below their host lets upstream's own shape survive a re-copy with every relative link inside it intact. Their `name` is that path, because two skills called `evidence` would collide.
 - **Core in SKILL.md, conditional topics as sibling documents.** Keep always-applicable procedure in SKILL.md. Move a topic needed only under a specific condition to a one-level-deep sibling document and link it with that read condition.
 - **Two trigger surfaces, one scope.** The frontmatter description is the full trigger contract, including exclusions. The AGENTS.md pointer mirrors that scope more briefly. Correct the frontmatter first when the scope changes.
 - **Create or merge.** Add a skill when a substantial repository concern would otherwise inflate AGENTS.md beyond an index. Merge sibling concerns when they share most of their structure.
 - **Repository skill files only.** Keep repository skills to `SKILL.md` and conditionally loaded sibling documents. Do not add `agents/openai.yaml` UI metadata or separate `multi-agent-*` skills.
 - **Headings are plain.** No chapter numbers in skill or AGENTS.md headings. Use descriptive titles.
-- **Current set.** The repository skills are `project`, `development`, `typescript-go-sync`, `documentation`, `issue-campaign`, `review`, `multi-agent`, `discussion`, `pull-request`, `benchmark`, `evidence-graph`, and `evidence-benchmark`.
+- **Current set.** The repository skills are `project`, `development`, `typescript-go-sync`, `documentation`, `issue-campaign`, `review`, `multi-agent`, `discussion`, `pull-request`, `benchmark`, and the two vendored ones, `project/evidence` and `benchmark/evidence`.

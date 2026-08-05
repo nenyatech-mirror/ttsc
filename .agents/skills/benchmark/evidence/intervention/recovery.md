@@ -10,7 +10,7 @@ When the resume conditions below match, resume immediately after diagnosis and a
 
 ## Free The Cell's Ports
 
-A cell never contends with another cell — the blocks are disjoint, and [measurement-running.md](measurement-running.md) maps them. A cell contends with its own past: a killed runner leaves its API server, Swagger, Vite, and Playwright children holding that block, and the next launch fails its pre-launch port check.
+A cell never contends with another cell — the blocks are disjoint, and [measurement/running.md](../measurement/running.md) maps them. A cell contends with its own past: a killed runner leaves its API server, Swagger, Vite, and Playwright children holding that block, and the next launch fails its pre-launch port check.
 
 Before resuming a stopped cell, confirm its four ports have no listener and stop whatever holds one. A listener on a cell's port while no runner of its own is alive means orphans are blocking recovery, and the reporting subagent reports that as its own condition rather than as a dead cell.
 
@@ -19,7 +19,7 @@ Before resuming a stopped cell, confirm its four ports have no listener and stop
 Resume only when the cell identity, frozen inputs, workspace, CLI version, objective, and native checkpoint still match:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> <run-id>
+pnpm --filter @ttsc/benchmark-evidence start codex <subject> <evidence|plain> <model> <effort> <run-id>
 ```
 
 Repeat that cell's own model and effort rather than the campaign default. The runner compares engine, subject, arm, model, effort, run ID, stop point, and ledger mode against the retained cell and refuses the resume on any difference.
@@ -42,7 +42,7 @@ After `backend-start` completes, the runner stores a durable checkpoint of the m
 When a defect is confined to an instruction after `backend-start`, preserve the source run and create a new checkpoint-derived run:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> <model> <effort> --from-backend-start <source-run-id>
+pnpm --filter @ttsc/benchmark-evidence start codex <subject> <evidence|plain> <model> <effort> --from-backend-start <source-run-id>
 ```
 
 The command then:

@@ -1,10 +1,10 @@
 # Boundary
 
-This is what **you**, operating the campaign from this repository, may not change. A cell's limits are a different contract entirely, written in the cell's own workspace, and [measurement-integrity.md](measurement-integrity.md) owns it. Never apply a rule from this page to a cell.
+This is what **you**, operating the campaign from this repository, may not change. A cell's limits are a different contract entirely, written in the cell's own workspace, and [measurement/integrity.md](../measurement/integrity.md) owns it. Never apply a rule from this page to a cell.
 
 ## Never, Whatever You Found
 
-Under `benchmark/template/**`, in either arm, at any nesting level:
+Under `benchmarks/evidence/template/**`, in either arm, at any nesting level:
 
 - **`tsconfig.json`** — any file, any property.
 - **`lint.config.ts`** — any file, any property, including a claim, a selector, a severity, or a `disabled`.
@@ -15,7 +15,7 @@ Creating or deleting one of those files counts as changing it.
 Three more:
 
 - **A measured workspace.** What a cell did to its own workspace is the measurement.
-- **`benchmark/requirements/**`.\*\* Opaque, authoritative bytes: never edit, rename, add, delete, normalize, summarize, validate, or challenge them.
+- **`benchmarks/evidence/requirements/**`.\*\* Opaque, authoritative bytes: never edit, rename, add, delete, normalize, summarize, validate, or challenge them.
 - **The cell's own reasoning.** Do not prompt the measured agent, inject advice, weaken a gate, or hard-code a subject answer, and never expose Evidence material to Plain. A cell's questions and partial reports do not invite operator input; its continuation instruction already tells it to finish on its own.
 
 ## Why The Three Files
@@ -38,12 +38,12 @@ Everything else in this repository is fixable, and where the fix lands decides w
 
 | What you fix | Who reads it | When you may edit it |
 | --- | --- | --- |
-| `benchmark/src/**` | A benchmark process, at start | Any time. Commit first: a resume requires a clean revision descending from the cell's frozen `benchmarkRevision`, and the runner retains the correction as that process's `runnerRevision`. |
-| `benchmark/instructions/**` | A running cell, at its next objective | Not while a cell that will reach it is alive. Stop and preserve the cohort first. |
-| `benchmark/template/**`, except the three files above | Workspace preparation only | Any time. It reaches future launches only, never a prepared workspace. |
+| `benchmarks/evidence/src/**` | A benchmark process, at start | Any time. Commit first: a resume requires a clean revision descending from the cell's frozen `benchmarkRevision`, and the runner retains the correction as that process's `runnerRevision`. |
+| `benchmarks/evidence/instructions/**` | A running cell, at its next objective | Not while a cell that will reach it is alive. Stop and preserve the cohort first. |
+| `benchmarks/evidence/template/**`, except the three files above | Workspace preparation only | Any time. It reaches future launches only, never a prepared workspace. |
 | The three files above | Every evidence population in every cell | Never without the user's explicit instruction. |
-| `benchmark/requirements/**` | Workspace preparation, byte-for-byte | Never. |
+| `benchmarks/evidence/requirements/**` | Workspace preparation, byte-for-byte | Never. |
 
 Report the defect immediately, and commit and push the verified correction in the campaign pull request.
 
-A defect confined to an instruction after `backend-start` is corrected by [deriving a new run](intervention-recovery.md) from that checkpoint, never by restarting the cell.
+A defect confined to an instruction after `backend-start` is corrected by [deriving a new run](recovery.md) from that checkpoint, never by restarting the cell.

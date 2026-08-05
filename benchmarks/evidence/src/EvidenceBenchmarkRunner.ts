@@ -1093,7 +1093,7 @@ export namespace EvidenceBenchmarkRunner {
     try {
       await request("initialize", {
         clientInfo: {
-          name: "@ttsc/evidence-benchmark",
+          name: "@ttsc/benchmark-evidence",
           version: "0.4.4",
         },
         capabilities: {

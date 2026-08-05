@@ -1,21 +1,21 @@
 # Aggregate
 
-`experimental/benchmark/evidence/aggregate` is what a campaign publishes and keeps. Like the dashboard it is generated from the retained record, so run the command and commit what it wrote.
+`benchmarks/evidence/aggregate` is what a campaign publishes and keeps. Like the dashboard it is generated from the retained record, so run the command and commit what it wrote.
 
 ## Publish
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark audit-suspensions
-pnpm --filter @ttsc/evidence-benchmark report
+pnpm --filter @ttsc/benchmark-evidence audit-suspensions
+pnpm --filter @ttsc/benchmark-evidence report
 ```
 
 `report` writes three artifacts:
 
-- `experimental/benchmark/evidence/aggregate/summary.json`.
-- Stable per-cell JSON under `experimental/benchmark/evidence/aggregate/cells/<model>/<subject>/<arm>.json`.
+- `benchmarks/evidence/aggregate/summary.json`.
+- Stable per-cell JSON under `benchmarks/evidence/aggregate/cells/<model>/<subject>/<arm>.json`.
 - The `tokens.svg` and `time.svg` comparison charts.
 
-Raw run records and measured workspaces stay under the ignored `experimental/benchmark/evidence/output/`. Only the aggregate is tracked.
+Raw run records and measured workspaces stay under the ignored `benchmarks/evidence/output/`. Only the aggregate is tracked.
 
 USD cost is reconstructed from each native request's token categories and context tier, and published only when those requests exactly match the retained total.
 
@@ -44,4 +44,4 @@ Run directories are the record. Nothing in them is deleted at the end of a campa
 3. Inspect CI.
 4. Merge when the cohort is closed and every required check is green.
 
-A recurring template, instruction, or runner defect is corrected under [intervention-boundary.md](intervention-boundary.md), not here.
+A recurring template, instruction, or runner defect is corrected under [intervention/boundary.md](../intervention/boundary.md), not here.

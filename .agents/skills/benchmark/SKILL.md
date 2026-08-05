@@ -5,12 +5,14 @@ description: Defines ttsc benchmark selection, fixture integrity, result reporti
 
 # Benchmark
 
-This repository has two independent benchmark systems. Read the matching procedure in full before acting:
+This skill owns the two harnesses this repository wrote for itself, one package each under `benchmarks/`. Read the matching procedure in full before acting:
 
 - [performance.md](performance.md): `ttsc + @ttsc/lint + ttsc format` versus `tsc + eslint + prettier`, including fixture branches and dashboard publication.
 - [graph.md](graph.md): `@ttsc/graph` and graph-MCP comparators, including AI-agent runs, trace audits, regression gates, and graph fixtures.
 
 Read both only when changing shared fixture infrastructure or a surface that affects both systems.
+
+`benchmarks/evidence` is a third package and a different kind of measurement: it runs one coding engine against itself rather than ttsc against a competitor, it is vendored from `samchon/lint-plugin-evidence`, and it keeps that project's conventions. Nothing here applies to it. Its operation is [evidence/SKILL.md](evidence/SKILL.md).
 
 ## Measurement Integrity
 
@@ -21,7 +23,7 @@ Read both only when changing shared fixture infrastructure or a surface that aff
 
 ## TypeScript Source Contract
 
-Keep every CLI entrypoint under `each harness package's `src/executable``; those files export nothing. An executable is a bootstrap, not an implementation: it only imports one owning `TtscBenchmark*` class or namespace and calls its `main()` entrypoint. Keep it within 12 physical lines. Move parsing, orchestration, validation, and helpers into equal-named reusable modules.
+Keep every CLI entrypoint under the harness package's own `src/executable`; those files export nothing. An executable is a bootstrap, not an implementation: it only imports one owning `TtscBenchmark*` class or namespace and calls its `main()` entrypoint. Keep it within 12 physical lines. Move parsing, orchestration, validation, and helpers into equal-named reusable modules.
 
 Outside that directory, each reusable module exposes exactly one `TtscBenchmark*` or `ITtscBenchmark*` symbol and its case-sensitive filename equals that symbol name. A data contract may merge one `ITtscBenchmark*` interface with its equal-named companion namespace.
 
@@ -29,7 +31,7 @@ Executable surfaces are classes or namespaces. Never add a standalone exported f
 
 Every exported symbol, exported namespace member, and public member of an exported class has JSDoc that states its benchmark role and non-obvious invariant. Every field in an exported data contract has JSDoc that records its meaning, units, optional-state semantics, and default where applicable. Do not restate only the TypeScript spelling.
 
-Run `pnpm --dir benchmarks check` before committing benchmark source. This checks the source contract before strict TypeScript validation.
+Before committing benchmark source, run the source contract over both harnesses with `node --experimental-transform-types scripts/ci/benchmark-source-contract.mts`, then the strict TypeScript validation of whichever package you touched with `pnpm --dir benchmarks/graph run check` or `pnpm --dir benchmarks/performance run check`. The contract check is repository tooling rather than a package script because neither harness owns it, and it deliberately skips `benchmarks/evidence`, which is vendored and keeps its own conventions.
 
 ## Benchmark Improvement Campaigns
 

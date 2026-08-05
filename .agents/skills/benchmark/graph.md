@@ -23,11 +23,11 @@ The benchmark measures setup time; it must not omit required setup to make a com
 ## Run And Audit
 
 ```bash
-pnpm --dir benchmarks graph -- --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena
-pnpm --dir benchmarks graph -- --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1
-pnpm --dir benchmarks graph:audit -- --dir=.work/graph/<timestamp>
-pnpm --dir benchmarks graph:audit -- --compare=<before>,<after>
-pnpm --dir benchmarks graph:audit -- --self-test
+pnpm --dir benchmarks/graph run start -- --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena
+pnpm --dir benchmarks/graph run start -- --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1
+pnpm --dir benchmarks/graph run audit -- --dir=.work/graph/<timestamp>
+pnpm --dir benchmarks/graph run audit -- --compare=<before>,<after>
+pnpm --dir benchmarks/graph run audit -- --self-test
 ```
 
 Use `--arm=baseline --tools=baseline` to refresh only the empty-MCP baseline. Use `--arm=graph --tools=ttsc-graph,codegraph,codebase-memory,serena` to add tool samples against published baselines.
@@ -47,7 +47,7 @@ The public graph dashboard stores one run per cell on the selected mid-size mode
 Parallel graph sweeps must use `--no-website` and unique `--out` directories. Publish completed suites afterward:
 
 ```bash
-pnpm --dir benchmarks graph:publish -- --from <out-dir>
+pnpm --dir benchmarks/graph run publish -- --from <out-dir>
 ```
 
 Never let concurrent runners write `graph.json` directly.

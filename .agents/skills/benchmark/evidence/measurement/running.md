@@ -18,14 +18,14 @@ Freeze every input before launch, and never launch an unauthorized cell or rerun
 - **Material** — requirements, template, instructions, package archive.
 - **Version** — CLI version, benchmark revision.
 
-[intervention-boundary.md](intervention-boundary.md) owns what may change and when.
+[intervention/boundary.md](../intervention/boundary.md) owns what may change and when.
 
 The runner reads the benchmark revision from the repository's `HEAD` and refuses to launch while anything is uncommitted or untracked, so commit or stash first.
 
 Unless the user names something else, every campaign runs the same engine, model, and effort. Only the subject and arm vary:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> gpt-5.6-luna high
+pnpm --filter @ttsc/benchmark-evidence start codex <subject> <evidence|plain> gpt-5.6-luna high
 ```
 
 - **`codex`** is the only engine the command line accepts.
@@ -55,25 +55,25 @@ Every cell owns a disjoint block of four ports from base 46000, so two cells nev
 
 The block reaches the workspace as `API_PORT`, `SWAGGER_PORT`, `VITE_DEV_PORT`, `VITE_API_HOST`, and `PLAYWRIGHT_TEST_PORT`, so the cell's own commands and tests inherit it without being told.
 
-What contends is never another cell — it is a cell and its own past. [intervention-recovery.md](intervention-recovery.md) owns the orphan case.
+What contends is never another cell — it is a cell and its own past. [intervention/recovery.md](../intervention/recovery.md) owns the orphan case.
 
 ### Stop After Backend Start
 
 `--stop-after-backend-start` ends the run once `backend-start` completes and its durable checkpoint exists, retaining status `checkpointed`:
 
 ```bash
-pnpm --filter @ttsc/evidence-benchmark start codex <subject> <evidence|plain> gpt-5.6-luna high --stop-after-backend-start
+pnpm --filter @ttsc/benchmark-evidence start codex <subject> <evidence|plain> gpt-5.6-luna high --stop-after-backend-start
 ```
 
-That run is finished. It never resumes, and it continues only as a checkpoint-derived run, which is why the flag exists: it seeds a reusable `backend-start` for downstream instruction work without spending the rest of a cell. It cannot be combined with `--from-backend-start`, and the runner refuses the stop if the checkpoint is missing. [intervention-recovery.md](intervention-recovery.md) owns the derivation.
+That run is finished. It never resumes, and it continues only as a checkpoint-derived run, which is why the flag exists: it seeds a reusable `backend-start` for downstream instruction work without spending the rest of a cell. It cannot be combined with `--from-backend-start`, and the runner refuses the stop if the checkpoint is missing. [intervention/recovery.md](../intervention/recovery.md) owns the derivation.
 
 ## What The Runner Prepares
 
 Each cell gets a new ignored workspace, prepared before any model use:
 
-1. Copy `benchmark/template/base` and render its variables.
-2. Apply `benchmark/template/<arm>` over it. Both arms get an overlay — each splices its own `AGENTS.md` and review skill — but only Evidence adds the package, claims, tags, and graph guidance.
-3. Copy `benchmark/requirements/<subject>/` byte-for-byte into the workspace's `docs/analysis/`.
+1. Copy `benchmarks/evidence/template/base` and render its variables.
+2. Apply `benchmarks/evidence/template/<arm>` over it. Both arms get an overlay — each splices its own `AGENTS.md` and review skill — but only Evidence adds the package, claims, tags, and graph guidance.
+3. Copy `benchmarks/evidence/requirements/<subject>/` byte-for-byte into the workspace's `docs/analysis/`.
 4. For Evidence only, install the locally packed Evidence archive and pin its SHA-256 to the cell. Plain never reads or installs it.
 5. Run `pnpm install`.
 6. Initialize the workspace as a Git repository and commit the prepared baseline.
@@ -95,7 +95,7 @@ The runner strips the variable from every child environment, so a measured cell 
 
 ## The Objective Sequence
 
-One native session receives its arm's frozen base sequence, read from `benchmark/instructions/<arm>/<scope>/<step>.md`:
+One native session receives its arm's frozen base sequence, read from `benchmarks/evidence/instructions/<arm>/<scope>/<step>.md`:
 
 `backend-start` → `backend-review` → `backend-final` → `frontend-start` → `frontend-review` → `frontend-final` → `overall-review` → `overall-final`
 
@@ -105,7 +105,7 @@ The runner joins each objective with the same arm's `instructions/<arm>/continue
 
 The arms share no runtime instruction bytes. Do not add operator prose.
 
-Only Plain stops at a Review boundary; Evidence runs the eight objectives without stopping. [plain-review.md](measurement-plain-review.md) owns that loop.
+Only Plain stops at a Review boundary; Evidence runs the eight objectives without stopping. [plain-review.md](plain-review.md) owns that loop.
 
 ## What Is Retained
 
@@ -127,8 +127,8 @@ Observe every active cell at least every 30 seconds:
 
 - `state.json`, and benchmark and native process liveness.
 - The recency of `events.jsonl` and of the current stage's `<stage>.log`.
-- The frozen configuration files in every cell. The reporting subagent re-reads them on every cycle and reports a hit as a material change, quoting the diff it just read. [integrity.md](measurement-integrity.md) owns what is a hit and what is the cell doing its job.
+- The frozen configuration files in every cell. The reporting subagent re-reads them on every cycle and reports a hit as a material change, quoting the diff it just read. [integrity.md](integrity.md) owns what is a hit and what is the cell doing its job.
 
 Correct the dashboard on any disagreement immediately, without waiting for its 5-minute interval.
 
-Take anything else to [intervention/SKILL.md](intervention.md), and diagnose before touching it.
+Take anything else to [intervention/SKILL.md](../intervention/SKILL.md), and diagnose before touching it.

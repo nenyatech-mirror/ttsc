@@ -8,8 +8,8 @@ import path from "node:path";
  * `docs/analysis/`, so this is the set of documents that must contribute units.
  * Deriving it from the copied requirements is what lets a case assert that a
  * reference reached all of them without any expectation written down here: the
- * runner copies `experimental/benchmark/evidence/requirements/<subject>/`
- * byte-for-byte, so the documents are whatever the frozen subject contains.
+ * runner copies `benchmarks/evidence/requirements/<subject>/` byte-for-byte, so
+ * the documents are whatever the frozen subject contains.
  *
  * Fenced blocks are skipped. A `##` inside a code fence is content, not a
  * heading, and counting one would make this report a document as owing units it

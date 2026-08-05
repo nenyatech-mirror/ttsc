@@ -36,11 +36,11 @@ When the Legacy TypeScript headline major changes, update every fixture's `legac
 ## Run Locally
 
 ```bash
-pnpm --dir benchmarks performance
-pnpm --dir benchmarks performance -- --project=vue --no-website
-pnpm --dir benchmarks performance -- --verify-only
-pnpm --dir benchmarks performance -- --list
-pnpm --dir benchmarks performance -- --sequential
+pnpm --dir benchmarks/performance run start
+pnpm --dir benchmarks/performance run start -- --project=vue --no-website
+pnpm --dir benchmarks/performance run start -- --verify-only
+pnpm --dir benchmarks/performance run start -- --list
+pnpm --dir benchmarks/performance run start -- --sequential
 ```
 
 Use `--no-website` for every targeted development run so a partial matrix cannot overwrite dashboard state.
@@ -62,7 +62,7 @@ Publish only from a quiet external host. `TTSC_BENCH_REQUIRE_QUIET=1` turns host
 Set `TTSC_BENCH_REQUIRE_QUIET` to `1` using the current shell's environment-variable syntax, then run:
 
 ```bash
-pnpm --dir benchmarks performance
+pnpm --dir benchmarks/performance run start
 ```
 
-After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `pnpm --dir benchmarks performance:merge -- <partials-dir> <website-benchmark.json>` only to combine audited partial `report.json` files by cell ID.
+After the sweep, inspect `website/public/benchmark/performance.json`. Require every fixture row, preserved row order, and a host panel matching the measurement machine. Use `pnpm --dir benchmarks/performance run merge -- <partials-dir> <website-benchmark.json>` only to combine audited partial `report.json` files by cell ID.

@@ -3,9 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { TtscBenchmarkCommandLine } from "./TtscBenchmarkCommandLine.ts";
+import { TtscBenchmarkGraphReduce } from "./TtscBenchmarkGraphReduce.ts";
 import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import { TtscBenchmarkObject } from "./TtscBenchmarkObject.ts";
-import { TtscBenchmarkGraphReduce } from "./TtscBenchmarkGraphReduce.ts";
 
 /** Owns CLI, filesystem, and Go orchestration for graph viewer reduction. */
 export namespace TtscBenchmarkGraphReduceCommand {

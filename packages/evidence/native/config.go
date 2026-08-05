@@ -325,8 +325,8 @@ func decodeReferencePolicy(
 // any file is opened, instead of once per citation that later fails to resolve.
 //
 // What this gives up is the decision it reverses: documentation can no longer
-// cite code, and the inverse obligation is not the same one. Do not restore the
-// fallback without restoring that record.
+// cite code, and the inverse obligation is not the same one. Do not restore the fallback
+// without restoring that record.
 func rejectForeignTypeScriptReference(
   claimKind artifactKind,
   referenceKind artifactKind,

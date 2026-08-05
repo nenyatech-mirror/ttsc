@@ -13,11 +13,7 @@ import path from "node:path";
  */
 export namespace EvidenceBenchmarkLayout {
   /** Path of this package relative to the repository that contains it. */
-  const PACKAGE_PATH: readonly string[] = [
-    "experimental",
-    "benchmark",
-    "evidence",
-  ];
+  const PACKAGE_PATH: readonly string[] = ["benchmarks", "evidence"];
 
   /**
    * Absolute path of the repository this package was loaded from.

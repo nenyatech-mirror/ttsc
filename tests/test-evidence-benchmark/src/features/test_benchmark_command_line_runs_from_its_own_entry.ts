@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { IRunResult } from "../internal/IRunResult";
 import { runScript } from "../internal/runScript";
 import { benchmarkRoot } from "../internal/suiteRoot";

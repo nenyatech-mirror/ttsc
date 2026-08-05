@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { EvidenceBenchmarkWorkspace } from "../../../../experimental/benchmark/evidence/src/EvidenceBenchmarkWorkspace";
-import type { EvidenceBenchmarkArm } from "../../../../experimental/benchmark/evidence/src/typings/EvidenceBenchmarkArm";
+import { EvidenceBenchmarkWorkspace } from "../../../../benchmarks/evidence/src/EvidenceBenchmarkWorkspace";
+import type { EvidenceBenchmarkArm } from "../../../../benchmarks/evidence/src/typings/EvidenceBenchmarkArm";
 import type { IBenchmarkWorkspace } from "./IBenchmarkWorkspace";
 import { packEvidenceArchive } from "./packEvidenceArchive";
 import { repositoryRoot } from "./suiteRoot";
@@ -16,8 +16,8 @@ import { repositoryRoot } from "./suiteRoot";
  * is that a population is non-empty and that its units are the ones the
  * documents on disk declare, and neither property is subject-specific. The
  * expectation is derived from whatever
- * `experimental/benchmark/evidence/requirements/<subject>/` contains, so
- * choosing a subject fixes the cost, not the assertion.
+ * `benchmarks/evidence/requirements/<subject>/` contains, so choosing a subject
+ * fixes the cost, not the assertion.
  */
 const SUBJECT = "todo";
 
@@ -142,10 +142,10 @@ const git = (cwd: string, argumentList: readonly string[]): string => {
 /**
  * Creates the one temporary directory every prepared workspace lives under.
  *
- * `experimental/benchmark/evidence/output/` is where a measured run is retained
- * and is never written by a test, so these trees go to the OS temporary
- * directory. The removal is registered on process exit rather than in each
- * case's `finally`, because the workspaces outlive individual cases by design.
+ * `benchmarks/evidence/output/` is where a measured run is retained and is
+ * never written by a test, so these trees go to the OS temporary directory. The
+ * removal is registered on process exit rather than in each case's `finally`,
+ * because the workspaces outlive individual cases by design.
  */
 const suiteTemporaryDirectory = (): string => {
   if (suiteDirectory !== undefined) return suiteDirectory;

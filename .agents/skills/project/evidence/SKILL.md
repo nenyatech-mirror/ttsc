@@ -1,5 +1,5 @@
 ---
-name: evidence-graph
+name: project/evidence
 description: Defines the evidence graph domain model for @ttsc/evidence — the tag grammar, node kinds, hierarchy, reference resolution, obligation coverage, reference policies, and exclusions. Use before changing rule semantics, the tag grammar, the configuration surface, or a diagnostic message; do not use for the mechanics of the Go rule API, which the `@ttsc/lint` contributor contract in packages/lint/README.md owns.
 ---
 
@@ -10,6 +10,8 @@ description: Defines the evidence graph domain model for @ttsc/evidence — the 
 An artifact that cites nothing has no proof it was needed. An artifact that cites a target no configured source declares has proof of nothing. `evidence/graph` turns both states into compile errors under the graph the consumer defines in `lint.config.ts`.
 
 The graph is configurable. Claims select the files and declaration hosts that owe acknowledgements; references select the evidence populations they owe. Every claim-reference pair is an independently complete obligation, and every element of a reference array remains separate.
+
+Read `.wiki/references/autobe-mcp.md` before generalizing behavior from that prior art, and `.wiki/design/decisions.md` for settled repository decisions and their costs.
 
 ## Tag Grammar
 
@@ -32,7 +34,7 @@ The two forms are two resolvers, and the token itself says which. A path address
 
 Keeping the discrimination in the token is what preserves the parser's independence from reference context. Without a boundary character, `POST /members` would have to be guessed at, which is why a path target stays one token and only a code target may spend braces to buy one.
 
-**Only a TypeScript claim may cite TypeScript evidence.** An inline link resolves in the citing module's import scope, which no other artifact has, so any other claim would have to match a bare name against one repository-wide table — and that makes symbol-name uniqueness across the whole repository load-bearing. The configuration refuses the pairing at decode, and resolution refuses a code target reached through another claim's reference, because addresses are indexed from every claim at once and the guard alone left that door open. Both halves are needed; either alone is silent. What this gives up is that documentation can no longer cite code, and the inverse obligation is not the same one.
+**Only a TypeScript claim may cite TypeScript evidence.** An inline link resolves in the citing module's import scope, which no other artifact has, so any other claim would have to match a bare name against one repository-wide table — and that makes symbol-name uniqueness across the whole repository load-bearing. The configuration refuses the pairing at decode, and resolution refuses a code target reached through another claim's reference, because addresses are indexed from every claim at once and the guard alone left that door open. Both halves are needed; either alone is silent. What this gives up is that documentation can no longer cite code, and the inverse obligation is not the same one — `.wiki/design/decisions.md` records the reversal and its cost.
 
 The reason exists for review, not machine judgment. Do not add a rule that guesses whether prose is sincere; it will teach authors to write filler that passes.
 
@@ -61,7 +63,7 @@ Keep a withdrawn unit rather than discarding it, marked with the tag that withdr
 
 ## Swagger Classification
 
-Swagger is reference-only. One `IEvidenceGraphSwaggerReference` owns one exact project-relative file path or HTTP(S) URL through its singular `file` property; multiple documents are separate reference-array obligations. It has no public `symbol` selector because every operation under the normalized document's `paths` object is selected.
+Swagger is reference-only. One `ITtscEvidenceGraphSwaggerReference` owns one exact project-relative file path or HTTP(S) URL through its singular `file` property; multiple documents are separate reference-array obligations. It has no public `symbol` selector because every operation under the normalized document's `paths` object is selected.
 
 Normalize Swagger 2.0 and OpenAPI 3.x JSON/YAML inputs with `@typia/utils` to `@typia/interface`'s `OpenApi.IDocument` before materializing operations. Standard and additional operation methods become uppercase targets such as `POST:/members`; preserve the OpenAPI path exactly. Webhooks and component schemas are outside this artifact kind.
 

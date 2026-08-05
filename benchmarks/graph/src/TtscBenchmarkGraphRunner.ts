@@ -21,9 +21,9 @@ import path from "node:path";
 
 import { TtscBenchmarkCommandLine } from "./TtscBenchmarkCommandLine.ts";
 import { TtscBenchmarkConstant } from "./TtscBenchmarkConstant.ts";
-import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import { TtscBenchmarkGraph } from "./TtscBenchmarkGraph.ts";
 import { TtscBenchmarkGraphWebsiteCell } from "./TtscBenchmarkGraphWebsiteCell.ts";
+import { TtscBenchmarkNumber } from "./TtscBenchmarkNumber.ts";
 import type { ITtscBenchmarkAgentSample } from "./structures/ITtscBenchmarkAgentSample.ts";
 import type { ITtscBenchmarkGraphProject } from "./structures/ITtscBenchmarkGraphProject.ts";
 import { ITtscBenchmarkGraphWebsiteAgentCell } from "./structures/ITtscBenchmarkGraphWebsiteAgentCell.ts";
@@ -192,7 +192,7 @@ export namespace TtscBenchmarkGraphRunner {
     const repoRoot = TtscBenchmarkConstant.REPOSITORY_ROOT;
     // Outside the repo on purpose: the measured agent's cwd is the fixture clone,
     // and both CLIs walk the parent chain for CLAUDE.md / AGENTS.md, so a fixture
-    // under `experimental/benchmark/.work` loaded ttsc's own agent instructions into
+    // under `benchmarks/graph/.work` loaded ttsc's own agent instructions into
     // every cell — a vscode graph run was caught reading this repo's AGENTS.md
     // instead of touring vscode.
     const workDir = TtscBenchmarkGraph.resolveWorkDir(repoRoot);
