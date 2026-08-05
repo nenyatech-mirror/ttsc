@@ -12,6 +12,8 @@
     "@ttsc/evidence": "workspace:*",
     "@ttsc/lint": "workspace:*",
     "@types/node": "catalog:utils",
+    "@typia/interface": "catalog:samchon",
+    "@typia/utils": "catalog:samchon",
     "ttsc": "workspace:*",
     "typescript": "catalog:typescript",
     "yaml": "catalog:utils"

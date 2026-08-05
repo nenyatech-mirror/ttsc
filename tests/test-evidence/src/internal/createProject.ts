@@ -87,18 +87,8 @@ export const createProject = (
   // requirement, not a test artifact.
   const modules: string = path.join(directory, "node_modules");
   fs.mkdirSync(path.join(modules, "@ttsc"), { recursive: true });
-  fs.mkdirSync(path.join(modules, "@prisma"), { recursive: true });
   linkEvidencePackage(modules);
-  // The package's own runtime dependencies. Its `lib` is junctioned in, and a
-  // fixture cannot rely on Node walking that link back into the workspace to
-  // find them: the loaders are reached through ttsc's runtime hooks, which
-  // serve a module under the path it was requested by. Link them beside the
-  // package the way a real install would.
-  linkDirectory(
-    resolveDependency("@prisma/prisma-schema-wasm"),
-    path.join(modules, "@prisma", "prisma-schema-wasm"),
-  );
-  linkDirectory(resolveDependency("yaml"), path.join(modules, "yaml"));
+  linkEvidenceRuntimeDependencies(modules);
   linkDirectory(
     resolveDependency("@ttsc/lint"),
     path.join(modules, "@ttsc", "lint"),
@@ -131,14 +121,41 @@ const cleanupQuietly = (directory: string): void => {
     }
 };
 
+/** Absolute path to the workspace's `packages/evidence`. */
+const evidencePackageRoot = (): string =>
+  path.resolve(suiteRoot, "..", "..", "packages", "evidence");
+
+/**
+ * Links every runtime dependency `@ttsc/evidence` declares into the fixture.
+ *
+ * The package's `lib` is junctioned in, and a fixture cannot rely on Node
+ * walking that link back into the workspace to resolve them: the loaders are
+ * reached through ttsc's runtime hooks, which serve a module under the path it
+ * was requested by rather than its physical one.
+ *
+ * The list comes from the manifest rather than being written here, so a
+ * dependency the package gains upstream arrives with it instead of surfacing
+ * later as one more "cannot find module" in a single failing case.
+ */
+const linkEvidenceRuntimeDependencies = (modules: string): void => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(evidencePackageRoot(), "package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  for (const name of Object.keys(manifest.dependencies ?? {})) {
+    const scope: string | undefined = name.startsWith("@")
+      ? name.slice(0, name.indexOf("/"))
+      : undefined;
+    if (scope !== undefined)
+      fs.mkdirSync(path.join(modules, scope), { recursive: true });
+    linkDirectory(
+      resolveDependency(name),
+      path.join(modules, ...name.split("/")),
+    );
+  }
+};
+
 const linkEvidencePackage = (modules: string): void => {
-  const source: string = path.resolve(
-    suiteRoot,
-    "..",
-    "..",
-    "packages",
-    "evidence",
-  );
+  const source: string = evidencePackageRoot();
   const manifest = JSON.parse(
     fs.readFileSync(path.join(source, "package.json"), "utf8"),
   ) as Record<string, unknown>;

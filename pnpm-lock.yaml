@@ -513,6 +513,12 @@ importers:
       '@types/node':
         specifier: catalog:utils
         version: 25.9.1
+      '@typia/interface':
+        specifier: catalog:samchon
+        version: 13.2.0
+      '@typia/utils':
+        specifier: catalog:samchon
+        version: 13.2.0
       ttsc:
         specifier: workspace:*
         version: link:../../packages/ttsc
