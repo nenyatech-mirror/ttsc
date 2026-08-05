@@ -120,7 +120,7 @@ export namespace EvidenceBenchmarkWorkspace {
       }
       // Both arms compile with this repository's toolchain, so both receive the
       // same archives. Only the Evidence plugin is an arm treatment.
-      copyToolchainArchives(workspace, request.toolchain ?? []);
+      copyToolchainArchives(workspace, request.toolchain);
       const environment: NodeJS.ProcessEnv = { ...process.env };
       for (const name of Object.keys(environment))
         if (name.toUpperCase() === "EVIDENCE_BENCHMARK_ARCHIVE")
@@ -137,7 +137,7 @@ export namespace EvidenceBenchmarkWorkspace {
       fs.renameSync(stage, output);
       settled = path.join(output, "workspace");
       adoptRepositoryCatalog(request.repository, settled);
-      overrideToolchainResolution(settled, request.toolchain ?? []);
+      overrideToolchainResolution(settled, request.toolchain);
       await pnpm(["install", "--no-frozen-lockfile"], settled, environment);
       await run("git", ["init", "-b", "benchmark"], settled, environment);
       await run("git", ["add", "-A"], settled, environment);

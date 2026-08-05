@@ -146,6 +146,10 @@ const EXCEPTIONS = new Map([
     "re-rooted through EvidenceBenchmarkLayout, `workspacePackageVersions` is restored because a workspace never lists itself in a catalog, and the delivered workspace overrides the toolchain to locally packed archives because this repository is ttsc, where upstream's registry resolution would measure a published release",
   ],
   [
+    "benchmarks/evidence/src/EvidenceBenchmarkToolchain.ts",
+    "local only: this repository publishes the compiler a cell runs, so a launch packs `ttsc`, `@ttsc/lint`, `@ttsc/unplugin`, and the platform package, and the feature suite reads the set from here rather than spelling it a second time",
+  ],
+  [
     "benchmarks/evidence/src/EvidenceBenchmarkCheckpoint.ts",
     "re-rooted through EvidenceBenchmarkLayout",
   ],
@@ -159,7 +163,7 @@ const EXCEPTIONS = new Map([
   ],
   [
     "benchmarks/evidence/src/executable/EvidenceBenchmarkCommandLine.ts",
-    "re-rooted through EvidenceBenchmarkLayout, and packs the workspace toolchain per cell because this repository is ttsc, so the benchmark installs `ttsc`, `@ttsc/lint`, `@ttsc/unplugin`, and the platform package from locally packed archives rather than the registry",
+    "re-rooted through EvidenceBenchmarkLayout, and packs the workspace toolchain per cell through EvidenceBenchmarkToolchain because this repository is ttsc, so the benchmark installs `ttsc`, `@ttsc/lint`, `@ttsc/unplugin`, and the platform package from locally packed archives rather than the registry",
   ],
   [
     "benchmarks/evidence/src/structures/ITtscEvidenceBenchmarkWorkspaceArtifact.ts",
@@ -199,11 +203,11 @@ const EXCEPTIONS = new Map([
   ],
   [
     "tests/test-evidence-benchmark/src/internal/benchmarkWorkspace.ts",
-    "imports the benchmark source across a package boundary at this workspace's depth",
+    "imports the benchmark source across a package boundary at this workspace's depth, and packs this repository's toolchain once per process so every prepared arm is the workspace a launch here delivers rather than one resolved from the registry",
   ],
   [
     "tests/test-evidence-benchmark/src/internal/IBenchmarkWorkspace.ts",
-    "imports the benchmark source across a package boundary at this workspace's depth",
+    "imports the benchmark source across a package boundary at this workspace's depth, and carries the packed toolchain because a prepared workspace here binds this repository's own compiler",
   ],
   [
     "tests/test-evidence/src/internal/createProject.ts",
@@ -215,7 +219,15 @@ const EXCEPTIONS = new Map([
   ],
   [
     "tests/test-evidence-benchmark/src/features/test_benchmark_command_line_runs_from_its_own_entry.ts",
-    "runs the command line from `benchmarkRoot` rather than the repository root, which are the same directory upstream and not here",
+    "runs the command line from `benchmarkRoot` rather than the repository root, which are the same directory upstream and not here, so the `node:path` import upstream needs to compute that root is gone with it",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_workspace_resolves_the_packed_toolchain.ts",
+    "local only: upstream consumes `ttsc` from a catalog, so it has no local toolchain binding for a case to prove",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_plain_workspace_builds_without_evidence.ts",
+    "`.benchmark-deps/` exists in both arms here, because both install this repository's packed compiler, so Plain is held to carrying the toolchain archives exactly rather than to carrying no archive at all",
   ],
 ]);
 

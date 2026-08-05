@@ -37,9 +37,11 @@ export interface ITtscEvidenceBenchmarkWorkspaceRequest {
    * an arm treatment, and an arm that resolved it from the registry would
    * measure a published release instead.
    *
-   * Omitting it leaves those names to the workspace catalog, which resolves
-   * them from the registry. That is the right answer only where this repository
-   * is not the one that publishes them.
+   * Required rather than optional, and required even though an empty array
+   * still means "resolve from the registry". Every name left out of it falls
+   * back to the workspace catalog, which is the right answer only where this
+   * repository is not the one that publishes them — and a caller that omitted
+   * the field entirely would get that answer without ever deciding on it.
    */
-  toolchain?: readonly ITtscEvidenceBenchmarkWorkspaceArtifact[];
+  toolchain: readonly ITtscEvidenceBenchmarkWorkspaceArtifact[];
 }

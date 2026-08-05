@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,6 +11,7 @@ import { EvidenceBenchmarkLayout } from "../EvidenceBenchmarkLayout";
 import { EvidenceBenchmarkRunner } from "../EvidenceBenchmarkRunner";
 import { EvidenceBenchmarkRuntime } from "../EvidenceBenchmarkRuntime";
 import { EvidenceBenchmarkStageLog } from "../EvidenceBenchmarkStageLog";
+import { EvidenceBenchmarkToolchain } from "../EvidenceBenchmarkToolchain";
 import { EvidenceBenchmarkWorkspace } from "../EvidenceBenchmarkWorkspace";
 import { sanitizeBenchmarkEnvironment } from "../sanitizeBenchmarkEnvironment";
 import type { ITtscEvidenceBenchmarkCheckpoint } from "../structures/ITtscEvidenceBenchmarkCheckpoint";
@@ -98,26 +99,6 @@ interface ITtscEvidenceBenchmarkStateFile {
 }
 
 const EVIDENCE_BENCHMARK_PACKAGE_NAME = "@ttsc/evidence";
-
-/**
- * Workspace package directories a launch packs for both arms.
- *
- * Upstream this benchmark resolves `ttsc` and `@ttsc/lint` from a catalog
- * because they are external dependencies there. Here they are the workspace
- * itself, and a measured tree that installed them from the registry would
- * report on the last published release instead of the tree under test.
- *
- * The platform package is in the list because `ttsc` loads its native Go
- * compiler from it as an optional dependency. Packing `ttsc` alone would put a
- * locally built JavaScript wrapper in front of a published compiler binary,
- * which is a pairing that exists nowhere else and measures neither side.
- */
-const EVIDENCE_BENCHMARK_TOOLCHAIN_DIRECTORIES: readonly string[] = [
-  "packages/ttsc",
-  "packages/lint",
-  "packages/unplugin",
-  `packages/ttsc-${process.platform}-${process.arch}`,
-];
 
 const main = async (): Promise<void> => {
   const repository: string = EvidenceBenchmarkLayout.repositoryRoot;
@@ -286,7 +267,7 @@ const main = async (): Promise<void> => {
   try {
     await EvidenceBenchmarkRuntime.assertAvailable([cell.runtime!]);
     const toolchain: ITtscEvidenceBenchmarkWorkspaceArtifact[] =
-      await packEvidenceBenchmarkToolchain(repository, temporary);
+      await EvidenceBenchmarkToolchain.pack(repository, temporary);
     cell.toolchainArtifacts = toolchain.map((artifact) => ({
       name: artifact.name,
       dependency: `.benchmark-deps/${path.basename(artifact.archive)}`,
@@ -296,7 +277,11 @@ const main = async (): Promise<void> => {
       const retainedArchive: string | undefined =
         process.env.EVIDENCE_BENCHMARK_ARCHIVE;
       if (retainedArchive === undefined)
-        await packWorkspacePackage(repository, "packages/evidence", archive);
+        await EvidenceBenchmarkToolchain.packPackage(
+          repository,
+          "packages/evidence",
+          archive,
+        );
       else {
         const source: string = path.resolve(retainedArchive);
         if (!fs.statSync(source).isFile())
@@ -888,89 +873,6 @@ export const assertEvidenceBenchmarkRecoveryRevision = (
 
 const sha256 = (file: string): string =>
   crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-
-/**
- * Packs one workspace package of this repository into `archive`.
- *
- * @param repository Repository root the package directory is resolved against.
- * @param directory POSIX-relative package directory, such as `packages/ttsc`.
- * @param archive Absolute destination path of the produced tarball.
- */
-const packWorkspacePackage = async (
-  repository: string,
-  directory: string,
-  archive: string,
-): Promise<void> => {
-  const entrypoint: string | undefined = process.env.npm_execpath;
-  if (entrypoint === undefined)
-    throw new Error(
-      "The benchmark command line must be launched through pnpm.",
-    );
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [entrypoint, "pack", "--out", archive],
-      {
-        cwd: path.join(repository, ...directory.split("/")),
-        env: process.env,
-        shell: false,
-        windowsHide: true,
-        stdio: "inherit",
-      },
-    );
-    child.once("error", reject);
-    child.once("close", (exitCode, signal) => {
-      if (exitCode === 0 && signal === null) resolve();
-      else
-        reject(
-          new Error(
-            [
-              `Package pack of ${directory} exited with`,
-              `code ${String(exitCode)} and signal ${String(signal)}.`,
-            ].join(" "),
-          ),
-        );
-    });
-  });
-};
-
-/**
- * Packs every toolchain package of
- * {@link EVIDENCE_BENCHMARK_TOOLCHAIN_DIRECTORIES} into `temporary`.
- *
- * Each dependency name comes from the packed package's own manifest rather than
- * from a constant beside the directory list. A package renamed in this
- * repository would otherwise bind the workspace to a name nothing publishes,
- * and pnpm would install the registry copy of the old one without complaint.
- */
-const packEvidenceBenchmarkToolchain = async (
-  repository: string,
-  temporary: string,
-): Promise<ITtscEvidenceBenchmarkWorkspaceArtifact[]> => {
-  const artifacts: ITtscEvidenceBenchmarkWorkspaceArtifact[] = [];
-  for (const directory of EVIDENCE_BENCHMARK_TOOLCHAIN_DIRECTORIES) {
-    const location: string = path.join(repository, ...directory.split("/"));
-    if (!fs.existsSync(location) || !fs.statSync(location).isDirectory())
-      throw new Error(
-        `Benchmark toolchain package directory is missing: ${directory}.`,
-      );
-    const manifest: string = path.join(location, "package.json");
-    if (!fs.existsSync(manifest))
-      throw new Error(
-        `Benchmark toolchain package has no manifest: ${directory}.`,
-      );
-    const { name } = typia.assert<{ name: string }>(
-      JSON.parse(fs.readFileSync(manifest, "utf8")),
-    );
-    const archive: string = path.join(
-      temporary,
-      `${path.basename(directory)}.tgz`,
-    );
-    await packWorkspacePackage(repository, directory, archive);
-    artifacts.push({ name, archive });
-  }
-  return artifacts;
-};
 
 const initializeAppendOnly = (file: string): void => {
   const descriptor: number = fs.openSync(file, "wx");
