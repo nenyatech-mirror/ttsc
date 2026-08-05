@@ -1,0 +1,43 @@
+import path from "node:path";
+
+import { EvidenceBenchmarkCheckpoint } from "../EvidenceBenchmarkCheckpoint";
+import { EvidenceBenchmarkSupervision } from "../EvidenceBenchmarkSupervision";
+
+const main = (): void => {
+  const [subject, runId, verdictFile] = process.argv.slice(2);
+  if (
+    subject === undefined ||
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subject) ||
+    runId === undefined ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      runId,
+    ) ||
+    verdictFile === undefined ||
+    process.argv.length !== 5
+  )
+    throw new Error("Usage: pnpm supervise <subject> <run-id> <verdict.json>");
+  const repository: string = path.resolve(__dirname, "../../..");
+  const verdict = EvidenceBenchmarkSupervision.decide({
+    runRoot: path.join(
+      repository,
+      "benchmark",
+      "output",
+      subject,
+      "codex",
+      "plain",
+      "runs",
+      runId,
+    ),
+    instructionsRoot: path.join(repository, "benchmark", "instructions"),
+    verdictFile,
+    subject,
+    inputIdentity: EvidenceBenchmarkCheckpoint.identifyInputs({
+      repository,
+      subject,
+      arm: "plain",
+    }),
+  });
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+};
+
+main();

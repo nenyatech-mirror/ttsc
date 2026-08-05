@@ -1,6 +1,7 @@
 packages:
   - "config"
   - "experimental/benchmark"
+  - "experimental/benchmark/evidence"
   - "packages/*"
   - "tests/*"
   - "website"
