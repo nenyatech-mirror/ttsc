@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import typia from "typia";
 
-import type {
 import { EvidenceBenchmarkLayout } from "./EvidenceBenchmarkLayout";
+import type {
   ITtscEvidenceBenchmarkSuspension,
   ITtscEvidenceBenchmarkSuspensionLog,
 } from "./structures/ITtscEvidenceBenchmarkSuspension";
@@ -107,7 +107,10 @@ const auditSelectedRuns = (
 };
 
 const scanRuns = (repository: string): IAuditRun[] => {
-  const output: string = path.join(EvidenceBenchmarkLayout.assetsRoot(repository), "output");
+  const output: string = path.join(
+    EvidenceBenchmarkLayout.assetsRoot(repository),
+    "output",
+  );
   if (!fs.existsSync(output)) return [];
   const runs: IAuditRun[] = [];
   for (const subject of directories(output))
