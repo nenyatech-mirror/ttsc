@@ -13,9 +13,8 @@ interface RuntimePackEntry {
 }
 
 interface RuntimePackCancellationReason {
-  kind: "abort" | "timeout";
+  kind: "abort";
   reason?: unknown;
-  timeoutMs?: number;
 }
 
 interface RuntimePackCancellation {
@@ -23,25 +22,23 @@ interface RuntimePackCancellation {
   dispose: () => void;
 }
 
-export const DEFAULT_RUNTIME_PACK_TIMEOUT_MS = 30_000;
-
 const packCache = new Map<string, RuntimePackEntry>();
 
 /**
  * Fetches the prebuilt runtime pack once per URL.
  *
- * Concurrent callers share one load. A caller abort or deadline cancels that
- * shared attempt; rejection removes it from the cache so the next call retries
- * from scratch. Successful packs remain cached.
+ * Concurrent callers share one load. A caller abort cancels that shared
+ * attempt; rejection removes it from the cache so the next call retries from
+ * scratch. Successful packs remain cached. Nothing else ends the load: how long
+ * a fetch takes belongs to the network, not to a number chosen here.
  */
 export function loadTypiaRuntimePack(
   url: string,
   options: ILoadTypiaRuntimePackOptions = {},
 ): Promise<Record<string, string>> {
-  const timeoutMs = resolveRuntimePackTimeout(options.timeoutMs);
   const cached = packCache.get(url);
   if (cached) {
-    attachRuntimePackCancellation(cached, options.signal, timeoutMs);
+    attachRuntimePackCancellation(cached, options.signal);
     return cached.promise;
   }
 
@@ -80,23 +77,13 @@ export function loadTypiaRuntimePack(
 
   entry = { controller, promise };
   packCache.set(url, entry);
-  attachRuntimePackCancellation(entry, options.signal, timeoutMs);
+  attachRuntimePackCancellation(entry, options.signal);
   return promise;
-}
-
-function resolveRuntimePackTimeout(timeoutMs: number | undefined): number {
-  const value = timeoutMs ?? DEFAULT_RUNTIME_PACK_TIMEOUT_MS;
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647)
-    throw new RangeError(
-      "loadTypiaRuntimePack: timeoutMs must be a positive integer no greater than 2147483647.",
-    );
-  return value;
 }
 
 function attachRuntimePackCancellation(
   entry: RuntimePackEntry,
   callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
 ): void {
   const abortFromCaller = (): void => {
     if (!entry.controller.signal.aborted)
@@ -108,15 +95,7 @@ function attachRuntimePackCancellation(
   if (callerSignal?.aborted) abortFromCaller();
   else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
-  const timer = setTimeout(() => {
-    if (!entry.controller.signal.aborted)
-      entry.controller.abort({
-        kind: "timeout",
-        timeoutMs,
-      } satisfies RuntimePackCancellationReason);
-  }, timeoutMs);
   const cleanup = (): void => {
-    clearTimeout(timer);
     callerSignal?.removeEventListener("abort", abortFromCaller);
   };
   void entry.promise.then(cleanup, cleanup);
@@ -160,11 +139,6 @@ function runtimePackCancellationError(
   phase: string,
 ): Error {
   const reason = signal.reason as RuntimePackCancellationReason | undefined;
-  if (reason?.kind === "timeout")
-    return new Error(
-      `loadTypiaRuntimePack: timed out after ${reason.timeoutMs}ms while ${phase}.`,
-    );
-
   const error = new Error(`loadTypiaRuntimePack: aborted while ${phase}.`);
   const cause = reason?.kind === "abort" ? reason.reason : signal.reason;
   if (cause !== undefined) (error as Error & { cause?: unknown }).cause = cause;

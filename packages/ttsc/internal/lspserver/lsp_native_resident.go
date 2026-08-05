@@ -9,14 +9,7 @@ import (
   "os/exec"
   "strings"
   "sync"
-  "time"
 )
-
-// residentRequestTimeout bounds one resident verb round trip, mirroring the
-// spawn-per-verb path's nativePluginCommandTimeout. A rule that hangs must not
-// wedge the daemon's request mutex forever; on timeout the sidecar is killed and
-// the caller falls back to a fresh spawn.
-const residentRequestTimeout = nativePluginCommandTimeout
 
 // The serve verbs below are routed to the resident daemon because they load a
 // Program.
@@ -121,8 +114,10 @@ func (s *NativePluginSource) serveRun(plugin NativeLSPPluginEntry, verb string, 
 }
 
 // call sends one request to the daemon and reads its reply, serializing access
-// to the single pipe. It spawns the child on first use or after a death, and
-// enforces a per-request timeout so a hung rule cannot wedge the mutex.
+// to the single pipe. It spawns the child on first use or after a death. The
+// read is unbounded — the rule is the user's own code — and the mutex is held
+// only as long as the sidecar is alive, because its death closes stdout and
+// ends the read.
 func (sc *residentSidecar) call(s *NativePluginSource, plugin NativeLSPPluginEntry, req serveClientRequest) ([]byte, int, error) {
   sc.mu.Lock()
   defer sc.mu.Unlock()
@@ -162,23 +157,21 @@ func (sc *residentSidecar) call(s *NativePluginSource, plugin NativeLSPPluginEnt
     raw, err := sc.stdout.ReadBytes('\n')
     done <- readResult{line: raw, err: err}
   }()
-  select {
-  case <-time.After(residentRequestTimeout):
+  // No deadline: a rule that takes a long time is the user's own code running,
+  // and the read still ends the moment the sidecar dies, because closing its
+  // stdout surfaces here as a read error.
+  res := <-done
+  if res.err != nil {
     sc.kill()
-    return nil, 0, fmt.Errorf("ttscserver: %s %s (resident) timed out", pluginLabel(plugin), req.Verb)
-  case res := <-done:
-    if res.err != nil {
-      sc.kill()
-      return nil, 0, res.err
-    }
-    var resp serveClientResponse
-    if err := json.Unmarshal(res.line, &resp); err != nil {
-      sc.kill()
-      return nil, 0, err
-    }
-    sc.everServed = true
-    return resp.Result, resp.Code, nil
+    return nil, 0, res.err
   }
+  var resp serveClientResponse
+  if err := json.Unmarshal(res.line, &resp); err != nil {
+    sc.kill()
+    return nil, 0, err
+  }
+  sc.everServed = true
+  return resp.Result, resp.Code, nil
 }
 
 // spawn starts the resident child with the base project args and the lsp-serve

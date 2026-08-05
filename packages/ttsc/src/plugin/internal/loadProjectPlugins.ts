@@ -16,10 +16,7 @@ import type { ITtscLoadedNativePlugin } from "../../structures/internal/ITtscLoa
 import type { ITtscParsedProjectConfig } from "../../structures/internal/ITtscParsedProjectConfig";
 import { buildSourcePlugin } from "./buildSourcePlugin";
 import {
-  PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES,
-  PLUGIN_DESCRIPTOR_PROCESS_OPTIONS,
-  PLUGIN_DESCRIPTOR_STATUS_FD,
-  pluginDescriptorBoundaryEnvironment,
+  pluginDescriptorFailureReason,
   pluginDescriptorProcessFailure,
 } from "./descriptorProcessFailure";
 
@@ -697,6 +694,50 @@ function requirePluginEntry(
 const TS_SOURCE_PATTERN = /\.(?:[cm]?ts|tsx)$/i;
 
 /**
+ * The descriptor shim's emitted source.
+ *
+ * Exported so a regression can inspect the same bytes ttsx executes. This
+ * template consumes its own escapes, so reading this file's text instead would
+ * check characters no consumer ever sees — and a dropped backslash turns an
+ * escape into the character it was escaping: a raw line terminator inside a
+ * string literal, which stops the shim parsing and takes every descriptor load
+ * with it. Its `@ttsc/lint` twin has carried that guard since the same defect
+ * shipped there.
+ */
+export const PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
+  `// @ts-nocheck`,
+  `import { writeFileSync } from "node:fs";`,
+  `import { pathToFileURL } from "node:url";`,
+  // The import is inside the try, not above it. A descriptor that cannot be
+  // found, or whose module body throws, fails exactly where a descriptor
+  // whose factory throws does, and a caller deserves the same reason for
+  // both — "Cannot find module ./missing" is as actionable as anything the
+  // factory could have said.
+  `try {`,
+  `  const mod = await import(pathToFileURL(process.env.TTSC_PLUGIN_ENTRY).href);`,
+  `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
+  `  const candidate = mod.createTtscPlugin ?? mod.default ?? mod.plugin ?? mod;`,
+  `  const descriptor =`,
+  `    typeof candidate === "function" ? candidate(context) : candidate;`,
+  `  writeFileSync(process.env.TTSC_PLUGIN_DESCRIPTOR_OUT, JSON.stringify(descriptor));`,
+  `} catch (error) {`,
+  // The stack streams to the user's stderr on its own. This puts the reason
+  // a caller can act on into the channel the parent already reads, so the
+  // failure is not reduced to a bare exit status.
+  // The escape is doubled on purpose: this template consumes one level, so
+  // `\\n` here is what puts the two-character escape into the emitted shim.
+  // A single `\n` would put a raw line terminator inside a string literal,
+  // and the shim would stop parsing — taking every descriptor load with it.
+  `  process.stderr.write((error instanceof Error && error.stack ? error.stack : String(error)) + "\\n");`,
+  `  try {`,
+  `    writeFileSync(process.env.TTSC_PLUGIN_DESCRIPTOR_OUT, JSON.stringify({ __ttscLoaderError: error instanceof Error ? error.message : String(error) }));`,
+  `  } catch {}`,
+  `  process.exit(1);`,
+  `}`,
+  ``,
+].join("\n");
+
+/**
  * Evaluate a `.ts` plugin descriptor entry in a child `ttsx` process and return
  * the descriptor it produces. A generated shim imports the entry, invokes its
  * factory with `context`, and writes the descriptor as JSON; `ttsx` runs the
@@ -735,21 +776,7 @@ function loadDescriptorViaTtsx(
       },
     }),
   );
-  fs.writeFileSync(
-    shim,
-    [
-      `// @ts-nocheck`,
-      `import { writeFileSync } from "node:fs";`,
-      `import { pathToFileURL } from "node:url";`,
-      `const mod = await import(pathToFileURL(process.env.TTSC_PLUGIN_ENTRY).href);`,
-      `const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
-      `const candidate = mod.createTtscPlugin ?? mod.default ?? mod.plugin ?? mod;`,
-      `const descriptor =`,
-      `  typeof candidate === "function" ? candidate(context) : candidate;`,
-      `writeFileSync(process.env.TTSC_PLUGIN_DESCRIPTOR_OUT, JSON.stringify(descriptor));`,
-      ``,
-    ].join("\n"),
-  );
+  fs.writeFileSync(shim, PLUGIN_DESCRIPTOR_SHIM_SOURCE);
   try {
     const result = childProcess.spawnSync(node, [ttsx, "--no-plugins", shim], {
       cwd: context.projectRoot,
@@ -773,32 +800,28 @@ function loadDescriptorViaTtsx(
         TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
         TTSC_PLUGIN_DESCRIPTOR_OUT: out,
         TTSC_PLUGIN_ENTRY: request,
-        ...pluginDescriptorBoundaryEnvironment(),
       },
-      ...PLUGIN_DESCRIPTOR_PROCESS_OPTIONS,
-      stdio: [
-        "ignore",
-        "pipe",
-        "pipe",
-        ...Array.from(
-          { length: PLUGIN_DESCRIPTOR_STATUS_FD - 2 },
-          () => "pipe" as const,
-        ),
-      ],
+      // Both child streams are human output, and they go straight to this
+      // process's stderr as they are written. The descriptor itself travels
+      // through a file, so nothing here needs collecting — and collecting it
+      // only to replay it afterwards is what forced an invented output ceiling.
+      stdio: ["ignore", 2, 2],
       windowsHide: true,
     });
     const processFailure = pluginDescriptorProcessFailure(result, request);
-    if (processFailure) throw processFailure;
+    if (processFailure) {
+      // The descriptor's stack already reached the user's stderr as it ran.
+      // What it could not put there is a reason a caller can act on, so that
+      // arrives through the result file instead.
+      const reason = pluginDescriptorFailureReason(out);
+      throw reason === ""
+        ? processFailure
+        : new Error(`${processFailure.message}
+${reason}`);
+    }
     if (!fs.existsSync(out)) {
       throw new Error(
         `ttsc: plugin descriptor "${request}" evaluation through ttsx produced no descriptor output.`,
-      );
-    }
-    const outputSize = fs.statSync(out).size;
-    if (outputSize > PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES) {
-      throw new Error(
-        `ttsc: plugin descriptor "${request}" produced ${outputSize} bytes of JSON, ` +
-          `exceeding the ${PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES / (1024 * 1024)} MiB descriptor output limit.`,
       );
     }
     const text = fs.readFileSync(out, "utf8");
@@ -810,7 +833,7 @@ function loadDescriptorViaTtsx(
       );
     }
   } finally {
-    fs.rmSync(dir, { force: true, recursive: true });
+    removeEvaluationTempDir(dir);
   }
 }
 
@@ -1387,5 +1410,21 @@ function readTsgoVersion(projectRoot: string): string {
     return pkg.version ?? "unknown";
   } catch {
     return "unknown";
+  }
+}
+
+/**
+ * Remove an evaluation temp directory without letting cleanup replace a result.
+ *
+ * This runs from a `finally`, so a throw here would surface instead of the
+ * evaluation's own outcome — and on Windows a grandchild that inherited a
+ * handle, or a scanner holding the file, can make removal fail. Leaving bytes
+ * in the system temp directory is by far the lesser outcome.
+ */
+function removeEvaluationTempDir(directory: string): void {
+  try {
+    fs.rmSync(directory, { force: true, recursive: true });
+  } catch {
+    // Best effort.
   }
 }

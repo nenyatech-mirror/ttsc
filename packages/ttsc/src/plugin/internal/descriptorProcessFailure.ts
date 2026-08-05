@@ -1,50 +1,30 @@
-export const PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-export const PLUGIN_DESCRIPTOR_TIMEOUT_MS = 60_000;
-export const PLUGIN_DESCRIPTOR_TEARDOWN_GRACE_MS = 5_000;
-export const PLUGIN_DESCRIPTOR_STATUS_FD = 3;
-export const PLUGIN_DESCRIPTOR_PROCESS_OPTIONS = Object.freeze({
-  killSignal: "SIGKILL" as const,
-  maxBuffer: PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES,
-  timeout: PLUGIN_DESCRIPTOR_TIMEOUT_MS + PLUGIN_DESCRIPTOR_TEARDOWN_GRACE_MS,
-});
+import fs from "node:fs";
 
 interface DescriptorProcessResult {
   error?: Error;
-  output?: readonly (string | null)[] | null;
   signal: NodeJS.Signals | null;
   status: number | null;
-  stderr: string | null | undefined;
-  stdout: string | null | undefined;
 }
 
 /**
  * Classify the ways the isolated TypeScript descriptor evaluator can stop.
  *
- * Node reports both timeout and max-buffer termination with the configured
- * signal, so the process error code must take precedence over the signal. The
- * evaluator uses `SIGKILL`: Node's synchronous process API otherwise keeps
- * waiting when a POSIX child handles the default `SIGTERM` without exiting.
+ * The loader writes the child's own output straight to this process's stderr,
+ * so a diagnostic has already reached the user by the time anything here runs.
+ * What is left to say is only how the process ended: it never launched,
+ * something outside killed it, or it exited non-zero after printing its own
+ * reason.
+ *
+ * Nothing is bounded here — not time, not output. Both were the compiler
+ * deciding, on numbers nobody chose for this machine, that a user's own
+ * descriptor had run too long or said too much. Neither is this process's
+ * memory to spend either, because the child's streams are no longer collected
+ * into it.
  */
 export function pluginDescriptorProcessFailure(
   result: DescriptorProcessResult,
   request: string,
 ): Error | undefined {
-  const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
-  const nestedCode = result.output?.[PLUGIN_DESCRIPTOR_STATUS_FD]?.trim() ?? "";
-  if (code === "ETIMEDOUT" || nestedCode === "ETIMEDOUT") {
-    return new Error(
-      `ttsc: plugin descriptor "${request}" evaluation through ttsx timed out after ` +
-        `${PLUGIN_DESCRIPTOR_TIMEOUT_MS / 1_000} seconds. ` +
-        "Descriptor modules and factories must finish their setup within that window.",
-    );
-  }
-  if (code === "ENOBUFS" || nestedCode === "ENOBUFS") {
-    return new Error(
-      `ttsc: plugin descriptor "${request}" evaluation through ttsx exceeded the ` +
-        `${PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES / (1024 * 1024)} MiB process output limit. ` +
-        "Reduce stdout and stderr from the descriptor and its dependencies.",
-    );
-  }
   if (result.error) {
     return new Error(
       `ttsc: failed to launch ttsx for plugin descriptor "${request}": ${result.error.message}`,
@@ -56,45 +36,34 @@ export function pluginDescriptorProcessFailure(
     );
   }
   if (result.status !== 0) {
-    const reason = descriptorFailureReason(
-      hasText(result.stderr) ? result.stderr : result.stdout,
-    );
     return new Error(
-      `ttsc: plugin descriptor "${request}" evaluation through ttsx failed with exit code ${String(result.status)}` +
-        (reason === "" ? "" : "\n" + reason),
+      `ttsc: plugin descriptor "${request}" evaluation through ttsx failed with exit code ${String(result.status)}`,
     );
   }
   return undefined;
 }
 
 /**
- * Pass the semantic deadline and private status pipe through the `ttsx` wrapper
- * to the runtime child that actually executes the descriptor.
+ * Read the failure envelope the descriptor shim writes to its result file when
+ * it stops on an error it can name.
+ *
+ * This is the other half of classifying how the evaluation ended, which is why
+ * it lives beside {@link pluginDescriptorProcessFailure} rather than at the call
+ * site: the status says that it failed, and this says why.
+ *
+ * Only a well-formed envelope is honoured. A real descriptor never carries this
+ * key, and every other shape — an absent file, a shim that died before writing,
+ * a half-written result, a descriptor written before a later non-zero exit —
+ * leaves the process status to speak for itself.
  */
-export function pluginDescriptorBoundaryEnvironment(
-  now: number = Date.now(),
-): NodeJS.ProcessEnv {
-  return {
-    TTSC_TTSX_EVALUATOR_DEADLINE_MS: String(now + PLUGIN_DESCRIPTOR_TIMEOUT_MS),
-    TTSC_TTSX_EVALUATOR_MAX_BUFFER_BYTES: String(
-      PLUGIN_DESCRIPTOR_MAX_BUFFER_BYTES,
-    ),
-    TTSC_TTSX_EVALUATOR_STATUS_FD: String(PLUGIN_DESCRIPTOR_STATUS_FD),
-  };
+export function pluginDescriptorFailureReason(outputPath: string): string {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+    if (typeof parsed !== "object" || parsed === null) return "";
+    const message = (parsed as { __ttscLoaderError?: unknown })
+      .__ttscLoaderError;
+    return typeof message === "string" ? message.trim() : "";
+  } catch {
+    return "";
+  }
 }
-
-function hasText(value: string | null | undefined): value is string {
-  return value !== null && value !== undefined && value.trim() !== "";
-}
-
-function descriptorFailureReason(stderr: string | null | undefined): string {
-  const bounded = (stderr ?? "").slice(-PLUGIN_DESCRIPTOR_REASON_MAX_CHARS);
-  const lines = bounded
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim() !== "");
-  return lines.slice(-PLUGIN_DESCRIPTOR_REASON_LINES).join("\n");
-}
-
-const PLUGIN_DESCRIPTOR_REASON_LINES = 5;
-const PLUGIN_DESCRIPTOR_REASON_MAX_CHARS = 8 * 1024;

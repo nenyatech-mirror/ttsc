@@ -13,7 +13,6 @@ export interface NativeSessionFixture {
 
 export function createNativeSessionFixture(options: {
   mode: string;
-  requestTimeoutMs: number;
   stderr?: string;
   delayMs?: number;
   schemaVersion?: number;
@@ -35,7 +34,6 @@ export function createNativeSessionFixture(options: {
       cwd: root,
       tsconfig: "tsconfig.json",
       binary: resolveNativeSessionFake(),
-      requestTimeoutMs: options.requestTimeoutMs,
     }),
   };
 }
@@ -82,7 +80,8 @@ export async function waitFor(
   }
 }
 
-export function delay(ms: number): Promise<void> {
+/** Internal to `waitFor`; the timeout tests that imported it are gone. */
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 

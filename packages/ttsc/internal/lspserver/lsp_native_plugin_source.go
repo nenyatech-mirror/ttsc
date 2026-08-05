@@ -11,10 +11,8 @@ import (
   "strings"
   "sync"
   "sync/atomic"
-  "time"
 )
 
-const nativePluginCommandTimeout = 30 * time.Second
 const nativePluginCommandStdoutLimit = 4 * 1024 * 1024
 const nativePluginCommandStderrLimit = 1024 * 1024
 
@@ -825,7 +823,11 @@ func (s *NativePluginSource) runWithStdin(plugin NativeLSPPluginEntry, command s
   if strings.TrimSpace(plugin.Binary) == "" {
     return nil, fmt.Errorf("ttscserver: %s has no binary", pluginLabel(plugin))
   }
-  ctx, cancel := context.WithTimeout(context.Background(), nativePluginCommandTimeout)
+  // No deadline: the command is running the user's own rules, and how long
+  // that takes is not this process's call. The context stays so that a future
+  // early return cannot leave the child running — cancelling it kills the
+  // process rather than abandoning it.
+  ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
   allArgs := []string{
     command,
@@ -848,9 +850,6 @@ func (s *NativePluginSource) runWithStdin(plugin NativeLSPPluginEntry, command s
   cmd.Stdout = &stdout
   cmd.Stderr = &stderr
   err := cmd.Run()
-  if ctx.Err() != nil {
-    return nil, fmt.Errorf("ttscserver: %s %s timed out", pluginLabel(plugin), command)
-  }
   if err != nil {
     msg := strings.TrimSpace(stderr.String())
     if msg == "" {

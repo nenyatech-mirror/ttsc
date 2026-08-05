@@ -8,9 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
-  CONFIG_EVALUATOR_PROCESS_OPTIONS,
-  CONFIG_EVALUATOR_STATUS_FD,
-  configEvaluatorBoundaryEnvironment,
+  configEvaluatorFailureReason,
   configEvaluatorProcessFailure,
 } from "./internal/configEvaluatorFailure";
 import type { ITtscLintPlugin, ITtscLintPluginConfig } from "./structures";
@@ -630,33 +628,68 @@ const hooks = registerHooks({
   },
 });
 
-try {
-  const importedConfig = configLocation.toLowerCase().endsWith(".json")
-    ? JSON.parse(fs.readFileSync(configLocation, "utf8").replace(/^\uFEFF/, ""))
-    : await import(configUrl);
-  const current = await resolveConfig(importedConfig, true);
-  const pluginMaps = collectPluginObjects(current);
-  const entries: Array<{ namespace: string; source: string }> = [];
-  for (const map of pluginMaps) {
-    for (const [namespace, value] of Object.entries(map)) {
-      const source = extractPluginSource(value);
-      if (source === undefined || source.length === 0) {
-        throw new Error(
-          \`contributor \${JSON.stringify(namespace)} must resolve to an object with a non-empty "source" string\`,
-        );
+// Wrapped and settled explicitly rather than written as a top-level await.
+// The loader tsconfig's "module" now follows the config's own package, and
+// TS1378 rejects top-level await under a CommonJS module option however this
+// .mts file emits. The trailing catch is what a top-level await gave for
+// free: without it a throw from the finally would leave the promise
+// unsettled instead of failing the load.
+(async () => {
+  try {
+    const importedConfig = configLocation.toLowerCase().endsWith(".json")
+      ? JSON.parse(fs.readFileSync(configLocation, "utf8").replace(/^\uFEFF/, ""))
+      : await import(configUrl);
+    const current = await resolveConfig(importedConfig, true);
+    const pluginMaps = collectPluginObjects(current);
+    const entries: Array<{ namespace: string; source: string }> = [];
+    for (const map of pluginMaps) {
+      for (const [namespace, value] of Object.entries(map)) {
+        const source = extractPluginSource(value);
+        if (source === undefined || source.length === 0) {
+          throw new Error(
+            \`contributor \${JSON.stringify(namespace)} must resolve to an object with a non-empty "source" string\`,
+          );
+        }
+        entries.push({ namespace, source });
       }
-      entries.push({ namespace, source });
     }
+    fs.writeFileSync(outputPath, JSON.stringify({
+      dependencies: finalizeDependencies(),
+      entries,
+    }), "utf8");
+  } catch (error) {
+    reportLoaderFailure(error);
+  } finally {
+    hooks.deregister();
   }
-  fs.writeFileSync(outputPath, JSON.stringify({
-    dependencies: finalizeDependencies(),
-    entries,
-  }), "utf8");
-} catch (error) {
-  process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
-  process.exit(1);
-} finally {
-  hooks.deregister();
+})().catch((error) => {
+  // Reached only when the finally above throws: the catch already ends the
+  // process, so this is the deregistration's own failure, not the config's.
+  reportLoaderFailure(error);
+});
+
+// reportLoaderFailure ends this loader on an error it can name, on both of the
+// channels the parent uses.
+//
+// The stack is for a reader and streams to stderr as it is written. The reason
+// is a fact about the user's config that a caller has to act on, so it travels
+// as data through the result file the parent already reads. Only a well-formed
+// envelope is honoured there, so a partially written or unrelated file leaves
+// the process status to speak for itself.
+function reportLoaderFailure(error: unknown): never {
+  // The trailing newline ends the stack as a line of its own. Without it the
+  // parent's own message, written to this same stream, starts mid-line.
+  process.stderr.write((error instanceof Error && error.stack ? error.stack : String(error)) + "\\n");
+  try {
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify({ __ttscLoaderError: error instanceof Error ? error.message : String(error) }),
+      "utf8",
+    );
+  } catch {
+    // A reason that cannot be written leaves the exit status as the report.
+  }
+  return process.exit(1);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -1702,7 +1735,13 @@ function evaluateTtsxConfigPlugins(
             allowImportingTsExtensions: true,
             allowJs: true,
             checkJs: false,
-            module: "ESNext",
+            // The config is a Node module, so Node's rule decides its format:
+            // the nearest `package.json` `type` above it. Hardcoding one answer
+            // ran every ambiguous `.ts` config as ESM and broke `__dirname` in
+            // an ordinary CommonJS package (#1068). `moduleResolution` stays
+            // `bundler`, which tsgo accepts for both kinds, so extensionless
+            // relative imports keep resolving either way.
+            module: configModuleOption(configPath),
             moduleResolution: "bundler",
             noImplicitAny: false,
             outDir: path.join(tempDir, "out").replace(/\\/g, "/"),
@@ -1711,6 +1750,12 @@ function evaluateTtsxConfigPlugins(
             skipLibCheck: true,
             strict: false,
             target: "ES2022",
+            // TypeScript 7 includes no ambient type package unless `types` asks
+            // for it, and this Program extends nothing, so without the wildcard
+            // a config could not name a single Node global (#1068). The loader
+            // directory links the config's nearest `node_modules`, so the
+            // default `typeRoots` walk finds exactly what the project installed.
+            types: ["*"],
           },
           files: [
             loaderPath.replace(/\\/g, "/"),
@@ -1749,28 +1794,29 @@ function evaluateTtsxConfigPlugins(
     }
     const env = {
       ...nodeConfigLoaderEnv(configPath),
-      ...configEvaluatorBoundaryEnvironment(),
     };
     const command = ttsxThroughNodeIfNeeded(ttsxBinary);
     const result = spawnSync(command.binary, [...command.prefix, ...args], {
       cwd: tempDir,
       env,
-      encoding: "utf8",
-      ...CONFIG_EVALUATOR_PROCESS_OPTIONS,
-      stdio: [
-        "ignore",
-        "pipe",
-        "pipe",
-        ...Array.from(
-          { length: CONFIG_EVALUATOR_STATUS_FD - 2 },
-          () => "pipe" as const,
-        ),
-      ],
+      // Both child streams are human output, and they go straight to this
+      // process's stderr as they are written. Nothing is collected here: the
+      // parent's stdout is reserved for compiler JSON and LSP frames, and
+      // buffering the child only to replay it afterwards is what forced an
+      // invented output ceiling and made a long evaluation print nothing at all.
+      stdio: ["ignore", 2, 2],
       windowsHide: true,
     });
-    forwardConfigEvaluatorStreams(result.stdout, result.stderr);
     const processFailure = configEvaluatorProcessFailure(result, configPath);
-    if (processFailure) throw processFailure;
+    if (processFailure) {
+      // The evaluator's stack already reached the user's stderr as it ran. What
+      // it could not put there is a reason a caller can act on, so that arrives
+      // through the result file instead.
+      const reason = configEvaluatorFailureReason(outputPath);
+      throw reason === ""
+        ? processFailure
+        : new Error(`${processFailure.message}\n${reason}`);
+    }
     let payload: {
       dependencies?: ConfigDependencyFingerprint[];
       entries?: ConfigPluginEntry[];
@@ -1841,18 +1887,8 @@ function evaluateTtsxConfigPlugins(
     }
     return { dependencies, entries };
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    removeEvaluationTempDir(tempDir);
   }
-}
-
-function forwardConfigEvaluatorStreams(
-  stdout: string | null | undefined,
-  stderr: string | null | undefined,
-): void {
-  // Both child streams are human output. Parent stdout is reserved for compiler
-  // JSON or LSP frames, so even a user console.log is redirected.
-  if (stdout) process.stderr.write(stdout);
-  if (stderr) process.stderr.write(stderr);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -2268,6 +2304,64 @@ function findNearestNodeModules(start: string): string | undefined {
   }
 }
 
+/**
+ * The loader tsconfig's `module` for a given config file: the module kind Node
+ * would give the file itself.
+ *
+ * An explicit `.cts`/`.cjs` or `.mts`/`.mjs` extension already decides the emit
+ * format on its own, so those keep the ES-module setting and let the extension
+ * win — the same precedence tsgo applies. Everything ambiguous walks up for the
+ * nearest `package.json` `type`, exactly as Node does when it loads the file.
+ */
+function configModuleOption(configPath: string): string {
+  const extension = path.extname(configPath).toLowerCase();
+  if (extension !== ".ts" && extension !== ".tsx" && extension !== ".js") {
+    return "ESNext";
+  }
+  return nearestPackageType(configPath) === "commonjs" ? "CommonJS" : "ESNext";
+}
+
+/**
+ * Nearest `package.json` `"type"` at or above `configPath`, mirroring Node's
+ * package-scope lookup: the walk stops at the **first** manifest it finds, and
+ * a manifest that declares no `"type"` means CommonJS rather than a reason to
+ * keep climbing. Reaching the filesystem root without any manifest also means
+ * CommonJS.
+ */
+function nearestPackageType(configPath: string): "commonjs" | "module" {
+  let dir = path.dirname(path.resolve(configPath));
+  for (;;) {
+    // One read rather than a stat-then-read: an unreadable entry and a missing
+    // one are the same answer here — keep walking — and the Go loaders resolve
+    // it the same way, so the four implementations of this rule cannot drift.
+    let raw: string | undefined;
+    try {
+      raw = fs.readFileSync(path.join(dir, "package.json"), "utf8");
+    } catch {
+      raw = undefined;
+    }
+    if (raw !== undefined) {
+      try {
+        const manifest: unknown = JSON.parse(raw);
+        const type =
+          typeof manifest === "object" && manifest !== null
+            ? (manifest as { type?: unknown }).type
+            : undefined;
+        return type === "module" ? "module" : "commonjs";
+      } catch {
+        // A manifest that does not parse still bounds the package scope; Node
+        // refuses to look past it, and CommonJS is the format it defaults to.
+        return "commonjs";
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return "commonjs";
+    }
+    dir = parent;
+  }
+}
+
 function linkNearestNodeModules(tempDir: string, sourceDir: string): void {
   const nodeModules = findNearestNodeModules(sourceDir);
   if (!nodeModules) return;
@@ -2399,4 +2493,20 @@ function ttsxThroughNodeIfNeeded(binary: string): {
     return { binary: process.execPath, prefix: [binary] };
   }
   return { binary, prefix: [] };
+}
+
+/**
+ * Remove an evaluation temp directory without letting cleanup replace a result.
+ *
+ * This runs from a `finally`, so a throw here would surface instead of the
+ * evaluation's own outcome — and on Windows a grandchild that inherited a
+ * handle, or a scanner holding the file, can make removal fail. Leaving bytes
+ * in the system temp directory is by far the lesser outcome.
+ */
+function removeEvaluationTempDir(directory: string): void {
+  try {
+    fs.rmSync(directory, { force: true, recursive: true });
+  } catch {
+    // Best effort.
+  }
 }

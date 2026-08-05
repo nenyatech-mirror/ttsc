@@ -16,19 +16,9 @@ import (
   "sort"
   "strings"
   "sync"
-  "time"
 
   "github.com/samchon/ttsc/packages/ttsc/driver/windowsjunction"
 )
-
-// configLoaderTimeout caps every `ttsx`/`node -e` subprocess that
-// evaluates a user-supplied lint config. The JS factory imposes the
-// same 60 s budget on its mirroring spawnSync; without the Go-side cap
-// a runaway user config would hang `ttsc-lint` forever, while
-// `ttsc`/`pnpm` upstream of it stays responsive. 60 s is generous
-// enough for cold ttsx starts on CI runners and tight enough to keep
-// user-visible feedback under a minute.
-const configLoaderTimeout = 60 * time.Second
 
 // Severity is the `error | warning | off` ladder.
 type Severity int
@@ -1781,39 +1771,31 @@ func serializableConfigKeysLiteral() string {
 
 // runConfigLoaderCommand runs a prepared config-loader subprocess (`cmd`),
 // then turns its result into a parsed config object. It owns the shared tail
-// of both subprocess-backed loaders: discarding user stdout, distinguishing a
-// timeout from a process error, reading the private result file, JSON-parsing
-// its envelope, and rejecting a non-object result. `ctx` is the
-// timeout context the caller bound `cmd` to; `location` is the config file path
-// for error messages; `label` is the human-readable subject (e.g. "config
+// of both subprocess-backed loaders: discarding user stdout, streaming user
+// stderr through, reading the private result file, JSON-parsing its envelope,
+// and rejecting a non-object result. `location` is the config file
+// path for error messages; `label` is the human-readable subject (e.g. "config
 // file" or "TypeScript config file") spliced into the load/parse error
 // prefixes so each loader keeps its own wording.
 func runConfigLoaderCommand(
-  ctx context.Context,
   cmd *exec.Cmd,
   location string,
   label string,
   outputPath string,
 ) (evaluatedConfigFile, error) {
-  var stderr bytes.Buffer
+  // The child's stderr is human output and goes straight to this process's
+  // stderr as it is written. Collecting it only to replay it afterwards is what
+  // made a long evaluation print nothing at all, and what would make a loud one
+  // grow this process's memory without bound.
   cmd.Stdout = io.Discard
-  cmd.Stderr = &stderr
+  cmd.Stderr = os.Stderr
   err := cmd.Run()
-  // A loader diagnostic is only useful when the load succeeds, because a
-  // failure already carries the same text in its message. Forward it so an
-  // assertion about what the loader recorded can name what it resolved.
-  if err == nil && os.Getenv("TTSC_LINT_DEBUG_CONFIG_GRAPH") != "" {
-    if text := strings.TrimSpace(stderr.String()); text != "" {
-      fmt.Fprintln(os.Stderr, text)
-    }
-  }
   if err != nil {
-    if ctx.Err() == context.DeadlineExceeded {
-      return evaluatedConfigFile{}, fmt.Errorf("@ttsc/lint: load %s %s: timed out after %s", label, location, configLoaderTimeout)
-    }
-    stderrText := strings.TrimSpace(stderr.String())
-    if stderrText != "" {
-      return evaluatedConfigFile{}, fmt.Errorf("@ttsc/lint: load %s %s: %s", label, location, stderrText)
+    // The loader's stack already reached the user's stderr as it was written.
+    // What it could not put there is a reason a caller can act on, so that
+    // arrives through the result file instead.
+    if reason := loaderFailureReason(outputPath); reason != "" {
+      return evaluatedConfigFile{}, fmt.Errorf("@ttsc/lint: load %s %s: %s", label, location, reason)
     }
     return evaluatedConfigFile{}, fmt.Errorf("@ttsc/lint: load %s %s: %w", label, location, err)
   }
@@ -1907,8 +1889,7 @@ func normalizeConfigDependencyFingerprints(
 // loadScriptConfigFile evaluates a .js/.cjs/.mjs config file by running a
 // Node subprocess that dynamic-imports the file, resolves the exported config
 // through the same 8-hop default/config normalization used by the TS loader,
-// and serializes the result into a private result file. The subprocess has a
-// configLoaderTimeout deadline to prevent user code from hanging indefinitely.
+// and serializes the result into a private result file.
 func loadScriptConfigFile(location string) (any, error) {
   evaluated, err := loadScriptConfigEvaluation(location)
   return evaluated.value, err
@@ -1933,7 +1914,7 @@ func loadScriptConfigEvaluationWithin(
   if node == "" {
     node = "node"
   }
-  ctx, cancel := context.WithTimeout(context.Background(), configLoaderTimeout)
+  ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
   cmd := exec.CommandContext(
     ctx,
@@ -1944,7 +1925,7 @@ func loadScriptConfigEvaluationWithin(
     outputPath,
     resolutionRoot,
   )
-  return runConfigLoaderCommand(ctx, cmd, location, "config file", outputPath)
+  return runConfigLoaderCommand(cmd, location, "config file", outputPath)
 }
 
 // scriptConfigLoaderSource returns the CommonJS source of the loader script
@@ -2072,6 +2053,12 @@ const hooks = registerHooks({
   }
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
+  // The stack above is for the reader. This is for the caller: the parent reads
+  // the result file either way, so a failure reason travels as data rather than
+  // as text scraped back out of a captured stream.
+  try {
+    fs.writeFileSync(outputPath, JSON.stringify({ __ttscLoaderError: error && error.message ? String(error.message) : String(error) }), "utf8");
+  } catch {}
   process.exit(1);
 });
 
@@ -2965,7 +2952,7 @@ function toSerializableConfig(value) {
 
 // loadTypeScriptConfigFile evaluates a .ts/.cts/.mts config file by writing
 // an ephemeral loader script and tsconfig into a temp directory, symlinking the
-// nearest node_modules, then running `ttsx` with a configLoaderTimeout deadline.
+// nearest node_modules, then running `ttsx`.
 // The loader script imports the config file, resolves it through the same
 // normalization chain used by loadScriptConfigFile, and writes a private JSON
 // result file so user stdout cannot corrupt the protocol.
@@ -3046,11 +3033,11 @@ func loadTypeScriptConfigEvaluationWithin(
   }
   args = append(args, loader)
 
-  ctx, cancel := context.WithTimeout(context.Background(), configLoaderTimeout)
+  ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
   cmd := ttsxCommandContext(ctx, args...)
   cmd.Env = nodeConfigLoaderEnv(location)
-  return runConfigLoaderCommand(ctx, cmd, location, "TypeScript config file", outputPath)
+  return runConfigLoaderCommand(cmd, location, "TypeScript config file", outputPath)
 }
 
 // isConfigObject reports whether `value` is a top-level config object. A lint
@@ -3239,22 +3226,36 @@ const hooks = registerHooks({
   },
 });
 
-try {
-  const importedConfig = await import(configUrl);
-  const value = await resolveConfig(importedConfig, true);
-  if (!isObject(value) || Array.isArray(value)) {
-    throw new Error("config file must export an ITtscLintConfig object");
+// Wrapped rather than written as a top-level await: the loader tsconfig's
+// "module" follows the config's own package, and TS1378 rejects top-level await
+// under a CommonJS module option however this .mts file emits. The body's own
+// catch is the only failure path — it ends the process — so there is nothing
+// left for a trailing handler to settle.
+(async () => {
+  try {
+    const importedConfig = await import(configUrl);
+    const value = await resolveConfig(importedConfig, true);
+    if (!isObject(value) || Array.isArray(value)) {
+      throw new Error("config file must export an ITtscLintConfig object");
+    }
+    fs.writeFileSync(outputPath, JSON.stringify({
+      dependencies: finalizeDependencies(),
+      value: toSerializableConfig(value),
+    }), "utf8");
+  } catch (error) {
+    process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
+    // The stack above is for the reader. This is for the caller: the parent
+    // reads the result file either way, so a failure reason travels as data
+    // rather than as text scraped back out of a captured stream. A write that
+    // itself fails leaves the process status to speak.
+    try {
+      fs.writeFileSync(outputPath, JSON.stringify({ __ttscLoaderError: error instanceof Error ? error.message : String(error) }), "utf8");
+    } catch {}
+    process.exit(1);
+  } finally {
+    hooks.deregister();
   }
-  fs.writeFileSync(outputPath, JSON.stringify({
-    dependencies: finalizeDependencies(),
-    value: toSerializableConfig(value),
-  }), "utf8");
-} catch (error) {
-  process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
-  process.exit(1);
-} finally {
-  hooks.deregister();
-}
+})();
 
 async function resolveConfig(value: unknown, allowNamedConfig: boolean): Promise<unknown> {
   let current = value;
@@ -4238,10 +4239,16 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
   // false` is the right baseline.
   content := map[string]any{
     "compilerOptions": map[string]any{
-      "allowImportingTsExtensions":      true,
-      "allowJs":                         true,
-      "checkJs":                         false,
-      "module":                          "ESNext",
+      "allowImportingTsExtensions": true,
+      "allowJs":                    true,
+      "checkJs":                    false,
+      // The config is a Node module, so Node's rule decides its format: the
+      // nearest package.json "type" above it. Hardcoding one answer ran every
+      // ambiguous `.ts` config as ESM and broke __dirname in an ordinary
+      // CommonJS package (#1068). moduleResolution stays "bundler", which tsgo
+      // accepts for both kinds, so extensionless relative imports keep
+      // resolving either way.
+      "module":                          configModuleOption(location),
       "moduleResolution":                "bundler",
       "noImplicitAny":                   false,
       "outDir":                          filepath.ToSlash(filepath.Join(outDir, "out")),
@@ -4250,6 +4257,12 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
       "skipLibCheck":                    true,
       "strict":                          false,
       "target":                          "ES2022",
+      // TypeScript 7 includes no ambient type package unless "types" asks for
+      // it, and this Program extends nothing, so without the wildcard a config
+      // could not name a single Node global (#1068). The loader directory links
+      // the config's nearest node_modules, so the default typeRoots walk finds
+      // exactly what the project installed.
+      "types": []string{"*"},
     },
     "files": []string{
       filepath.ToSlash(loader),
@@ -4261,6 +4274,56 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
     panic(err)
   }
   return string(body)
+}
+
+// configModuleOption returns the loader tsconfig's "module" for a config file:
+// the module kind Node itself would give that file.
+//
+// An explicit .cts/.cjs or .mts/.mjs extension already decides the emit format
+// on its own, so those keep the ES-module setting and let the extension win —
+// the same precedence tsgo applies. Everything ambiguous walks up for the
+// nearest package.json "type", exactly as Node does when it loads the file.
+func configModuleOption(location string) string {
+  switch strings.ToLower(filepath.Ext(location)) {
+  case ".ts", ".tsx", ".js":
+    if nearestPackageType(location) == "commonjs" {
+      return "CommonJS"
+    }
+  }
+  return "ESNext"
+}
+
+// nearestPackageType mirrors Node's package-scope lookup for the nearest
+// package.json above location: the walk stops at the FIRST manifest it finds,
+// and a manifest declaring no "type" means CommonJS rather than a reason to
+// keep climbing. Reaching the filesystem root without any manifest also means
+// CommonJS. The location is made absolute first, so a relative config path
+// cannot end the walk at "." after a single step.
+func nearestPackageType(location string) string {
+  absolute, err := filepath.Abs(location)
+  if err != nil {
+    absolute = location
+  }
+  dir := filepath.Dir(absolute)
+  for {
+    raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
+    if err == nil {
+      var manifest struct {
+        Type string `json:"type"`
+      }
+      // A manifest that does not parse still bounds the package scope; Node
+      // refuses to look past it, and CommonJS is the format it defaults to.
+      if json.Unmarshal(raw, &manifest) == nil && manifest.Type == "module" {
+        return "module"
+      }
+      return "commonjs"
+    }
+    parent := filepath.Dir(dir)
+    if parent == dir {
+      return "commonjs"
+    }
+    dir = parent
+  }
 }
 
 // loaderRootDir returns the widest rootDir that still contains the loader
@@ -4344,15 +4407,15 @@ func resolveDirLink(dir string) string {
 }
 
 // ttsxCommand returns a ttsx exec.Cmd bound to a background context. Use
-// ttsxCommandContext when a deadline is needed (e.g. config file loading).
+// ttsxCommandContext when the caller owns a cancellable context.
 func ttsxCommand(args ...string) *exec.Cmd {
   return ttsxCommandContext(context.Background(), args...)
 }
 
-// ttsxCommandContext is the timeout-aware variant. Callers that
-// evaluate user-supplied config should wrap their context with
-// `context.WithTimeout(parent, configLoaderTimeout)` so a runaway
-// `ttsx` subprocess can never hang the lint binary indefinitely.
+// ttsxCommandContext is the cancellable variant, used by the config loaders so
+// their subprocess is torn down with the call that started it. It carries no
+// deadline: evaluating a user config is the user's own code running, and how
+// long that is allowed to take is not this binary's decision.
 func ttsxCommandContext(ctx context.Context, args ...string) *exec.Cmd {
   ttsx := os.Getenv("TTSC_TTSX_BINARY")
   if ttsx == "" {
@@ -4720,4 +4783,31 @@ func (c RuleConfig) Severity(name string) Severity {
     return sev
   }
   return SeverityOff
+}
+
+// loaderFailureReason reads the failure envelope a config loader writes to its
+// private result file when it stops on an error it can name.
+//
+// The loader's stack goes to this process's stderr as it runs, which is where a
+// reader wants it. But the reason — "config file must export an ITtscLintConfig
+// object" — is a fact about the user's config, and a caller deserves it in the
+// error rather than having to go find it in the log. Only a well-formed
+// envelope is honoured; anything else leaves the process status to speak.
+//
+// The key is `__ttscLoaderError` — the same spelling every other ttsc loader
+// writes, and namespaced so it cannot collide with a payload field. This file
+// spends "error" on rule severity, which is exactly the confusion a shared,
+// prefixed key avoids.
+func loaderFailureReason(outputPath string) string {
+  raw, err := os.ReadFile(outputPath)
+  if err != nil {
+    return ""
+  }
+  var envelope struct {
+    Error string `json:"__ttscLoaderError"`
+  }
+  if json.Unmarshal(raw, &envelope) != nil {
+    return ""
+  }
+  return strings.TrimSpace(envelope.Error)
 }

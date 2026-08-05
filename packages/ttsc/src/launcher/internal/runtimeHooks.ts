@@ -88,9 +88,21 @@ interface LoadResult {
   shortCircuit?: boolean;
 }
 
+/**
+ * The compiler options that decide the emit format of a file, as declared by
+ * the project that emitted it. Both fields matter: tsgo derives the module kind
+ * from `target` whenever `module` is absent, so carrying only `module` cannot
+ * reproduce its decision.
+ */
+export interface OwningModuleOptions {
+  module?: string;
+  target?: string;
+}
+
 interface ServedSource {
   source: string;
-  moduleOption?: string;
+  /** Options of the project that emitted this source; `null` when none did. */
+  moduleOptions: OwningModuleOptions | null;
   emittedFile?: string;
   sourceFile?: string;
 }
@@ -114,8 +126,12 @@ interface RuntimeManifest {
   emitDir: string;
   /** Emitted file list from the entry build, for source→output matching. */
   emittedFiles?: readonly string[];
-  /** The entry tsconfig's `module` option, deciding emit CJS/ESM per file. */
-  moduleOption?: string;
+  /**
+   * The entry tsconfig's `module` and `target`, deciding emit CJS/ESM per file.
+   * `target` is not decoration: an absent `module` makes tsgo derive the module
+   * kind from it.
+   */
+  moduleOptions?: OwningModuleOptions;
   /** Root directory for per-dependency build output. */
   depCacheDir: string;
 }
@@ -280,12 +296,16 @@ function installCommonJsHook(): void {
 
 /**
  * The module format of the entry source file, derived from the entry project's
- * `module` option (via the runtime manifest) the same way the served files are
+ * compiler options (via the runtime manifest) the same way the served files are
  * classified. The bootstrap uses it to load the entry through a CommonJS
  * `require` or an ESM `import`.
  */
 export function entryModuleFormat(entryFile: string): "module" | "commonjs" {
-  return moduleFormat(entryFile, manifest()?.moduleOption) === "module"
+  const m = manifest();
+  return moduleFormat(
+    entryFile,
+    m === null ? null : (m.moduleOptions ?? {}),
+  ) === "module"
     ? "module"
     : "commonjs";
 }
@@ -346,7 +366,7 @@ interface BuiltProject {
   emitDir: string;
   rootDir: string;
   emittedFiles?: readonly string[];
-  moduleOption?: string;
+  moduleOptions: OwningModuleOptions;
 }
 const builtProjects = new Map<string, BuiltProject>();
 
@@ -379,7 +399,7 @@ function resolveRuntimeSource(
   url: string = pathToFileURL(filename).href,
 ): { format: string; source: string } {
   const served = resolveServedSource(filename, url);
-  const format = moduleFormat(filename, served.moduleOption);
+  const format = moduleFormat(filename, served.moduleOptions);
   return {
     format,
     source:
@@ -403,6 +423,17 @@ function rememberCommonJsNamedInterop(
   return result;
 }
 
+/**
+ * Whether a CommonJS-classified TypeScript source reached from an ESM parent
+ * needs its nested `export *` names exposed.
+ *
+ * Only the parent side is decided here. The child's own format is re-checked
+ * authoritatively in `resolveRuntimeSource` against the format its served
+ * source actually carries, so this predicate deliberately does not repeat that
+ * check: doing so would need the child's owning project, which is not known
+ * until the source is served, and an answer guessed from the nearest tsconfig
+ * silently under-exposes a file that tsconfig does not compile.
+ */
 function shouldExposeCommonJsNamedExports(
   url: string,
   parentURL: string | undefined,
@@ -415,49 +446,70 @@ function shouldExposeCommonJsNamedExports(
     return false;
   }
   const parentFile = fileURLToPath(parentURL);
-  if (
-    moduleFormat(parentFile, moduleOptionForSource(parentFile)) !== "module"
-  ) {
+  if (moduleFormat(parentFile, owningModuleOptions(parentFile)) !== "module") {
     return false;
   }
-  const filename = fileURLToPath(url);
-  return (
-    isTypeScriptSource(filename) &&
-    moduleFormat(filename, moduleOptionForSource(filename)) === "commonjs"
-  );
+  return isTypeScriptSource(fileURLToPath(url));
 }
 
-function moduleOptionForSource(filename: string): string | undefined {
+/**
+ * The emit-deciding compiler options of the project that owns `filename`, or
+ * `null` when none does.
+ *
+ * The entry project owns a file only when it actually emitted it. Testing
+ * `isWithin(rootDir)` alone would claim every file under a wide `rootDir` —
+ * including the volume-root `rootDir` a config-loader project uses — and hand
+ * them the entry project's options even though the dependency or orphan lane is
+ * what serves them.
+ */
+function owningModuleOptions(filename: string): OwningModuleOptions | null {
   if (!isTypeScriptSource(filename)) {
-    return undefined;
+    return null;
   }
   const real = realPath(filename);
   const m = manifest();
-  if (m !== null && isWithin(real, m.rootDir)) {
-    return m.moduleOption;
+  if (m !== null && entryEmitPath(m, real) !== null) {
+    return m.moduleOptions ?? {};
   }
   const tsconfig = nearestTsconfig(real);
   if (tsconfig === null) {
-    return undefined;
+    return null;
   }
-  if (moduleOptionCache.has(tsconfig)) {
-    return moduleOptionCache.get(tsconfig);
+  const cached = moduleOptionsCache.get(tsconfig);
+  if (cached !== undefined) {
+    return cached;
   }
-  let moduleOption: string | undefined;
+  let options: OwningModuleOptions = {};
   try {
     const project = readProjectConfig({
       cwd: path.dirname(tsconfig),
       tsconfig,
     });
-    moduleOption =
-      typeof project.compilerOptions.module === "string"
-        ? project.compilerOptions.module
-        : undefined;
+    options = projectModuleOptions(project.compilerOptions);
   } catch {
-    moduleOption = undefined;
+    // The owning project cannot be read, so nothing is known about the format
+    // it would have emitted. That is the same state as having no project at
+    // all, and it is what the dependency lane will conclude too when its build
+    // fails and the file falls through to the orphan type-strip.
+    moduleOptionsCache.set(tsconfig, null);
+    return null;
   }
-  moduleOptionCache.set(tsconfig, moduleOption);
-  return moduleOption;
+  moduleOptionsCache.set(tsconfig, options);
+  return options;
+}
+
+/** Narrow a resolved project's compiler options to the emit-format pair. */
+export function projectModuleOptions(
+  compilerOptions: Record<string, unknown>,
+): OwningModuleOptions {
+  return {
+    ...(typeof compilerOptions.module === "string"
+      ? { module: compilerOptions.module }
+      : {}),
+    ...(typeof compilerOptions.target === "string"
+      ? { target: compilerOptions.target }
+      : {}),
+  };
 }
 
 /**
@@ -474,17 +526,14 @@ function resolveServedSource(
   const real = realPath(filename);
   const served = serveEntryEmit(real);
   if (served !== null) {
-    return withInlineSourceMap({
-      moduleOption: manifest()?.moduleOption,
-      ...served,
-    });
+    return withInlineSourceMap(served);
   }
   const built = serveDependencyEmit(real);
   if (built !== null) {
     return withInlineSourceMap(built);
   }
   return {
-    moduleOption: undefined,
+    moduleOptions: null,
     sourceFile: filename,
     source: transformOrphanSource(filename, url),
   };
@@ -523,7 +572,7 @@ function withInlineSourceMap(served: ServedSource): ServedSource {
  * owning project; an ESM-format orphan keeps the fast in-process strip.
  */
 function transformOrphanSource(filename: string, url: string): string {
-  if (moduleFormat(filename, undefined) === "commonjs") {
+  if (moduleFormat(filename, null) === "commonjs") {
     const lowered = emitOrphanAsCommonJs(filename);
     if (lowered !== null) {
       return lowered;
@@ -1122,23 +1171,51 @@ function serveEntryEmit(real: string): ServedSource | null {
   if (m === null) {
     return null;
   }
-  if (!isWithin(real, m.rootDir)) {
-    return null;
-  }
-  const emitted = resolveEmittedJavaScript({
-    emittedFiles: m.emittedFiles,
-    outDir: m.emitDir,
-    projectRoot: m.rootDir,
-    sourceFile: real,
-  });
+  const emitted = entryEmitPath(m, real);
   if (emitted === null) {
     return null;
   }
   const source = readFileOrNull(emitted);
   return source === null
     ? null
-    : { emittedFile: emitted, source, sourceFile: real };
+    : {
+        emittedFile: emitted,
+        moduleOptions: m.moduleOptions ?? {},
+        source,
+        sourceFile: real,
+      };
 }
+
+/**
+ * The entry project's emitted JavaScript for `real`, or `null` when that
+ * project did not emit it. Shared with `owningModuleOptions` so "the entry
+ * project owns this file" means exactly one thing in both places.
+ */
+function entryEmitPath(m: RuntimeManifest, real: string): string | null {
+  const cached = entryEmitPathCache.get(real);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const resolved = isWithin(real, m.rootDir)
+    ? resolveEmittedJavaScript({
+        emittedFiles: m.emittedFiles,
+        outDir: m.emitDir,
+        projectRoot: m.rootDir,
+        sourceFile: real,
+      })
+    : null;
+  entryEmitPathCache.set(real, resolved);
+  return resolved;
+}
+
+/**
+ * Memo for `entryEmitPath`, because it is now on the `resolve` hook's path
+ * through `owningModuleOptions` — once per import specifier — and a miss inside
+ * `resolveEmittedJavaScript` walks the whole emit tree. The entry emit is
+ * written once before the run starts and never changes under it, so one answer
+ * per path is the only one there is.
+ */
+const entryEmitPathCache = new Map<string, string | null>();
 
 /**
  * True when `real` is `directory` itself or sits beneath it. Handles a root
@@ -1207,7 +1284,7 @@ function serveBuiltDependency(
     ? null
     : {
         emittedFile: emitted,
-        moduleOption: built.moduleOption,
+        moduleOptions: built.moduleOptions,
         source,
         sourceFile: real,
       };
@@ -1227,7 +1304,7 @@ function serveBuiltDependency(
 interface DependencyCacheMeta {
   generation: string;
   rootDir: string;
-  moduleOption?: string;
+  moduleOptions?: OwningModuleOptions;
 }
 
 /**
@@ -1328,7 +1405,15 @@ export function readDependencyCache(
   }
   if (
     !isDependencyGeneration(meta.generation) ||
-    typeof meta.rootDir !== "string"
+    typeof meta.rootDir !== "string" ||
+    // A marker with no `moduleOptions` object predates this field and cannot
+    // say which format its emit carries. Treating the absence as "no options"
+    // would classify a CommonJS emit as an ES module, so the generation is
+    // rejected and rebuilt instead. Every marker this version writes carries
+    // the object, empty or not.
+    typeof meta.moduleOptions !== "object" ||
+    meta.moduleOptions === null ||
+    Array.isArray(meta.moduleOptions)
   ) {
     return null;
   }
@@ -1339,8 +1424,9 @@ export function readDependencyCache(
   return {
     emitDir,
     emittedFiles: undefined,
-    moduleOption:
-      typeof meta.moduleOption === "string" ? meta.moduleOption : undefined,
+    moduleOptions: projectModuleOptions(
+      meta.moduleOptions as Record<string, unknown>,
+    ),
     rootDir: meta.rootDir,
   };
 }
@@ -1484,12 +1570,9 @@ function buildDependency(
     typeof project.compilerOptions.rootDir === "string"
       ? project.compilerOptions.rootDir
       : project.root;
-  const moduleOption =
-    typeof project.compilerOptions.module === "string"
-      ? project.compilerOptions.module
-      : undefined;
-  publishDependencyMeta(metaPath, { generation, moduleOption, rootDir });
-  return { emitDir, emittedFiles: undefined, moduleOption, rootDir };
+  const moduleOptions = projectModuleOptions(project.compilerOptions);
+  publishDependencyMeta(metaPath, { generation, moduleOptions, rootDir });
+  return { emitDir, emittedFiles: undefined, moduleOptions, rootDir };
 }
 
 /**
@@ -1896,7 +1979,7 @@ function formatDuration(ms: number): string {
 
 /** Owning-tsconfig cache keyed by directory, mirroring `packageTypeCache`. */
 const tsconfigCache = new Map<string, string | null>();
-const moduleOptionCache = new Map<string, string | undefined>();
+const moduleOptionsCache = new Map<string, OwningModuleOptions | null>();
 
 /**
  * The nearest `tsconfig.json` at or above `file`'s directory, or `null`. The
@@ -1955,9 +2038,19 @@ function readFileOrNull(file: string | null): string | null {
   }
 }
 
-function realPath(target: string): string {
+/**
+ * The physical path, in the same spelling the launcher decided on.
+ *
+ * `realpathSync.native` first, because the plain implementation resolves
+ * reparse points but leaves a Windows 8.3 component alone — and `TEMP` is
+ * `C:\Users\RUNNER~1\...` on a GitHub Windows runner. The launcher resolves the
+ * entry through `fs.realpathSync.native`, so answering here with the short name
+ * would put a `..` in `path.relative(rootDir, real)`, drop the exact-mirror
+ * lane, and leave the entry to whatever the trailing-stem matcher picks.
+ */
+export function realPath(target: string): string {
   try {
-    return fs.realpathSync(target);
+    return fs.realpathSync.native?.(target) ?? fs.realpathSync(target);
   } catch {
     return target;
   }
@@ -2050,16 +2143,27 @@ function probeRescuableSpecifier(
 
 /**
  * Decide the module format the way Node and tsgo do — from configuration, never
- * by sniffing the emitted text. The file extension is authoritative
- * (`.mts`/`.mjs` → module, `.cts`/`.cjs` → commonjs); otherwise the owning
- * tsconfig's `module` option decides: a fixed CommonJS / ES target maps
- * directly, while the `node*`/`preserve` family (and a file with no owning
- * tsconfig) defers to the nearest `package.json` `type`, exactly as tsgo chose
- * when it emitted.
+ * by sniffing the emitted text.
+ *
+ * The file extension is authoritative first (`.mts`/`.mjs` → module,
+ * `.cts`/`.cjs` → commonjs), exactly as tsgo's
+ * `getImpliedNodeFormatForEmitWorker` checks it ahead of everything else.
+ *
+ * After that the decision belongs to the project that emitted the file, so
+ * `options` is the whole compiler-option pair tsgo consults, not just `module`:
+ * an absent `module` is NOT "ask Node", it is "derive the kind from `target`"
+ * (tsgo's `getEmitModuleKind`), and TypeScript 7 defaults `target` to the
+ * latest standard, which means ES modules. Only the `node*` family defers to
+ * the nearest `package.json` `type`, because only that family makes tsgo
+ * consult it.
+ *
+ * `options` is `null` for a file no tsconfig owns at all — a raw `.ts` shipped
+ * under `node_modules`. Nothing emitted it, so Node's own rule is the only rule
+ * there is, and the package `type` decides.
  */
 function moduleFormat(
   filename: string,
-  moduleOption: string | undefined,
+  options: OwningModuleOptions | null,
 ): string {
   if (filename.endsWith(".mts") || filename.endsWith(".mjs")) {
     return "module";
@@ -2067,22 +2171,118 @@ function moduleFormat(
   if (filename.endsWith(".cts") || filename.endsWith(".cjs")) {
     return "commonjs";
   }
-  const option = (moduleOption ?? "").toLowerCase();
-  if (option === "commonjs" || option === "node10" || option === "none") {
-    return "commonjs";
+  if (options === null) {
+    return nearestPackageType(filename);
   }
+  // A package that states its `type` outright decides for the files inside it
+  // whatever the module kind is. This is where a source-shipping dependency's
+  // own declaration overrides the compiling project's `module`; see
+  // `declaredNodeModulesPackageType` for why `node_modules` bounds it.
+  const declared = declaredNodeModulesPackageType(filename);
+  if (declared !== null) {
+    return declared;
+  }
+  const kind = effectiveModuleKind(options);
   if (
-    option === "" ||
-    option === "node16" ||
-    option === "node18" ||
-    option === "nodenext" ||
-    option === "preserve"
+    kind === "node16" ||
+    kind === "node18" ||
+    kind === "node20" ||
+    kind === "nodenext"
   ) {
     return nearestPackageType(filename);
   }
-  // Every remaining `module` target (es2015 … esnext, system, amd, umd) emits
-  // ECMAScript modules.
+  if (kind === "commonjs") {
+    return "commonjs";
+  }
+  // Everything that remains (es2015 … esnext, and `preserve`, which keeps the
+  // authored ESM syntax verbatim whatever the package `type` says) is emitted
+  // as ECMAScript modules. `amd`, `umd`, and `system` are not among them:
+  // TypeScript 7 removed all three, so a project declaring one cannot build,
+  // and a file it would have owned reaches the run through the orphan lane
+  // instead.
   return "module";
+}
+
+/**
+ * The `"type"` a `node_modules` package states for `filename`, or `null`.
+ *
+ * Tsgo's `GetImpliedNodeFormatForEmitWorker` consults a file's
+ * `packageJsonType` for **every** module kind, not just the `node*` family. So
+ * a source-shipping dependency that declares `"type": "commonjs"` is emitted as
+ * CommonJS even while the compiling project asks for `esnext`, and the mirror
+ * has to honour the same override or Node is handed the wrong format.
+ *
+ * Outside `node_modules` that field is empty for every module kind this
+ * override can change. `loadSourceFileMetaData` does fill it elsewhere — for a
+ * file whose extension does not itself state the format (anything but `.mts`,
+ * `.cts`, `.mjs`, `.cjs`) whose project sets `moduleResolution` to the
+ * `node16`…`nodenext` family — but `program.go` rejects that resolution unless
+ * `module` is in the same family, and for a `node*` `module` the package `type`
+ * is already the whole answer, which the caller's own `node*` branch produces.
+ * So answering from a manifest outside `node_modules` could only override the
+ * project's own `module` option, the very confusion this classifier exists to
+ * end.
+ */
+function declaredNodeModulesPackageType(
+  filename: string,
+): "module" | "commonjs" | null {
+  if (!pathHasNodeModulesSegment(filename)) {
+    return null;
+  }
+  return declaredPackageType(filename);
+}
+
+/**
+ * Whether any path segment of `filename` is literally `node_modules`.
+ *
+ * Case-sensitive on every platform, because the upstream test this mirrors is a
+ * case-sensitive substring search and Node's own resolver recognises only the
+ * exact spelling. A directory named `Node_Modules` is a package store to
+ * neither of them, and must not become one here.
+ */
+function pathHasNodeModulesSegment(filename: string): boolean {
+  return filename.split(/[\\/]/).includes("node_modules");
+}
+
+/**
+ * The `module` kind tsgo actually emits with, mirroring `getEmitModuleKind`:
+ * the declared `module` when there is one, and otherwise the kind implied by
+ * `target`. `"none"` is the spelling of an unset `module`, so it derives the
+ * same way.
+ */
+function effectiveModuleKind(options: OwningModuleOptions): string {
+  const declared = (options.module ?? "").toLowerCase();
+  if (declared !== "" && declared !== "none") {
+    return declared;
+  }
+  const target = (options.target ?? "").toLowerCase();
+  if (target === "esnext") {
+    return "esnext";
+  }
+  const year = scriptTargetYear(target);
+  if (year === null) {
+    // An unset `target` is `ScriptTargetLatestStandard` upstream, well above the
+    // ES2022 boundary. Every other spelling lands here too: TypeScript 7 removed
+    // `ES5` and dropped `ES3` entirely, and its only remaining targets are
+    // year-numbered ones, so nothing that reaches emit derives CommonJS.
+    return "es2022";
+  }
+  if (year >= 2022) return "es2022";
+  if (year >= 2020) return "es2020";
+  return "es2015";
+}
+
+/**
+ * Year of an `ES<year>` script target, with `es6` normalized to its `es2015`
+ * synonym. Returns `null` when the spelling is not a year-numbered target,
+ * which the caller resolves to the modern default.
+ */
+function scriptTargetYear(target: string): number | null {
+  if (target === "es6") {
+    return 2015;
+  }
+  const match = /^es(\d{4})$/.exec(target);
+  return match === null ? null : Number(match[1]);
 }
 
 /** Package-type cache keyed by directory, mirroring Node's own lookup walk. */
@@ -2132,6 +2332,42 @@ function readPackageType(directory: string): "module" | "commonjs" | null {
     return parsed.type === "module" ? "module" : "commonjs";
   } catch {
     return "commonjs";
+  }
+}
+
+/**
+ * The `"type"` the nearest `package.json` states outright, or `null` when the
+ * nearest manifest omits it (or there is none).
+ *
+ * `nearestPackageType` answers "what format would Node use", which defaults a
+ * silent manifest to CommonJS. This answers the narrower question "did a
+ * package actually say", which is what an override has to be built on: a
+ * manifest that says nothing must not out-vote the compiling project's own
+ * `module` option.
+ */
+function declaredPackageType(filename: string): "module" | "commonjs" | null {
+  let directory = path.dirname(filename);
+  while (true) {
+    const manifestPath = path.join(directory, "package.json");
+    if (isFile(manifestPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+          type?: unknown;
+        };
+        // The walk stops at the first manifest either way, exactly as Node's
+        // package-scope lookup does; only the answer differs.
+        return parsed.type === "module" || parsed.type === "commonjs"
+          ? parsed.type
+          : null;
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return null;
+    }
+    directory = parent;
   }
 }
 

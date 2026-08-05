@@ -1,50 +1,30 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 
-import {
-  CONFIG_EVALUATOR_MAX_BUFFER,
-  CONFIG_EVALUATOR_PROCESS_OPTIONS,
-  CONFIG_EVALUATOR_STATUS_FD,
-  CONFIG_EVALUATOR_TIMEOUT_MS,
-  configEvaluatorBoundaryEnvironment,
-  configEvaluatorProcessFailure,
-} from "../../../../../packages/lint/lib/internal/configEvaluatorFailure.js";
+import { configEvaluatorProcessFailure } from "../../../../../packages/lint/lib/internal/configEvaluatorFailure.js";
 
 /**
  * Verifies isolated lint-config process failures preserve their real cause.
  *
- * Node attaches the configured termination signal to both timeout and
- * max-buffer errors. Treating the signal first made those distinct failures
- * indistinguishable, while bounding only the outer ttsx wrapper left its
- * runtime child alive.
+ * The evaluator writes the child's own output straight to this process's
+ * stderr, so by the time a failure is classified the user has already seen
+ * whatever the config said. What is left to report is how the process ended,
+ * and the three endings are genuinely different: it never launched, something
+ * outside killed it, or it ran and chose a non-zero status.
  *
- * 1. Classify timeout, output overflow, spawn, signal, and exit failures.
- * 2. Assert process error codes take precedence over their shared signal.
- * 3. Recognize the runtime child's private timeout/output status and boundary env.
- * 4. Assert evaluator stderr is bounded and a successful result has no error.
+ * Nothing here is bounded. A deadline and an output ceiling both used to live
+ * on this path, and both were the compiler deciding — on numbers nobody chose
+ * for the machine running the build — that a user's own config had taken too
+ * long or said too much. The absence of those branches is part of the contract
+ * this pins: a killed evaluation must read as the external kill it is, never as
+ * a limit this toolchain imposed.
+ *
+ * 1. Classify a spawn failure, an external signal, and a non-zero exit.
+ * 2. Assert none of them is described as a timeout or an output limit.
+ * 3. Assert a clean exit produces no error at all.
  */
 export const test_config_evaluator_process_failures_are_classified_by_cause =
   (): void => {
     const configPath = "/project/lint.config.ts";
-    const timeout = configEvaluatorProcessFailure(
-      processResult({
-        error: processError("ETIMEDOUT"),
-        signal: CONFIG_EVALUATOR_PROCESS_OPTIONS.killSignal,
-      }),
-      configPath,
-    );
-    assert.match(timeout?.message ?? "", /timed out after 60 seconds/);
-    assert.doesNotMatch(timeout?.message ?? "", /killed by signal/);
-
-    const overflow = configEvaluatorProcessFailure(
-      processResult({
-        error: processError("ENOBUFS"),
-        signal: CONFIG_EVALUATOR_PROCESS_OPTIONS.killSignal,
-      }),
-      configPath,
-    );
-    assert.match(overflow?.message ?? "", /exceeded the 16 MiB output limit/);
-    assert.doesNotMatch(overflow?.message ?? "", /killed by signal/);
 
     const spawn = configEvaluatorProcessFailure(
       processResult({ error: processError("ENOENT") }),
@@ -58,98 +38,25 @@ export const test_config_evaluator_process_failures_are_classified_by_cause =
       configPath,
     );
     assert.match(signal?.message ?? "", /killed by signal SIGKILL/);
-    assert.doesNotMatch(signal?.message ?? "", /timeout/i);
 
     const exit = configEvaluatorProcessFailure(
-      processResult({
-        status: 2,
-        stderr: [
-          "discarded one",
-          "discarded two",
-          "kept three",
-          "kept four",
-          "kept five",
-          "kept six",
-          "kept seven",
-        ].join("\n"),
-      }),
+      processResult({ status: 2 }),
       configPath,
     );
     assert.match(exit?.message ?? "", /failed with exit code 2/);
-    assert.doesNotMatch(exit?.message ?? "", /discarded one|discarded two/);
-    assert.match(
-      exit?.message ?? "",
-      /kept three\nkept four\nkept five\nkept six\nkept seven$/,
-    );
 
-    const bounded = configEvaluatorProcessFailure(
-      processResult({ status: 3, stderr: "x".repeat(100_000) }),
-      configPath,
-    );
-    assert.ok((bounded?.message.length ?? Number.POSITIVE_INFINITY) < 8_500);
-
-    const nestedTimeout = configEvaluatorProcessFailure(
-      processResult({
-        output: [null, "", "", "ETIMEDOUT"],
-        status: 1,
-      }),
-      configPath,
-    );
-    assert.match(nestedTimeout?.message ?? "", /timed out after 60 seconds/);
-    assert.doesNotMatch(nestedTimeout?.message ?? "", /exit code 1/);
-
-    const nestedOverflow = configEvaluatorProcessFailure(
-      processResult({
-        output: [null, "", "", "ENOBUFS"],
-        status: 1,
-      }),
-      configPath,
-    );
-    assert.match(
-      nestedOverflow?.message ?? "",
-      /exceeded the 16 MiB output limit/,
-    );
-    assert.doesNotMatch(nestedOverflow?.message ?? "", /exit code 1/);
-
-    assert.deepEqual(configEvaluatorBoundaryEnvironment(1_000), {
-      TTSC_TTSX_EVALUATOR_DEADLINE_MS: String(
-        1_000 + CONFIG_EVALUATOR_TIMEOUT_MS,
-      ),
-      TTSC_TTSX_EVALUATOR_MAX_BUFFER_BYTES: String(CONFIG_EVALUATOR_MAX_BUFFER),
-      TTSC_TTSX_EVALUATOR_STATUS_FD: String(CONFIG_EVALUATOR_STATUS_FD),
-    });
-
-    assertTimeoutCannotBeDefeatedBySigtermHandler();
+    // A kill this process did not order is reported as what it is. Neither a
+    // deadline nor an output ceiling exists to be blamed for it.
+    for (const failure of [spawn, signal, exit]) {
+      assert.doesNotMatch(failure?.message ?? "", /timed out|timeout/i);
+      assert.doesNotMatch(failure?.message ?? "", /output limit|MiB/i);
+    }
 
     assert.equal(
       configEvaluatorProcessFailure(processResult({ status: 0 }), configPath),
       undefined,
     );
   };
-
-function assertTimeoutCannotBeDefeatedBySigtermHandler(): void {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "-e",
-      [
-        'process.on("SIGTERM", () => {});',
-        "setTimeout(() => process.exit(0), 2_000);",
-      ].join(""),
-    ],
-    {
-      ...CONFIG_EVALUATOR_PROCESS_OPTIONS,
-      encoding: "utf8",
-      timeout: 50,
-      windowsHide: true,
-    },
-  );
-  assert.equal(
-    (result.error as NodeJS.ErrnoException | undefined)?.code,
-    "ETIMEDOUT",
-  );
-  assert.equal(result.signal, "SIGKILL");
-}
 
 function processError(code: string): Error {
   return Object.assign(new Error(`spawnSync node ${code}`), { code });
@@ -160,20 +67,15 @@ function processResult(
     error: Error;
     signal: NodeJS.Signals;
     status: number;
-    stderr: string;
-    output: readonly (string | null)[];
   }>,
 ): {
   error?: Error;
-  output?: readonly (string | null)[];
   signal: NodeJS.Signals | null;
   status: number | null;
-  stderr: string | null;
 } {
   return {
     signal: null,
     status: null,
-    stderr: null,
     ...input,
   };
 }

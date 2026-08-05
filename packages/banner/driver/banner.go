@@ -10,16 +10,10 @@ import (
   "path/filepath"
   "runtime"
   "strings"
-  "time"
 
   "github.com/samchon/ttsc/packages/ttsc/driver"
   "github.com/samchon/ttsc/packages/ttsc/driver/windowsjunction"
 )
-
-// configLoaderTimeout caps subprocesses that evaluate user-supplied banner
-// config files. This matches the strip/lint loaders so a hanging config does
-// not block the compiler indefinitely.
-const configLoaderTimeout = 60 * time.Second
 
 func init() {
   driver.RegisterPlugin(plugin{})
@@ -316,7 +310,14 @@ const { pathToFileURL } = require("node:url");
   process.stdout.write(JSON.stringify(toSerializableBanner(value)));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
-  process.exit(1);
+  // The stack above is for the reader. This is for the caller: the parent reads
+  // stdout as the payload channel either way, so a failure reason travels as
+  // data rather than as text scraped back out of a captured stream. The exit
+  // code is set before the write so a callback that never fires still fails the
+  // load, and the write's completion is what triggers the exit, because
+  // process.exit abandons a pending pipe write.
+  process.exitCode = 1;
+  process.stdout.write(JSON.stringify({ __ttscLoaderError: error && error.message ? String(error.message) : String(error) }), () => process.exit(1));
 });
 
 function toSerializableBanner(value) {
@@ -330,21 +331,22 @@ function toSerializableBanner(value) {
   if node == "" {
     node = "node"
   }
-  ctx, cancel := context.WithTimeout(context.Background(), configLoaderTimeout)
+  ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
   cmd := exec.CommandContext(ctx, node, "-e", script, location)
   cmd.Env = nodeConfigLoaderEnv(location)
+  // The child's stderr is human output and goes straight to this process's
+  // stderr as it is written. Collecting it only to replay it afterwards is what
+  // made a long evaluation print nothing at all, and what would make a loud one
+  // grow this process's memory without bound.
+  cmd.Stderr = os.Stderr
   output, err := cmd.Output()
   if err != nil {
-    if ctx.Err() == context.DeadlineExceeded {
-      return nil, fmt.Errorf("@ttsc/banner: load config file %s: timed out after %s", location, configLoaderTimeout)
-    }
-    stderr := ""
-    if exit, ok := err.(*exec.ExitError); ok {
-      stderr = strings.TrimSpace(string(exit.Stderr))
-    }
-    if stderr != "" {
-      return nil, fmt.Errorf("@ttsc/banner: load config file %s: %s", location, stderr)
+    // The loader's stack already reached this process's stderr as it ran.
+    // What it could not put there is a reason a caller can act on, so that
+    // arrives through the payload channel instead.
+    if reason := loaderFailureReason(output); reason != "" {
+      return nil, fmt.Errorf("@ttsc/banner: load config file %s: %s", location, reason)
     }
     return nil, fmt.Errorf("@ttsc/banner: load config file %s: %w", location, err)
   }
@@ -396,21 +398,22 @@ func loadBannerTypeScriptConfigFile(location string) (any, error) {
   }
   args = append(args, loader)
 
-  ctx, cancel := context.WithTimeout(context.Background(), configLoaderTimeout)
+  ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
   cmd := ttsxCommandContext(ctx, args...)
   cmd.Env = nodeConfigLoaderEnv(location)
+  // The child's stderr is human output and goes straight to this process's
+  // stderr as it is written. Collecting it only to replay it afterwards is what
+  // made a long evaluation print nothing at all, and what would make a loud one
+  // grow this process's memory without bound.
+  cmd.Stderr = os.Stderr
   output, err := cmd.Output()
   if err != nil {
-    if ctx.Err() == context.DeadlineExceeded {
-      return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: timed out after %s", location, configLoaderTimeout)
-    }
-    stderr := ""
-    if exit, ok := err.(*exec.ExitError); ok {
-      stderr = strings.TrimSpace(string(exit.Stderr))
-    }
-    if stderr != "" {
-      return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %s", location, stderr)
+    // The loader's stack already reached this process's stderr as it ran.
+    // What it could not put there is a reason a caller can act on, so that
+    // arrives through the payload channel instead.
+    if reason := loaderFailureReason(output); reason != "" {
+      return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %s", location, reason)
     }
     return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %w", location, err)
   }
@@ -442,18 +445,36 @@ func bannerTypeScriptConfigLoaderSource(importLiteral string) string {
   return fmt.Sprintf(`import * as importedConfig from %s;
 
 declare const process: {
-  stdout: { write(value: string): void };
+  exitCode?: number;
+  stdout: { write(value: string, callback?: () => void): void };
   stderr: { write(value: string): void };
   exit(code?: number): never;
 };
 
-try {
-  const value = await resolveConfig(importedConfig);
-  process.stdout.write(JSON.stringify(toSerializableBanner(value)));
-} catch (error) {
-  process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
-  process.exit(1);
-}
+// Wrapped rather than written as a top-level await: the loader tsconfig's
+// "module" follows the config's own package, and TS1378 rejects top-level await
+// under a CommonJS module option however this .mts file emits. The body's own
+// catch is the only failure path — it ends the process — so there is nothing
+// left for a trailing handler to settle.
+(async () => {
+  try {
+    const value = await resolveConfig(importedConfig);
+    process.stdout.write(JSON.stringify(toSerializableBanner(value)));
+  } catch (error) {
+    process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
+    // The stack above is for the reader. This is for the caller: the parent
+    // reads stdout as the payload channel either way, so a failure reason
+    // travels as data rather than as text scraped back out of a captured
+    // stream. The exit code is set before the write so a callback that never
+    // fires still fails the load, and the write's completion is what triggers
+    // the exit, because process.exit abandons a pending pipe write.
+    process.exitCode = 1;
+    process.stdout.write(
+      JSON.stringify({ __ttscLoaderError: error instanceof Error ? error.message : String(error) }),
+      () => process.exit(1),
+    );
+  }
+})();
 
 async function resolveConfig(value: unknown): Promise<unknown> {
   let current = isObject(value) && hasOwn(value, "default") ? value.default : value;
@@ -499,8 +520,14 @@ function toSerializableBanner(value: unknown): unknown {
 func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
   content := map[string]any{
     "compilerOptions": map[string]any{
-      "allowImportingTsExtensions":      true,
-      "module":                          "ESNext",
+      "allowImportingTsExtensions": true,
+      // The config is a Node module, so Node's rule decides its format: the
+      // nearest package.json "type" above it. Hardcoding one answer ran every
+      // ambiguous `.ts` config as ESM and broke __dirname in an ordinary
+      // CommonJS package (#1069). moduleResolution stays "bundler", which tsgo
+      // accepts for both kinds, so extensionless relative imports keep
+      // resolving either way.
+      "module":                          configModuleOption(location),
       "moduleResolution":                "bundler",
       "outDir":                          filepath.ToSlash(filepath.Join(outDir, "out")),
       "rewriteRelativeImportExtensions": true,
@@ -508,6 +535,12 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
       "skipLibCheck":                    true,
       "strict":                          true,
       "target":                          "ES2022",
+      // TypeScript 7 includes no ambient type package unless "types" asks for
+      // it, and this Program extends nothing, so without the wildcard a config
+      // could not name a single Node global (#1069). The loader directory links
+      // the config's nearest node_modules, so the default typeRoots walk finds
+      // exactly what the project installed.
+      "types": []string{"*"},
     },
     "files": []string{
       filepath.ToSlash(loader),
@@ -516,6 +549,56 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
   }
   body, _ := json.MarshalIndent(content, "", "  ")
   return string(body)
+}
+
+// configModuleOption returns the loader tsconfig's "module" for a config file:
+// the module kind Node itself would give that file.
+//
+// An explicit .cts/.cjs or .mts/.mjs extension already decides the emit format
+// on its own, so those keep the ES-module setting and let the extension win —
+// the same precedence tsgo applies. Everything ambiguous walks up for the
+// nearest package.json "type", exactly as Node does when it loads the file.
+func configModuleOption(location string) string {
+  switch strings.ToLower(filepath.Ext(location)) {
+  case ".ts", ".tsx", ".js":
+    if nearestPackageType(location) == "commonjs" {
+      return "CommonJS"
+    }
+  }
+  return "ESNext"
+}
+
+// nearestPackageType mirrors Node's package-scope lookup for the nearest
+// package.json above location: the walk stops at the FIRST manifest it finds,
+// and a manifest declaring no "type" means CommonJS rather than a reason to
+// keep climbing. Reaching the filesystem root without any manifest also means
+// CommonJS. The location is made absolute first, so a relative config path
+// cannot end the walk at "." after a single step.
+func nearestPackageType(location string) string {
+  absolute, err := filepath.Abs(location)
+  if err != nil {
+    absolute = location
+  }
+  dir := filepath.Dir(absolute)
+  for {
+    raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
+    if err == nil {
+      var manifest struct {
+        Type string `json:"type"`
+      }
+      // A manifest that does not parse still bounds the package scope; Node
+      // refuses to look past it, and CommonJS is the format it defaults to.
+      if json.Unmarshal(raw, &manifest) == nil && manifest.Type == "module" {
+        return "module"
+      }
+      return "commonjs"
+    }
+    parent := filepath.Dir(dir)
+    if parent == dir {
+      return "commonjs"
+    }
+    dir = parent
+  }
 }
 
 // loaderRootDir returns the widest rootDir that still contains the loader
@@ -597,7 +680,9 @@ func ttsxCommand(args ...string) *exec.Cmd {
   return ttsxCommandContext(context.Background(), args...)
 }
 
-// ttsxCommandContext is the timeout-aware variant used by config loaders.
+// ttsxCommandContext is the context-bound variant used by config loaders. It
+// carries no deadline: evaluating a user config is the user's own code running,
+// and how long that is allowed to take is not this binary's decision.
 func ttsxCommandContext(ctx context.Context, args ...string) *exec.Cmd {
   ttsx := os.Getenv("TTSC_TTSX_BINARY")
   if ttsx == "" {
@@ -703,4 +788,24 @@ func setEnv(env []string, key, value string) []string {
 // by replacing "*/" with "* /" so the generated block comment stays valid.
 func sanitizeJSDocLine(line string) string {
   return strings.ReplaceAll(line, "*/", "* /")
+}
+
+// loaderFailureReason reads the failure envelope a config loader writes to its
+// payload channel when it stops on an error it can name.
+//
+// The loader's stack goes to this process's stderr as it runs, which is where a
+// reader wants it. But the *reason* — "config file must export an object with a
+// non-empty text string" — is a fact about the user's config, and a caller
+// deserves it in the error rather than having to go find it in the log. So it
+// travels as data through the same stdout the payload uses, and only a
+// well-formed envelope is honoured: anything else leaves the process status to
+// speak for itself.
+func loaderFailureReason(output []byte) string {
+  var envelope struct {
+    Message string `json:"__ttscLoaderError"`
+  }
+  if json.Unmarshal(output, &envelope) != nil {
+    return ""
+  }
+  return strings.TrimSpace(envelope.Message)
 }
