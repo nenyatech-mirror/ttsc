@@ -57,7 +57,7 @@ The same applies across claims. Two claims referencing one document set are two 
 | --- | --- | --- |
 | `type` | all | `"markdown"`, `"prisma"`, or `"typescript"`. Swagger cannot host a claim. |
 | `files` | all | Glob patterns for the files that owe acknowledgements. Required. |
-| `symbol` | all | Which declaration kinds may host an `@evidence` tag. |
+| `symbol` | all | Which declaration kinds may host an `@evidence` tag. It does not restrict `@evidenceExclude`, whose carriers are wider. |
 | `reference` | all | One reference or an array of them. Must not be empty. |
 | `root` | all | Directory the `files` patterns resolve against. |
 | `evidenceExcludeCarriers` | all | Files allowed to host this claim's `@evidenceExclude`. |

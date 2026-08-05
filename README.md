@@ -104,8 +104,10 @@ Your spec becomes a compile error. An agent can still lie, but it cannot lie by 
 
 `@ttsc/evidence` makes every requirement you configure demand an explicit acknowledgement from the code, test, or document that claims to satisfy it. A requirement nothing acknowledges fails the build, by name.
 
+It is a rule contributor to `@ttsc/lint` rather than a top-level `ttsc` plugin, so it registers in the same `lint.config.ts`:
+
 ```bash
-npm install -D @ttsc/evidence
+npm install -D @ttsc/lint @ttsc/evidence
 ```
 
 ```ts
@@ -134,7 +136,7 @@ export default {
 } satisfies ITtscLintConfig;
 ```
 
-That claim reads as one sentence: the components under `src` implement the requirements, so every H2 and H3 under `docs` must be cited by a component. A citation names the target and states why it applies:
+That claim reads as one sentence: the components under `src` implement the requirements, so every H2 and H3 under `docs/requirements` must be cited by a component. A citation names the target and states why it applies:
 
 ```tsx
 /**
