@@ -8,12 +8,12 @@
     "./workspace": "./src/EvidenceBenchmarkWorkspace.ts"
   },
   "scripts": {
-    "audit-suspensions": "ttsx --project tsconfig.json src/executable/EvidenceBenchmarkSuspensionAudit.ts",
-    "start": "ttsx --project tsconfig.json src/executable/EvidenceBenchmarkCommandLine.ts",
-    "supervise": "ttsx --project tsconfig.json src/executable/EvidenceBenchmarkSupervision.ts",
-    "warn": "ttsx --project tsconfig.json src/executable/EvidenceBenchmarkWarning.ts",
-    "dashboard": "ttsx --project tsconfig.json src/executable/EvidenceBenchmarkDashboard.ts",
-    "report": "ttsx --project tsconfig.json src/executable/EvidenceBenchmarkReport.ts",
+    "audit-suspensions": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkSuspensionAudit.ts",
+    "start": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkCommandLine.ts",
+    "supervise": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkSupervision.ts",
+    "warn": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkWarning.ts",
+    "dashboard": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkDashboard.ts",
+    "report": "node ../../../packages/ttsc/lib/launcher/ttsx.js --project tsconfig.json src/executable/EvidenceBenchmarkReport.ts",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

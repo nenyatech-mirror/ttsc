@@ -12,6 +12,7 @@
     "@types/node": "catalog:utils",
     "ttsc": "workspace:*",
     "typescript": "catalog:typescript",
-    "typia": "catalog:samchon"
+    "typia": "catalog:samchon",
+    "yaml": "catalog:utils"
   }
 }

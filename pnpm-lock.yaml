@@ -546,6 +546,9 @@ importers:
       typia:
         specifier: catalog:samchon
         version: 13.2.0(@types/node@25.9.1)(ttsc@packages+ttsc)
+      yaml:
+        specifier: catalog:utils
+        version: 2.9.0
 
   tests/test-factory:
     devDependencies:
