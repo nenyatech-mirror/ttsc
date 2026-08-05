@@ -1,6 +1,7 @@
 "use client";
 
 import TtscWebsiteLandingCodeGraph from "./TtscWebsiteLandingCodeGraph";
+import TtscWebsiteLandingEvidenceGraph from "./TtscWebsiteLandingEvidenceGraph";
 import TtscWebsiteLandingFooter from "./TtscWebsiteLandingFooter";
 import TtscWebsiteLandingHero from "./TtscWebsiteLandingHero";
 import TtscWebsiteLandingInTheBrowser from "./TtscWebsiteLandingInTheBrowser";
@@ -14,8 +15,9 @@ export default function TtscWebsiteLandingMovie() {
     <div className="ttsc-landing min-h-screen bg-white text-[#102a43]">
       <TtscWebsiteLandingHero />
       <TtscWebsiteLandingRestOfToolchain />
-      <TtscWebsiteLandingCodeGraph />
       <TtscWebsiteLandingLintAsCompileError />
+      <TtscWebsiteLandingEvidenceGraph />
+      <TtscWebsiteLandingCodeGraph />
       <TtscWebsiteLandingPluginEcosystem />
       <TtscWebsiteLandingInTheBrowser />
       <TtscWebsiteLandingSponsors />

@@ -3,15 +3,7 @@ import TtscWebsiteBenchmarkPerformanceSummary from "../../../components/benchmar
 
 # Benchmark
 
-`ttsc` publishes three benchmark tracks. The first two measure `ttsc` against competing tools. The third measures a coding agent against itself.
-
-## Code Graph (MCP)
-
-[The Code Graph benchmark](/docs/benchmark/graph) measures whether an agent spends fewer tokens and tool calls when `@ttsc/graph` is available. It also checks structural coverage: how completely the graph resolves cross-file relationships in a real TypeScript project.
-
-The overview below uses the same shared onboarding prompt across every project with Codex GPT-5.6 terra. The detailed page follows with model tabs, project-specific prompts, and structural coverage.
-
-<TtscWebsiteBenchmarkGraphCommon summary />
+`ttsc` publishes three benchmark tracks. Two of them measure `ttsc` against competing tools. The third measures a coding agent against itself.
 
 ## Compiler Performance
 
@@ -23,6 +15,14 @@ vscode, 6,093 TypeScript files across a large application monorepo, is the flags
 
 ## Evidence Graph
 
-[The Evidence Graph benchmark](/docs/benchmark/evidence) asks a different question from the two above. Instead of comparing `ttsc` with another tool, it has one coding engine build the same application twice from the same frozen requirements: once with [`@ttsc/evidence`](/docs/lint/evidence) and its guidance in the workspace, once with neither. Both arms get an overlay, the same instruction sequence, and the same model and effort, so the only variable is the graph.
+[The Evidence Graph benchmark](/docs/benchmark/evidence) asks a different question from the other two. Instead of comparing `ttsc` with another tool, it has one coding engine build the same application twice from the same frozen requirements: once with [`@ttsc/evidence`](/docs/evidence) and its guidance in the workspace, once with neither. Both arms get an overlay, the same instruction sequence, and the same model and effort, so the only variable is the graph.
 
 The page covers the two arms, the subjects, workspace preparation, the commands that launch and supervise a run, and the rules that decide whether a finished run still counts.
+
+## Code Knowledge Graph
+
+[The Code Knowledge Graph benchmark](/docs/benchmark/graph) measures whether an agent spends fewer tokens and tool calls when `@ttsc/graph` is available. It also checks structural coverage: how completely the graph resolves cross-file relationships in a real TypeScript project.
+
+The overview below uses the same shared onboarding prompt across every project with Codex GPT-5.6 terra. The detailed page follows with model tabs, project-specific prompts, and structural coverage.
+
+<TtscWebsiteBenchmarkGraphCommon summary />
