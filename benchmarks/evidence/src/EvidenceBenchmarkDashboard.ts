@@ -996,10 +996,27 @@ const inspectWorktree = (
   }
 };
 
+/**
+ * Whether a git failure is the workspace changing underneath the query.
+ *
+ * The dashboard reads a workspace while its cell is still building in it, so a
+ * file git enumerated can be gone by the time git stats it. A NestJS or Nestia
+ * runtime scratch file lives for milliseconds and is named with the writing
+ * process's own pid, which is exactly the shape that loses this race.
+ *
+ * It is a property of reading a live tree, not of the tree being wrong, so the
+ * query is retried rather than reported. Retrying is safe because the query
+ * only reads.
+ */
+const isTransientWorktreeRace = (stderr: string): boolean =>
+  /fatal: stat '[^']*': No such file or directory/.test(stderr) ||
+  /fatal: Unable to create '[^']*index\.lock'/.test(stderr);
+
 const git = (
   workspace: string,
   args: string[],
   environment: NodeJS.ProcessEnv = {},
+  attempt: number = 0,
 ): string => {
   const result = spawnSync(
     "git",
@@ -1027,10 +1044,13 @@ const git = (
     throw new Error(
       `Git dashboard query could not run (${args.join(" ")}): ${result.error.message}`,
     );
-  if (result.status !== 0)
+  if (result.status !== 0) {
+    if (attempt < 2 && isTransientWorktreeRace(result.stderr))
+      return git(workspace, args, environment, attempt + 1);
     throw new Error(
       `Git dashboard query failed (${args.join(" ")}): ${result.stderr}`,
     );
+  }
   return result.stdout;
 };
 
