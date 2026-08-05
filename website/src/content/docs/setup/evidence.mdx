@@ -107,11 +107,14 @@ export function CouponStackingNotice() {
 Or record that this population deliberately does not serve it, with a reason a reviewer can veto:
 
 ```tsx
+// src/components/SCREEN_EVIDENCE_EXCLUDE.tsx
 /**
  * @evidenceExclude docs/requirements/discount.md#coupon-stacking Settlement owns coupon combination; reject this exclusion once a screen displays a stacked total.
  */
 export const SCREEN_EVIDENCE_EXCLUDE = true;
 ```
+
+An exclusion has to sit on a public export in a file the claim already selects, so this one lives under `src/components/` like any other selected file. Gathering them in one named ledger is what [`evidenceExcludeCarriers`](/docs/evidence/claims#exclusion-carriers) is for, and it is worth declaring before the first exclusion is written.
 
 Findings arrive in every `ttsc` build, every `--noEmit` check, every `ttsx` run, and in the editor. The CI step that already runs `ttsc --noEmit` gates the graph without a second job.
 

@@ -2,28 +2,34 @@
 
 A complete graph over a real monorepo: a NestJS and Prisma backend, a generated SDK package, and a React frontend, with requirements in `docs/analysis/**/*.md`.
 
-This is the configuration the [Evidence Graph benchmark](/docs/benchmark/evidence) ships in its template, reproduced with the long file-header comments trimmed. It is worth reading as a whole because the interesting decisions are about where a claim lives and what it refuses, not about the glob syntax.
+This is the configuration the [Evidence Graph benchmark](/docs/benchmark/evidence) ships in its template. Two things are dropped here: the long file-header comments, and the `disabled: true` every claim carries there. The template stages claims on one at a time during a run, while this page shows the finished graph; [Adoption](/docs/evidence/adoption) covers the staging.
+
+It is worth reading as a whole because the interesting decisions are about where a claim lives and what it refuses, not about the glob syntax.
 
 ## The chain
 
 ```text
-docs/analysis/**/*.md  (H2, H3)
-  |
-  +-- schema-models ........ Prisma models
-  +-- api-operations ....... controller functions
-  +-- dto-types ............ exported DTO types
-  +-- backend-tests ........ test functions
-  +-- frontend-screens ..... page components
-  +-- frontend-journeys .... E2E journeys
+requirements   docs/analysis/**/*.md            (h2, h3)
+     cited by  schema-models, api-operations, dto-types,
+               backend-tests, frontend-screens, frontend-journeys
 
-prisma/schema/**  (model)          -> api-operations, dto-types
-prisma/schema/**  (column)         -> dto-properties
-@ORGANIZATION/PROJECT-api  (op)    -> backend-tests, frontend-hooks
-src/lib/*/hooks.ts  (function)     -> frontend-screens
-src/components/*/*-page.tsx        -> frontend-journeys
+schema         prisma/schema/**                 (model)
+     cited by  api-operations, dto-types
+
+schema         prisma/schema/**                 (column)
+     cited by  dto-properties
+
+SDK            @ORGANIZATION/PROJECT-api        (operation)
+     cited by  backend-tests, frontend-hooks
+
+hooks          src/lib/*/hooks.ts               (function)
+     cited by  frontend-screens
+
+screens        src/components/*/*-page.tsx      (function)
+     cited by  frontend-journeys
 ```
 
-An arrow means the right side owes the left side an acknowledgement. One requirement section has to be answered independently by six populations, because implementing it in the schema is not implementing it on the screen.
+Each block is one evidence population and the claims that must acknowledge it. A requirement section has to be answered independently by six of them, because implementing it in the schema is not implementing it on the screen.
 
 | Claim | Declared in | Hosts | Must cite | Catches |
 | --- | --- | --- | --- | --- |

@@ -89,6 +89,14 @@ Found 1 error.
 
 You do not write these tags. The agent writes each one as it implements, and your review shrinks from the whole diff to the list of stated reasons.
 
+### A recorded no is also an answer
+
+Not every requirement belongs to every layer, and the graph does not pretend otherwise. `@evidenceExclude` discharges a target with a written decision instead of an implementation.
+
+The reason carries the weight there. "Not applicable", "internal only", and "later" are conclusions rather than reasons; what belongs in one is the actual owner or the observable alternative, plus the condition that would make the exclusion wrong.
+
+An exclusion is the one acknowledgement that reports an obligation settled with nothing built, so a claim can name the single file its exclusions must live in. Reviewing that ledger is then one file to open rather than a codebase to read.
+
 ### Coverage is counted per obligation, never pooled
 
 A backend that honors a pricing rule and a frontend that forgot it is not a 67% project. It is a compile error naming the exact section the screen ignored.

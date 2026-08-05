@@ -132,6 +132,8 @@ files: [
 
 A pattern resolves against its population's base, which is the `ttsc` project root unless the population declares a `root`. A pattern may not escape that base: `..` and absolute paths are refused inside a pattern, because a base spread across every pattern is a base nobody can read off the configuration.
 
+A Markdown population parses every regular file its globs match, whatever extension the file carries. `docs/**` therefore takes in the images and other assets sitting under `docs`, so write `docs/**/*.md` or exclude the assets rather than relying on the suffix.
+
 ## Populations above the project
 
 A monorepo usually keeps one requirements set that several packages implement, and each package is its own `ttsc` project with its own `tsconfig.json` and `lint.config.ts`. `root` declares the directory a population resolves against:
@@ -178,6 +180,8 @@ Identity still belongs to the declaring file. A declaration reached through two 
 The cost of selecting modules is that a glob is only as narrow as what its modules publish. Matching a barrel takes in everything behind it, so narrow by the module whose surface you mean rather than by the directory it sits in.
 
 A local reference must set `files`. There is no implicit project population, and singular `file` belongs to Swagger.
+
+It also selects only what the Program already holds. A file the owning `tsconfig.json` never pulled in is unavailable to the rule and does not count as a match, so widen the project before widening the glob.
 
 ### Installed packages
 
