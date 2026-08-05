@@ -103,7 +103,7 @@ A namespace merged with a same-named function is that function's static side, so
 
 Units contain units. A Markdown file contains its heading outline, a heading contains the lower-level headings under it, an interface contains its properties, a namespace contains every nested public unit, and a Prisma model contains its columns and relations. Swagger operations are independent leaves.
 
-A citation covers its target and every selected descendant. So `symbol: "property"` on a reference can still be satisfied by one `@evidence IShoppingSale ...`, and one `@evidence prisma:Sale ...` discharges every selected column and relation beneath that model.
+A citation covers its target and every selected descendant. So `symbol: "property"` on a reference can still be satisfied by one `@evidence {@link IShoppingSale} ...`, and one `@evidence prisma:Sale ...` discharges every selected column and relation beneath that model.
 
 An ancestor stays addressable even when its own kind is not in the selector. The selector decides what is counted, not what can be named.
 
@@ -143,7 +143,7 @@ A monorepo usually keeps one requirements set that several packages implement, a
 {
   type: "markdown",
   root: "../../docs",
-  files: ["requirements/**"],
+  files: ["requirements/**/*.md"],
   symbol: "h2",
 }
 ```
