@@ -191,7 +191,7 @@ const LANES = [
     run:
       // The benchmark's executables are imported by no suite, so this is the
       // only pass that reads them at all.
-      "pnpm --filter @ttsc/benchmark-evidence check && " +
+      "pnpm --filter @ttsc/benchmark-evidence run check && " +
       "pnpm --filter test-evidence start && " +
       "pnpm --filter test-evidence-benchmark start",
   },

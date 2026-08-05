@@ -54,22 +54,22 @@ jobs:
 
       - name: Check Types
         run: |
-          pnpm --dir benchmarks/graph check
-          pnpm --dir benchmarks/performance check
+          pnpm --dir benchmarks/graph run check
+          pnpm --dir benchmarks/performance run check
 
       - name: Check Entrypoints
         run: |
-          pnpm --dir benchmarks/performance start -- --list
-          pnpm --dir benchmarks/graph start -- --list
-          pnpm --dir benchmarks/graph index-time -- --list
+          pnpm --dir benchmarks/performance run start -- --list
+          pnpm --dir benchmarks/graph run start -- --list
+          pnpm --dir benchmarks/graph run index-time -- --list
 
       - name: Check Prompt Manifest
         run: |
-          pnpm --dir benchmarks/graph manifest
+          pnpm --dir benchmarks/graph run manifest
           git diff --exit-code -- benchmarks/graph/assets/questions/manifest.json
 
       - name: Check Trace Audit
-        run: pnpm --dir benchmarks/graph audit -- --self-test
+        run: pnpm --dir benchmarks/graph run audit -- --self-test
 
       - name: Check Structural Graph Benchmark
-        run: pnpm --dir benchmarks/graph structural -- --runs=3
+        run: pnpm --dir benchmarks/graph run structural -- --runs=3
