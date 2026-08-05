@@ -191,7 +191,7 @@ const LANES = [
     run:
       // The benchmark's executables are imported by no suite, so this is the
       // only pass that reads them at all.
-      "pnpm --filter @ttsc/evidence-benchmark check && " +
+      "pnpm --filter @ttsc/benchmark-evidence check && " +
       "pnpm --filter test-evidence start && " +
       "pnpm --filter test-evidence-benchmark start",
   },
@@ -288,7 +288,7 @@ const PLATFORM_ROWS = [
 const WORKFLOW_PATHS = {
   benchmark: [
     ".github/workflows/benchmark.yml",
-    "experimental/benchmark/**",
+    "benchmarks/**",
     "packages/ttsc/**",
     "package.json",
     "pnpm-lock.yaml",
@@ -463,7 +463,7 @@ function planForPaths(files) {
       add(["evidence", "go"], file);
       continue;
     }
-    if (file.startsWith("experimental/benchmark/evidence/")) {
+    if (file.startsWith("benchmarks/evidence/")) {
       // `tests/test-evidence-benchmark` imports this source directly, so the
       // suite that proves it has to run when it changes.
       add(["evidence"], file);
@@ -605,6 +605,7 @@ function planForPaths(files) {
     }
     if (
       [
+        "scripts/ci/benchmark-source-contract.mts",
         "scripts/ci/dependency-audit.cjs",
         "scripts/ci/dependency-audit.test.cjs",
         "scripts/ci/format-check.cjs",
@@ -617,6 +618,11 @@ function planForPaths(files) {
       continue;
     }
     if (file.startsWith("experimental/test-unplugin/")) {
+      continue;
+    }
+    // The evidence benchmark is claimed above; the two ttsc harnesses under
+    // `benchmarks/` have their own workflow and no lane in this plan.
+    if (file.startsWith("benchmarks/")) {
       continue;
     }
     if (

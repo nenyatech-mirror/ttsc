@@ -6,7 +6,7 @@ on:
       - master
     paths:
       - ".github/workflows/benchmark.yml"
-      - "experimental/benchmark/**"
+      - "benchmarks/**"
       - "packages/ttsc/**"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -14,7 +14,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/benchmark.yml"
-      - "experimental/benchmark/**"
+      - "benchmarks/**"
       - "packages/ttsc/**"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -49,22 +49,27 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check Source Contract And Types
-        run: pnpm --dir experimental/benchmark check
+      - name: Check Source Contract
+        run: node --experimental-transform-types scripts/ci/benchmark-source-contract.mts
+
+      - name: Check Types
+        run: |
+          pnpm --dir benchmarks/graph check
+          pnpm --dir benchmarks/performance check
 
       - name: Check Entrypoints
         run: |
-          pnpm --dir experimental/benchmark performance -- --list
-          pnpm --dir experimental/benchmark graph -- --list
-          pnpm --dir experimental/benchmark graph:index -- --list
+          pnpm --dir benchmarks/performance start -- --list
+          pnpm --dir benchmarks/graph start -- --list
+          pnpm --dir benchmarks/graph index-time -- --list
 
       - name: Check Prompt Manifest
         run: |
-          pnpm --dir experimental/benchmark graph:manifest
-          git diff --exit-code -- experimental/benchmark/assets/graph/questions/manifest.json
+          pnpm --dir benchmarks/graph manifest
+          git diff --exit-code -- benchmarks/graph/assets/questions/manifest.json
 
       - name: Check Trace Audit
-        run: pnpm --dir experimental/benchmark graph:audit -- --self-test
+        run: pnpm --dir benchmarks/graph audit -- --self-test
 
       - name: Check Structural Graph Benchmark
-        run: pnpm --dir experimental/benchmark graph:structural -- --runs=3
+        run: pnpm --dir benchmarks/graph structural -- --runs=3

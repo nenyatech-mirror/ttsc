@@ -12,7 +12,7 @@ native/
 # The benchmark template ships a frontend whose sources live in `src/lib`, which
 # the `lib/` rule above reads as build output. Dropping them delivers a
 # workspace whose entry cannot resolve `@/lib/client`.
-!experimental/benchmark/evidence/template/**/src/lib/
+!benchmarks/evidence/template/**/src/lib/
 
 dist/
 bin/
@@ -43,8 +43,15 @@ go.work.sum
 experimental/typia/
 experimental/nestia/
 
-# Benchmark results — an ephemeral artifact, never committed.
-experimental/benchmark/.work/
+# Benchmark results — an ephemeral artifact, never committed. Each benchmark
+# package resolves its own work root, so the rule covers the container.
+benchmarks/*/.work/
+
+# Raw evidence benchmark runs and measured workspaces are local measurement
+# output. A path built without its separator once created the second of these
+# upstream and it was not ignored; the spelling here follows this layout.
+/benchmarks/evidence/output/
+/benchmarks/evidenceoutput/
 
 # Promotional media. Clips are rendered locally, published as GitHub-hosted
 # attachments, and referenced by URL from the website, so no binary enters the

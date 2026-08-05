@@ -80,7 +80,7 @@ test("a leaf package selects shared quality and its own executor", () => {
     "evidence",
   ]);
   assert.deepEqual(
-    ids(["experimental/benchmark/evidence/src/EvidenceBenchmarkWorkspace.ts"]),
+    ids(["benchmarks/evidence/src/EvidenceBenchmarkWorkspace.ts"]),
     ["typecheck", "evidence"],
   );
 });

@@ -35,7 +35,7 @@ Graph MCP work has an additional contract in [graph.md](graph.md). Read it befor
 - `tests/test-*`: feature-test packages (run via `pnpm test:features`).
 - `tests/utils`: shared helpers (`@ttsc/testing`).
 - `tests/<plugin-name>`: workspace packages that need to be `require.resolve`-able from a fixture's `node_modules` (e.g. `tests/lint-contributor-demo`). Built by `scripts/build-current.cjs` before tests run.
-- `experimental/benchmark`: private workspace package containing short, export-free performance and graph executable bootstraps, reusable `TtscBenchmark*` / `ITtscBenchmark*` implementations, and graph prompt assets.
+- `benchmarks/*`: one private workspace package per benchmark, and the three differ in kind. `graph` and `performance` are this repository's own harnesses, each holding short, export-free executable bootstraps and reusable `TtscBenchmark*` / `ITtscBenchmark*` implementations, with the graph prompt assets under `benchmarks/graph/assets`. `evidence` is vendored from `samchon/lint-plugin-evidence` and keeps that project's conventions.
 - `website`: Nextra-based docs site (`src/content/docs/**/*.mdx`) that is the canonical home for guides, shipped to https://ttsc.dev.
 - `config`, `scripts`: shared tsconfig and workspace scripts.
 

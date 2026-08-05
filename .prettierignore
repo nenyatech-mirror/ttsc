@@ -32,6 +32,6 @@ website/src/content/docs/ttsc/flags.mdx
 # packages/graph/src/structures above: a formatter must not decide the contents
 # of a frozen artifact. The benchmark's own `src` is this repository's code and
 # stays formatted.
-experimental/benchmark/evidence/template/
-experimental/benchmark/evidence/requirements/
-experimental/benchmark/evidence/instructions/
+benchmarks/evidence/template/
+benchmarks/evidence/requirements/
+benchmarks/evidence/instructions/

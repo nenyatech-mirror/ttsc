@@ -128,7 +128,7 @@ export const test_ttscgraph_viewer_reducers_preserve_legacy_absolute_filenames =
       {
         name: "fixture",
         reduce: await loadReducer(
-          "experimental/benchmark/src/graph/TtscBenchmarkGraphReduce.ts",
+          "benchmarks/graph/src/TtscBenchmarkGraphReduce.ts",
           "namespace",
         ),
       },

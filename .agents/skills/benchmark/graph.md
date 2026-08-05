@@ -1,6 +1,6 @@
 # Graph AI Benchmark
 
-Read this document before running or changing `experimental/benchmark/src/executable/graph/index.ts`, graph benchmark prompts or fixtures, trace auditing, comparator setup, or `website/public/benchmark/graph.json` publication.
+Read this document before running or changing `benchmarks/graph/src/executable/index.ts`, graph benchmark prompts or fixtures, trace auditing, comparator setup, or `website/public/benchmark/graph.json` publication.
 
 ## Workload And Fixtures
 
@@ -23,11 +23,11 @@ The benchmark measures setup time; it must not omit required setup to make a com
 ## Run And Audit
 
 ```bash
-pnpm --dir experimental/benchmark graph -- --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena
-pnpm --dir experimental/benchmark graph -- --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1
-pnpm --dir experimental/benchmark graph:audit -- --dir=.work/graph/<timestamp>
-pnpm --dir experimental/benchmark graph:audit -- --compare=<before>,<after>
-pnpm --dir experimental/benchmark graph:audit -- --self-test
+pnpm --dir benchmarks graph -- --project=typeorm --models=gpt-5.4-mini --tools=ttsc-graph,codegraph,codebase-memory,serena
+pnpm --dir benchmarks graph -- --all --models=gpt-5.4-mini --arm=baseline --tools=baseline --prompt-family=all --runs=1
+pnpm --dir benchmarks graph:audit -- --dir=.work/graph/<timestamp>
+pnpm --dir benchmarks graph:audit -- --compare=<before>,<after>
+pnpm --dir benchmarks graph:audit -- --self-test
 ```
 
 Use `--arm=baseline --tools=baseline` to refresh only the empty-MCP baseline. Use `--arm=graph --tools=ttsc-graph,codegraph,codebase-memory,serena` to add tool samples against published baselines.
@@ -47,12 +47,12 @@ The public graph dashboard stores one run per cell on the selected mid-size mode
 Parallel graph sweeps must use `--no-website` and unique `--out` directories. Publish completed suites afterward:
 
 ```bash
-pnpm --dir experimental/benchmark graph:publish -- --from <out-dir>
+pnpm --dir benchmarks graph:publish -- --from <out-dir>
 ```
 
 Never let concurrent runners write `graph.json` directly.
 
-`experimental/benchmark/src/graph/TtscBenchmarkGraphWebsiteCell.ts` is the single published-cell key. Key only by fields the website renders. Metadata such as fixture branch, reasoning effort, or setup time must not create a second visible copy of the same cell.
+`benchmarks/graph/src/TtscBenchmarkGraphWebsiteCell.ts` is the single published-cell key. Key only by fields the website renders. Metadata such as fixture branch, reasoning effort, or setup time must not create a second visible copy of the same cell.
 
 ## Trace Audit
 

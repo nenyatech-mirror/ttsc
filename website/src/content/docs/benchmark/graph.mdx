@@ -64,8 +64,8 @@ cd ttsc
 corepack enable
 pnpm install
 pnpm --filter @ttsc/graph build
-pnpm --dir experimental/benchmark graph:agent:codex -- --repo=typeorm --repo-dir=/abs/path/to/project --tsconfig=tsconfig.json --question "Trace the main runtime path I should understand before editing." --arm=baseline --runs=1
-pnpm --dir experimental/benchmark graph:agent:codex -- --repo=typeorm --repo-dir=/abs/path/to/project --tsconfig=tsconfig.json --question "Trace the main runtime path I should understand before editing." --arm=graph --runs=1
+pnpm --filter @ttsc/benchmark-graph agent:codex -- --repo=typeorm --repo-dir=/abs/path/to/project --tsconfig=tsconfig.json --question "Trace the main runtime path I should understand before editing." --arm=baseline --runs=1
+pnpm --filter @ttsc/benchmark-graph agent:codex -- --repo=typeorm --repo-dir=/abs/path/to/project --tsconfig=tsconfig.json --question "Trace the main runtime path I should understand before editing." --arm=graph --runs=1
 ```
 
-The chart reads raw samples from `website/public/benchmark/graph.json`. For the full model matrix, comparator setup commands, and publication flow, see `experimental/benchmark/README.md`.
+The chart reads raw samples from `website/public/benchmark/graph.json`. For the full model matrix, comparator setup commands, and publication flow, see `benchmarks/graph/README.md`.
