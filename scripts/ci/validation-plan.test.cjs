@@ -83,6 +83,16 @@ test("a leaf package selects shared quality and its own executor", () => {
     ids(["benchmarks/evidence/src/EvidenceBenchmarkWorkspace.ts"]),
     ["typecheck", "evidence"],
   );
+  // The two ttsc harnesses have their own workflow and no lane in this plan.
+  // Without an explicit skip they fall through to the unknown-input branch and
+  // every graph edit silently plans full CI, which reads as a flake rather
+  // than as a missing rule.
+  for (const file of [
+    "benchmarks/graph/src/TtscBenchmarkGraphRunner.ts",
+    "benchmarks/graph/assets/questions/manifest.json",
+    "benchmarks/performance/src/TtscBenchmarkPerformanceRunner.ts",
+  ])
+    assert.deepEqual(ids([file]), ["typecheck"], file);
 });
 
 test("compiler and platform changes select verified reverse consumers", () => {
