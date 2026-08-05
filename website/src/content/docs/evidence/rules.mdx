@@ -1,0 +1,114 @@
+# Rules
+
+`@ttsc/evidence` contributes four rules under the `evidence/` namespace. They are enabled independently, each takes `"error"`, `"warning"`, or `"off"`, and every finding lands in the same diagnostic stream as a type error.
+
+```ts filename="lint.config.ts"
+import { evidence, type ITtscEvidenceGraphConfig } from "@ttsc/evidence";
+import type { ITtscLintConfig } from "@ttsc/lint";
+
+const graph: ITtscEvidenceGraphConfig = { claims: [] };
+
+export default {
+  plugins: {
+    evidence,
+  },
+  rules: {
+    "evidence/graph": ["error", graph],
+    "evidence/documented": "error",
+    "evidence/singular": "error",
+    "evidence/todo": "error",
+  },
+} satisfies ITtscLintConfig;
+```
+
+One is the graph. The other three protect the conditions the graph depends on, and each is a file rule.
+
+## `evidence/graph`
+
+The configured graph. It takes an [`ITtscEvidenceGraphConfig`](/docs/evidence/claims) and evaluates the complete declaration once per Program, answering three separate questions.
+
+- **Resolution.** Does every declared target resolve to exactly one selected unit or structural ancestor?
+- **Host eligibility.** Does each `@evidence` sit on a symbol kind its claim selects, and each `@evidenceExclude` on an eligible carrier in a matching claim file?
+- **Coverage.** Does every selected reference unit have at least one acknowledgement in this claim, and does that acknowledgement satisfy whatever the reference's own policy demands?
+
+The rule is project-scoped, so its config entry must carry no `files` selector. The host rejects one that does. Scope a file rule in its own entry when you need to.
+
+Claim and reference state stay separate. A declaration that satisfies one obligation never leaks coverage into another, even when the physical target is the same.
+
+### Watched inputs
+
+The rule declares its configured Markdown globs, Prisma globs, and local Swagger paths to the `ttsc` host, so editing a spec section or regenerating an OpenAPI document starts the next `ttsc --watch` cycle on its own, with no TypeScript file touched.
+
+A path stays declared while it is missing, which lets a document that has not been generated yet be observed the moment it appears. A source above the project is declared on the same terms. An `http:`/`https:` Swagger source is the one exception: a URL has no filesystem event to observe.
+
+### Editor completions
+
+While the rule reports nothing, it publishes its configured targets as completion items in `ttscserver`, so typing `@evidence docs/spec.md#` offers the anchors that actually exist. The host publishes a rule's corpus only on the cycles where that rule passes, so a broken graph never suggests targets from a stale index.
+
+At the `@evidenceExclude` trigger, a target selected only by references that refuse exclusions is omitted. A target any enabled reference still allows stays on offer, because the completion API has no cursor-specific claim context to narrow it further.
+
+## `evidence/documented`
+
+Requires a JSDoc block on every selected export.
+
+```ts
+"evidence/documented": ["error", { symbol: ["type", "function"] }],
+```
+
+Evidence declarations are read from JSDoc and nowhere else, so an export without a block is not merely undocumented. It is structurally unable to carry a citation, and the graph will never say so: coverage is counted from the evidence side, so the obligation is discharged by whichever host does have a block while every undocumented export in the claim looks exactly like a passing file.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `symbol` | `["type", "function", "property"]` | Which symbol kinds must carry a block. One value or a non-empty array. |
+
+The default selects every kind a claim can use as a host, deliberately: the population that must be able to hold a tag is exactly the population a claim can select, so a narrower default would leave some potential host unable to cite while the rule reported success.
+
+Presence is the whole check. The rule never judges what the prose says, how long it is, or whether it is sincere. A rule that tried would only teach authors to write filler that satisfies it.
+
+For a merged identity the block is demanded on the same declaration a citation would sit on, which is the declaration the graph names.
+
+## `evidence/singular`
+
+One public identity per file, named after the file. Takes no options, so it carries a bare severity.
+
+```ts
+"evidence/singular": "error",
+```
+
+The unit counted is an identity, not an export. Declaration merging exposes one name through several declarations, `export interface I` beside `export namespace I`, and every such form counts once. Permitted merges fall out of what is counted rather than being carved out of it.
+
+Three findings, most structural first.
+
+- **Two or more identities.** The file has to be split before its name can mean anything. Move each extra identity to its own file, or re-export them from a barrel.
+- **An anonymous default export.** There is no name for the file to take. Name the declaration, or export a named one instead.
+- **A name that does not match the file.** Rename the file, or rename the identity.
+
+A file named `index` is exempt, because a barrel is addressed by its directory. A re-export declares nothing, so a barrel owns no identity and needs no exemption of its own. An export list or default assignment naming an imported binding is the same case one step removed.
+
+This matters to the graph because addresses are how citations are written. A file holding three unrelated exports gives a reviewer no way to tell which one a claim is about.
+
+## `evidence/todo`
+
+Reports every remaining JSDoc `@todo` in a checked file, exported or not. Takes no options.
+
+```ts
+"evidence/todo": "error",
+```
+
+A stub enters the world carrying a `@todo` that names what its realization still owes, and no other rule calls that debt: the graph judges citations, `evidence/documented` judges presence, and a block whose only content is a `@todo` satisfies both. Each remaining tag fails the build with its own text, so the diagnostics read as the ledger of what is left to build.
+
+There is nothing to select. A debt on a local helper is as unrealized as one on an export, so every declaration's block is read. Per-directory scoping belongs in the outer `files` setting of `lint.config.ts`.
+
+One physical block is one entry. TypeScript cascades a leading block onto nested nodes, so a variable statement and each of its declarations all answer for one comment; blocks are deduplicated by position.
+
+Stage it. Keep the rule `"off"` while stubs are the plan of record, and flip it to `"error"` once the work is meant to be finished. The stubs that remain enumerate themselves.
+
+## Where they surface
+
+Violations arrive in every `ttsc` build, every `--noEmit` check, every `ttsx` run, and in the editor through `ttscserver`. The CI step that already runs `ttsc --noEmit` gates the graph without a second job.
+
+Match on the bracketed rule id rather than on the numeric code. A contributor rule's code is assigned deterministically from the complete set of loaded contributors, so changing that set can renumber it, while `[evidence/graph]` is stable. [Diagnostic code compatibility](/docs/lint#diagnostic-code-compatibility) covers the banding policy.
+
+## Next
+
+→ [Full-Stack Wiring](/docs/evidence/wiring) puts all four rules on a real monorepo.

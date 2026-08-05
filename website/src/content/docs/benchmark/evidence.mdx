@@ -2,7 +2,7 @@
 
 The other two tracks measure `ttsc` against competing tools. This one measures a coding agent against itself.
 
-One coding engine builds the same application twice from the same requirements: once with [`@ttsc/evidence`](/docs/lint/evidence) installed and its guidance in the workspace, once with neither. The question is not how fast a compiler runs. It is whether a declarable, compiler-enforced provenance graph changes how an agent builds software when nobody is watching it.
+One coding engine builds the same application twice from the same requirements: once with [`@ttsc/evidence`](/docs/evidence) installed and its guidance in the workspace, once with neither. The question is not how fast a compiler runs. It is whether a declarable, compiler-enforced provenance graph changes how an agent builds software when nobody is watching it.
 
 One subject and one arm is a **cell**. One execution of a cell is a **run**. This page is for the maintainer operating a campaign or reading its record; the harness lives in `benchmarks/evidence`.
 
@@ -165,5 +165,5 @@ Editing its own workspace is what a cell is there to do, and two Evidence edits 
 
 ## Related
 
-- [`@ttsc/evidence`](/docs/lint/evidence) is the plugin this benchmark measures.
+- [`@ttsc/evidence`](/docs/evidence) is the plugin this benchmark measures.
 - `benchmarks/evidence/README.md` documents the runner itself, and `.agents/skills/benchmark/evidence/` holds the operating procedure for a campaign.
