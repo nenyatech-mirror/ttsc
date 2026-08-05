@@ -34,7 +34,6 @@ const SCOPES = {
     "lint-contributor-demo",
     { filter: "@ttsc/wasm", script: "build:ts" },
     "@ttsc/playground",
-    "@ttsc/lint",
     "@ttsc/evidence",
   ],
   // test-ttsc drives ttsc + the banner/lint native plugins and asserts on the
