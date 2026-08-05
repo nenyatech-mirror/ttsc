@@ -148,6 +148,7 @@ export const isStringArray = (() => {
 Utility plugins shipped in this repository:
 
 - [`@ttsc/banner`](https://github.com/samchon/ttsc/tree/master/packages/banner): adds `@packageDocumentation` JSDoc banners.
+- [`@ttsc/evidence`](https://github.com/samchon/ttsc/tree/master/packages/evidence): turns a requirement into a compile error until code, tests, or docs acknowledge it by name.
 - [`@ttsc/graph`](https://github.com/samchon/ttsc/tree/master/packages/graph): MCP server exposing a checker-resolved code graph to coding agents.
 - [`@ttsc/lint`](https://github.com/samchon/ttsc/tree/master/packages/lint): lints and formats TypeScript source.
 - [`@ttsc/paths`](https://github.com/samchon/ttsc/tree/master/packages/paths): rewrites source path aliases so JS and declaration emit receive relative imports.

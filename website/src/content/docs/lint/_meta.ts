@@ -6,6 +6,7 @@ const meta: MetaRecord = {
   editor: "VS Code",
   format: "Format",
   rules: "Rules",
+  evidence: "Evidence Graph",
   contributing: "Contributing",
 };
 export default meta;
