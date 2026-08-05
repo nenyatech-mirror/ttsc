@@ -115,6 +115,16 @@ const RULES = [
     /which the lint-rule-authoring skill owns/g,
     "which the `@ttsc/lint` contributor contract in packages/lint/README.md owns",
   ],
+  // upstream keeps its prior art and decision record in a .wiki this
+  // repository does not have
+  [
+    "Read `.wiki/references/autobe-mcp.md` before generalizing behavior from that prior art, and `.wiki/design/decisions.md` for settled repository decisions and their costs.\n",
+    "",
+  ],
+  [
+    " — `.wiki/design/decisions.md` records the reversal and its cost.",
+    ", and the reversal was deliberate.",
+  ],
 ];
 
 // A file this workspace deliberately does not hold identical to upstream, with
@@ -146,6 +156,10 @@ const EXCEPTIONS = new Map([
   ],
   [
     "benchmarks/evidence/src/executable/EvidenceBenchmarkDashboard.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkReconcile.ts",
     "re-rooted through EvidenceBenchmarkLayout",
   ],
   [
@@ -393,7 +407,17 @@ const compare = ({ upRel, localRel, text }) => {
 };
 
 for (const [upTree, localTree] of TREES) {
-  const upAll = walk(path.join(UP, upTree));
+  // Files upstream PR #189 adds exist only on that branch, so walking the
+  // upstream working tree never sees them and every one would be reported as
+  // tracked-here-absent-upstream.
+  const upAll = [
+    ...new Set([
+      ...walk(path.join(UP, upTree)),
+      ...[...branchAdded]
+        .filter((f) => f.startsWith(`${upTree}/`))
+        .map((f) => f.slice(upTree.length + 1)),
+    ]),
+  ];
   const seen = new Set();
   for (const rel of upAll) {
     const upRel = `${upTree}/${rel}`;

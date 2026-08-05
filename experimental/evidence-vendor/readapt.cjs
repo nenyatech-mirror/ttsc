@@ -592,10 +592,25 @@ const FRONTMATTER = [
     "which the lint-rule-authoring skill owns",
     "which the `@ttsc/lint` contributor contract in packages/lint/README.md owns",
   ],
+  // Upstream keeps its prior-art notes and its decision record in a `.wiki`
+  // this repository does not have. A pointer at a document nobody can open is
+  // worse than none: it reads as a citation and answers nothing.
+  [
+    ".agents/skills/project/evidence/SKILL.md",
+    "Read `.wiki/references/autobe-mcp.md` before generalizing behavior from that prior art, and `.wiki/design/decisions.md` for settled repository decisions and their costs.\n",
+    "",
+  ],
+  [
+    ".agents/skills/project/evidence/SKILL.md",
+    " — `.wiki/design/decisions.md` records the reversal and its cost.",
+    ", and the reversal was deliberate.",
+  ],
 ];
 for (const [file, from, to] of FRONTMATTER) {
   const text = fs.readFileSync(file, "utf8");
-  if (text.includes(to)) continue;
+  // A deletion has an empty replacement, and every string contains the empty
+  // string, so the already-applied test has to be the absence of the anchor.
+  if (to === "" ? !text.includes(from) : text.includes(to)) continue;
   if (!text.includes(from))
     throw new Error(`${file}: anchor not found: ${from}`);
   fs.writeFileSync(file, text.replace(from, to), "utf8");

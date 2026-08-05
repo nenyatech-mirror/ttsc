@@ -10,8 +10,8 @@ const TREES = [
   "benchmarks/evidence/src",
   "tests/test-evidence/src",
   "tests/test-evidence-benchmark/src",
-  ".agents/skills/evidence-graph",
-  ".agents/skills/evidence-benchmark",
+  ".agents/skills/project/evidence",
+  ".agents/skills/benchmark/evidence",
 ];
 const DOCS = [
   "packages/evidence/README.md",
@@ -161,8 +161,8 @@ for (const f of ALL) {
 
 // E. skill links
 for (const dir of [
-  ".agents/skills/evidence-graph",
-  ".agents/skills/evidence-benchmark",
+  ".agents/skills/project/evidence",
+  ".agents/skills/benchmark/evidence",
 ])
   for (const f of walk(dir))
     for (const m of fs
