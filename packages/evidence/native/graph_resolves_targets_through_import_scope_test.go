@@ -242,8 +242,7 @@ export function detail(): void {}
 /**
  * Verifies a claim that cannot address code is refused the population outright.
  *
- * This case is the inversion of one that asserted the opposite (upstream
- * lint-plugin-evidence#82).
+ * This case is the inversion of one that asserted the opposite (upstream lint-plugin-evidence#82).
  * Markdown has no import scope, so a code target there could only be matched by
  * name against one repository-wide table — which made symbol-name uniqueness
  * across the whole repository load-bearing. Two modules exporting `IPage` made

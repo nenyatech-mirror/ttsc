@@ -4,7 +4,7 @@ This is what **you**, operating the campaign from this repository, may not chang
 
 ## Never, Whatever You Found
 
-Under `experimental/benchmark/evidence/template/**`, in either arm, at any nesting level:
+Under `benchmark/template/**`, in either arm, at any nesting level:
 
 - **`tsconfig.json`** — any file, any property.
 - **`lint.config.ts`** — any file, any property, including a claim, a selector, a severity, or a `disabled`.
@@ -15,7 +15,7 @@ Creating or deleting one of those files counts as changing it.
 Three more:
 
 - **A measured workspace.** What a cell did to its own workspace is the measurement.
-- **`experimental/benchmark/evidence/requirements/**`.\*\* Opaque, authoritative bytes: never edit, rename, add, delete, normalize, summarize, validate, or challenge them.
+- **`benchmark/requirements/**`.\*\* Opaque, authoritative bytes: never edit, rename, add, delete, normalize, summarize, validate, or challenge them.
 - **The cell's own reasoning.** Do not prompt the measured agent, inject advice, weaken a gate, or hard-code a subject answer, and never expose Evidence material to Plain. A cell's questions and partial reports do not invite operator input; its continuation instruction already tells it to finish on its own.
 
 ## Why The Three Files
@@ -38,11 +38,11 @@ Everything else in this repository is fixable, and where the fix lands decides w
 
 | What you fix | Who reads it | When you may edit it |
 | --- | --- | --- |
-| `experimental/benchmark/evidence/src/**` | A benchmark process, at start | Any time. Commit first: a resume requires a clean revision descending from the cell's frozen `benchmarkRevision`, and the runner retains the correction as that process's `runnerRevision`. |
-| `experimental/benchmark/evidence/instructions/**` | A running cell, at its next objective | Not while a cell that will reach it is alive. Stop and preserve the cohort first. |
-| `experimental/benchmark/evidence/template/**`, except the three files above | Workspace preparation only | Any time. It reaches future launches only, never a prepared workspace. |
+| `benchmark/src/**` | A benchmark process, at start | Any time. Commit first: a resume requires a clean revision descending from the cell's frozen `benchmarkRevision`, and the runner retains the correction as that process's `runnerRevision`. |
+| `benchmark/instructions/**` | A running cell, at its next objective | Not while a cell that will reach it is alive. Stop and preserve the cohort first. |
+| `benchmark/template/**`, except the three files above | Workspace preparation only | Any time. It reaches future launches only, never a prepared workspace. |
 | The three files above | Every evidence population in every cell | Never without the user's explicit instruction. |
-| `experimental/benchmark/evidence/requirements/**` | Workspace preparation, byte-for-byte | Never. |
+| `benchmark/requirements/**` | Workspace preparation, byte-for-byte | Never. |
 
 Report the defect immediately, and commit and push the verified correction in the campaign pull request.
 

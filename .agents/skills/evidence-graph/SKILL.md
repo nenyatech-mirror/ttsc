@@ -61,7 +61,7 @@ Keep a withdrawn unit rather than discarding it, marked with the tag that withdr
 
 ## Swagger Classification
 
-Swagger is reference-only. One `ITtscEvidenceGraphSwaggerReference` owns one exact project-relative file path or HTTP(S) URL through its singular `file` property; multiple documents are separate reference-array obligations. It has no public `symbol` selector because every operation under the normalized document's `paths` object is selected.
+Swagger is reference-only. One `IEvidenceGraphSwaggerReference` owns one exact project-relative file path or HTTP(S) URL through its singular `file` property; multiple documents are separate reference-array obligations. It has no public `symbol` selector because every operation under the normalized document's `paths` object is selected.
 
 Normalize Swagger 2.0 and OpenAPI 3.x JSON/YAML inputs with `@typia/utils` to `@typia/interface`'s `OpenApi.IDocument` before materializing operations. Standard and additional operation methods become uppercase targets such as `POST:/members`; preserve the OpenAPI path exactly. Webhooks and component schemas are outside this artifact kind.
 

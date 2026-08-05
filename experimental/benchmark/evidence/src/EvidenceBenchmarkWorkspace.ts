@@ -237,18 +237,7 @@ export namespace EvidenceBenchmarkWorkspace {
     fs.writeFileSync(target, output);
   }
 
-  /**
-   * Flattens every repository catalog group into one package-to-version map,
-   * then adds the workspace's own packages.
-   *
-   * A template asks for a version by package name. In the repository this
-   * benchmark came from, `ttsc` and its plugins were catalog entries, because
-   * they were external dependencies there. Here they are the workspace itself,
-   * and a workspace never lists itself in a catalog. Reading their manifests
-   * keeps `{{version:ttsc}}` answerable without asking this repository to
-   * duplicate its own version numbers into a catalog that exists for
-   * externals.
-   */
+  /** Flattens every repository catalog group into one package-to-version map. */
   function repositoryCatalogVersions(repository: string): Map<string, string> {
     const parsed: unknown = YAML.parse(
       fs.readFileSync(path.join(repository, "pnpm-workspace.yaml"), "utf8"),
@@ -271,7 +260,12 @@ export namespace EvidenceBenchmarkWorkspace {
     return versions;
   }
 
-  /** Every `name`/`version` pair declared by a package inside `repository`. */
+  /**
+   * Every `name`/`version` pair declared by a package inside `repository`.
+   *
+   * A template asks for a version by package name, and this workspace's own
+   * packages answer no catalog lookup, so their manifests answer instead.
+   */
   function workspacePackageVersions(repository: string): Map<string, string> {
     const found: Map<string, string> = new Map();
     for (const group of ["packages", "experimental"])
