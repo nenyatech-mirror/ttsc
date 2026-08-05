@@ -210,6 +210,10 @@ const EXCEPTIONS = new Map([
     "imports the benchmark source across a package boundary at this workspace's depth, and carries the packed toolchain because a prepared workspace here binds this repository's own compiler",
   ],
   [
+    "benchmarks/evidence/template/base/.gitignore",
+    "ignores the packed toolchain this repository delivers; upstream installs ttsc from the registry and has no such directory",
+  ],
+  [
     "tests/test-evidence/src/internal/createProject.ts",
     "links every dependency the manifest declares rather than a hardcoded list",
   ],
@@ -403,7 +407,13 @@ const collect = (upRel, localRel) => {
     const a = fs.readFileSync(path.join(UP, upRel));
     const b = fs.readFileSync(localPath);
     skippedBinary++;
-    if (!a.equals(b)) differing.push({ localRel, upRel, note: "binary bytes" });
+    // A declared adaptation is declared whatever the extension. `.gitignore`
+    // and its siblings carry no extension at all, so they reach this branch
+    // rather than the text one, and an exception listed for them was ignored.
+    if (!a.equals(b) && !EXCEPTIONS.has(localRel))
+      differing.push({ localRel, upRel, note: "binary bytes" });
+    else if (a.equals(b) && EXCEPTIONS.has(localRel))
+      excused.push(`${localRel}: listed as adapted but compares clean`);
     return;
   }
   pending.push({ upRel, localRel, text: adapt(readUpstream(upRel), localRel) });

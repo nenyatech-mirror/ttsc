@@ -2,6 +2,11 @@
 node_modules/
 .build-cache/
 *.tsbuildinfo
+# The packed toolchain this workspace installs from. It is delivered material,
+# not authored work, and it is large: the platform package alone is ~47 MB, so
+# committing it puts those bytes in the baseline, in every checkpoint snapshot
+# that copies and hashes the workspace, and in the `.git` tree holding both.
+.benchmark-deps/
 
 # Local environment
 .env
