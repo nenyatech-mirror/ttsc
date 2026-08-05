@@ -76,7 +76,7 @@ The published numbers reflect those mechanics: large single-program fixtures (`v
 
 ## Reproduce
 
-The runner starts from an empty `experimental/benchmark/.work` directory. It packs the local `ttsc` workspace into tarballs, clones the fixture branches, installs those tarballs into the `ttsc` and `ttsc-lint` clones, runs `ttsc prepare`, then measures each cell sequentially so projects do not compete for CPU during timing.
+The runner starts from an empty `benchmarks/performance/.work` directory. It packs the local `ttsc` workspace into tarballs, clones the fixture branches, installs those tarballs into the `ttsc` and `ttsc-lint` clones, runs `ttsc prepare`, then measures each cell sequentially so projects do not compete for CPU during timing.
 
 ```bash
 git clone https://github.com/samchon/ttsc.git
@@ -84,11 +84,11 @@ cd ttsc
 corepack enable
 pnpm install
 
-rm -rf experimental/benchmark/.work
-pnpm --dir experimental/benchmark performance
+rm -rf benchmarks/performance/.work
+pnpm --filter @ttsc/benchmark-performance start
 ```
 
-The runner defaults to **5 measured runs + 1 warmup** per cell. The dashboard takes the minimum across those samples, so more samples push the published number toward the noise-free best case rather than averaging it. Override with `TTSC_BENCH_RUNS` / `TTSC_BENCH_WARMUP` when you want a quicker spot-check (`TTSC_BENCH_RUNS=1 TTSC_BENCH_WARMUP=0` finishes a sweep in roughly half an hour but a single cold spike then sets the cell's number) or a steadier sampling run (e.g. `TTSC_BENCH_RUNS=10` doubles every sample and lowers the chance of an outlier squatting on the minimum). Results are written to `experimental/benchmark/.work/report.md`, `experimental/benchmark/.work/report.json`, and `website/public/benchmark/performance.json`.
+The runner defaults to **5 measured runs + 1 warmup** per cell. The dashboard takes the minimum across those samples, so more samples push the published number toward the noise-free best case rather than averaging it. Override with `TTSC_BENCH_RUNS` / `TTSC_BENCH_WARMUP` when you want a quicker spot-check (`TTSC_BENCH_RUNS=1 TTSC_BENCH_WARMUP=0` finishes a sweep in roughly half an hour but a single cold spike then sets the cell's number) or a steadier sampling run (e.g. `TTSC_BENCH_RUNS=10` doubles every sample and lowers the chance of an outlier squatting on the minimum). Results are written to `benchmarks/performance/.work/report.md`, `benchmarks/performance/.work/report.json`, and `website/public/benchmark/performance.json`.
 
 The published snapshot pins every fixture's `legacy` branch to the **Legacy TypeScript** version shown in the host panel and on each project row (currently `v6.0.3`) so the `tsc` baseline reflects the same major version the `ttsc` rows run against. Earlier snapshots ran legacy on TypeScript 4.9.5 / 5.x; the matrix kept its shape but the cross-row comparison was apples-to-oranges. The fixtures' `ttsc` and `ttsc-lint` branches use the local tarballs packed by the runner.
 

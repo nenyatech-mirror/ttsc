@@ -1,4 +1,4 @@
-// Browser-side port of experimental/benchmark/src/graph/TtscBenchmarkGraphReduce.ts
+// Browser-side port of benchmarks/graph/src/TtscBenchmarkGraphReduce.ts
 // `TtscBenchmarkGraphReduce.reduce()`, so the
 // 3D viewer can take a raw `@ttsc/graph` dump (what `ttscgraph dump` prints) and
 // turn it into the render payload without any server. Keep in sync with that

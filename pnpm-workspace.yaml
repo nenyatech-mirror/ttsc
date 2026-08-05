@@ -1,6 +1,6 @@
 packages:
   - "config"
-  - "experimental/benchmark"
+  - "benchmarks/*"
   - "packages/*"
   - "tests/*"
   - "website"
@@ -31,11 +31,22 @@ catalogs:
     "@rollup/plugin-node-resolve": ^16.0.3
     rollup: ^4.56.0
   samchon:
+    nestia: &nestia ^12.1.0
+    "@nestia/core": *nestia
+    "@nestia/fetcher": *nestia
+    "@nestia/sdk": *nestia
     typia: &typia 13.2.0
     "@typia/interface": *typia
     "@typia/mcp": *typia
     "@typia/utils": *typia
+  prisma:
+    # Pinned exactly: Prisma publishes this package under an engine-hash version
+    # rather than a semver range, so a caret would express nothing. The evidence
+    # bridge prefers a copy resolvable from the consumer's own project and falls
+    # back to this one, so the pin decides the default parser, not the only one.
+    "@prisma/prisma-schema-wasm": 7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356
   utils:
     "@nestia/e2e": ^12.0.0
     "@types/node": ^25.3.0
     rimraf: ^6.1.2
+    yaml: ^2.9.0

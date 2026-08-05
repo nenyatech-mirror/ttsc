@@ -4,6 +4,16 @@ node_modules/
 # Build outputs
 lib/
 native/
+# `@ttsc/evidence` ships Go SOURCE from `native/`, not a build output. A lint
+# contributor cannot carry a `go.mod` inside the directory ttsc copies, so the
+# sources sit in a plain directory that happens to collide with the per-platform
+# packages' binary drop. The rule above stays; this package opts back in.
+!packages/evidence/native/
+# The benchmark template ships a frontend whose sources live in `src/lib`, which
+# the `lib/` rule above reads as build output. Dropping them delivers a
+# workspace whose entry cannot resolve `@/lib/client`.
+!benchmarks/evidence/template/**/src/lib/
+
 dist/
 bin/
 !packages/vscode/bin/
@@ -33,8 +43,15 @@ go.work.sum
 experimental/typia/
 experimental/nestia/
 
-# Benchmark results — an ephemeral artifact, never committed.
-experimental/benchmark/.work/
+# Benchmark results — an ephemeral artifact, never committed. Each benchmark
+# package resolves its own work root, so the rule covers the container.
+benchmarks/*/.work/
+
+# Raw evidence benchmark runs and measured workspaces are local measurement
+# output. A path built without its separator once created the second of these
+# upstream and it was not ignored; the spelling here follows this layout.
+/benchmarks/evidence/output/
+/benchmarks/evidenceoutput/
 
 # Promotional media. Clips are rendered locally, published as GitHub-hosted
 # attachments, and referenced by URL from the website, so no binary enters the

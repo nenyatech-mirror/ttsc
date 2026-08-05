@@ -1,0 +1,483 @@
+// Prove that every difference between the vendored trees and upstream is a
+// declared adaptation.
+//
+// `audit.cjs` sweeps for assumptions the copy carried over. This asks the
+// opposite and stricter question: given upstream's bytes plus exactly the
+// rewrites `readapt.cjs` declares, is anything left over? A residual is either
+// an upstream change the copy missed or a local edit nobody recorded, and both
+// are silent until something breaks.
+//
+// Formatting is not content. Upstream Go is tab-indented and this repository
+// pins two spaces; Prettier reflows prose and wraps arguments differently after
+// an identifier grows by four characters. Comparing bytes would report hundreds
+// of differences that mean nothing. The comparison therefore runs over the
+// whitespace-collapsed token stream of each file, which still catches any
+// changed word, identifier, number, or punctuation mark.
+const fs = require("node:fs");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+
+const ROOT = "D:/github/samchon/ttsc";
+const UP = "D:/github/samchon/lint-plugin-evidence";
+// Upstream PR #189 carries live logic fixes on top of master, and it is a live
+// campaign branch that moves. Resolving the ref each run rather than pinning a
+// commit is deliberate: a stale pin compares clean against bytes upstream has
+// already replaced, which is the exact failure this script exists to catch.
+const BRANCH_REF = "origin/campaign-luna-0.6.0-cont";
+const BRANCH = require("node:child_process")
+  .execFileSync("git", ["-C", UP, "rev-parse", BRANCH_REF], {
+    encoding: "utf8",
+  })
+  .trim();
+process.chdir(ROOT);
+
+// ------------------------------------------------------------------ mappings
+const TREES = [
+  ["packages/evidence/src", "packages/evidence/src"],
+  ["packages/evidence/native", "packages/evidence/native"],
+  ["benchmark/src", "benchmarks/evidence/src"],
+  ["benchmark/template", "benchmarks/evidence/template"],
+  ["benchmark/requirements", "benchmarks/evidence/requirements"],
+  ["benchmark/instructions", "benchmarks/evidence/instructions"],
+  ["tests/test-evidence/src", "tests/test-evidence/src"],
+  ["tests/test-benchmark/src", "tests/test-evidence-benchmark/src"],
+  [".agents/skills/benchmark", ".agents/skills/benchmark/evidence"],
+];
+const FILES = [
+  ["benchmark/README.md", "benchmarks/evidence/README.md"],
+  [
+    ".agents/skills/evidence-graph/SKILL.md",
+    ".agents/skills/project/evidence/SKILL.md",
+  ],
+];
+
+// Upstream basenames that `readapt.cjs` step 2 renames.
+const renamed = (base) => {
+  if (/^IEvidence/.test(base))
+    return base.replace(/^IEvidence/, "ITtscEvidence");
+  const m = /^EvidenceGraph(Markdown|Prisma|TypeScript)Symbol(\..+)$/.exec(
+    base,
+  );
+  return m ? `TtscEvidenceGraph${m[1]}Symbol${m[2]}` : base;
+};
+
+// ---------------------------------------------------------------- adaptations
+// The identifier and URL rewrites of `readapt.cjs` step 1, applied to upstream
+// before comparison. Kept as one list so a rule added there and forgotten here
+// shows up as a residual rather than passing silently.
+const RULES = [
+  [/\bIEvidence/g, "ITtscEvidence"],
+  [
+    /\bEvidenceGraph(Markdown|Prisma|TypeScript)Symbol\b/g,
+    "TtscEvidenceGraph$1Symbol",
+  ],
+  [/@samchon\/lint-plugin-evidence/g, "@ttsc/evidence"],
+  [/@samchon\/evidence-benchmark/g, "@ttsc/benchmark-evidence"],
+  [
+    /github\.com\/samchon\/lint-plugin-evidence\/packages\/evidence/g,
+    "github.com/samchon/ttsc/packages/evidence",
+  ],
+  [/"@samchon",\s*\n(\s*)"lint-plugin-evidence",/g, '"@ttsc",\n$1"evidence",'],
+  [
+    /"node_modules", "@samchon", "lint-plugin-evidence"/g,
+    '"node_modules", "@ttsc", "evidence"',
+  ],
+  [
+    /https:\/\/github\.com\/samchon\/lint-plugin-evidence\/issues/g,
+    "https://github.com/samchon/ttsc/issues",
+  ],
+  [
+    /https:\/\/github\.com\/samchon\/lint-plugin-evidence/g,
+    "https://github.com/samchon/ttsc",
+  ],
+  [/\(issue #(\d+)\)/g, "(upstream lint-plugin-evidence#$1)"],
+  [
+    /\bissue #(\d+) was measured at/g,
+    "upstream lint-plugin-evidence#$1 was measured at",
+  ],
+  [
+    /\bthe ones issue #(\d+) measured\b/g,
+    "the ones upstream lint-plugin-evidence#$1 measured",
+  ],
+  [
+    /What this gives up is stated in issue #\d+ and in `\.wiki\/design\/decisions\.md`\n\/\/ beside the decision it reverses: documentation can no longer cite code, and\n\/\/ the inverse obligation is not the same one\./g,
+    "What this gives up is the decision it reverses: documentation can no longer\n// cite code, and the inverse obligation is not the same one.",
+  ],
+  [
+    /The\n\/\/ lint-rule-authoring skill forbids/g,
+    "The\n// `@ttsc/lint` contributor contract forbids",
+  ],
+  [
+    /lint-rule-authoring skill forbids/g,
+    "`@ttsc/lint` contributor contract forbids",
+  ],
+  // step 6: the benchmark's asset root
+  [
+    /(?<![\w/-])benchmark\/(aggregate|instructions|output|requirements|src|template)\b/g,
+    "benchmarks/evidence/$1",
+  ],
+  [/name: benchmark\n/g, "name: benchmark/evidence\n"],
+  [/name: evidence-graph\n/g, "name: project/evidence\n"],
+  [
+    /which the lint-rule-authoring skill owns/g,
+    "which the `@ttsc/lint` contributor contract in packages/lint/README.md owns",
+  ],
+  // upstream keeps its prior art and decision record in a .wiki this
+  // repository does not have
+  [
+    "Read `.wiki/references/autobe-mcp.md` before generalizing behavior from that prior art, and `.wiki/design/decisions.md` for settled repository decisions and their costs.\n",
+    "",
+  ],
+  [
+    " — `.wiki/design/decisions.md` records the reversal and its cost.",
+    ", and the reversal was deliberate.",
+  ],
+];
+
+// A file this workspace deliberately does not hold identical to upstream, with
+// the reason it differs. Anything not listed here must compare clean.
+const EXCEPTIONS = new Map([
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkLayout.ts",
+    "local only: upstream's benchmark sits at `<repository>/benchmark`, so one root answered both questions and no such module exists there",
+  ],
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkWorkspace.ts",
+    "re-rooted through EvidenceBenchmarkLayout, and `workspacePackageVersions` is restored because a workspace never lists itself in a catalog",
+  ],
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkCheckpoint.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkDashboard.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkSuspensionAudit.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkCommandLine.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkDashboard.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkReconcile.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkReport.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkSupervision.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkSuspensionAudit.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkWarning.ts",
+    "re-rooted through EvidenceBenchmarkLayout",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/internal/suiteRoot.ts",
+    "the suite holds the benchmark root for the same reason EvidenceBenchmarkLayout does on the runner side",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/internal/benchmarkWorkspace.ts",
+    "imports the benchmark source across a package boundary at this workspace's depth",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/internal/IBenchmarkWorkspace.ts",
+    "imports the benchmark source across a package boundary at this workspace's depth",
+  ],
+  [
+    "tests/test-evidence/src/internal/createProject.ts",
+    "links every dependency the manifest declares rather than a hardcoded list",
+  ],
+  [
+    "tests/test-evidence/src/internal/pluginCacheDirectory.ts",
+    "upstream cites `scripts/lint.mjs`, which this repository does not have",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_command_line_runs_from_its_own_entry.ts",
+    "runs the command line from `benchmarkRoot` rather than the repository root, which are the same directory upstream and not here",
+  ],
+]);
+
+// ------------------------------------------------------------------ compare
+const TEXT = new Set([
+  ".ts",
+  ".tsx",
+  ".go",
+  ".js",
+  ".cjs",
+  ".mjs",
+  ".mts",
+  ".json",
+  ".md",
+  ".prisma",
+  ".yaml",
+  ".yml",
+  ".css",
+]);
+const SKIP_DIR = new Set(["node_modules", ".git", ".next", "dist"]);
+
+const walk = (dir, base = dir, out = []) => {
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (SKIP_DIR.has(e.name)) continue;
+      // The template ships frontend sources in `src/lib`; only a build output
+      // directory named `lib` is skipped.
+      if (e.name === "lib" && !p.includes("template")) continue;
+      walk(p, base, out);
+    } else out.push(path.relative(base, p).split(path.sep).join("/"));
+  }
+  return out;
+};
+
+// The delivered template takes only the package identity, never the path or
+// prose rules, matching `readapt.cjs` step 1b: its literals describe the
+// workspace the benchmark generates rather than this repository, and its bytes
+// are a frozen input the measured agent reads.
+const IDENTITY = RULES.slice(0, 3);
+const adapt = (text, localRel) => {
+  let t = text.replace(/\r\n/g, "\n");
+  const rules = localRel.startsWith("benchmarks/evidence/template/")
+    ? IDENTITY
+    : RULES;
+  for (const [re, to] of rules) t = t.replace(re, to);
+  return t;
+};
+// Formatting is not content: collapse every whitespace run to one space.
+const tokens = (text) => text.replace(/\s+/g, " ").trim();
+
+// Collapsing whitespace is not enough on its own. This repository's Prettier
+// sorts imports, hoists a union's leading `|` to the line start, adds a
+// trailing comma whenever it breaks an argument list, and rewraps JSDoc prose.
+// Every one of those moves a token without changing a word, and comparing the
+// raw stream reports each as a difference. So the adapted upstream text is run
+// through the same Prettier this repository pins before it is compared: two
+// files that Prettier agrees on differ only in content.
+const PRETTIER_EXT = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".cjs",
+  ".mjs",
+  ".mts",
+  ".json",
+  ".md",
+  ".css",
+  ".yaml",
+  ".yml",
+]);
+// Not under node_modules: Prettier ignores that path unconditionally, and a
+// staging tree it silently skips makes every formatting difference look real.
+const STAGE = path.join(ROOT, ".work", "evidence-parity");
+const staged = [];
+const stage = (localRel, text) => {
+  const target = path.join(STAGE, localRel);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, text, "utf8");
+  staged.push(localRel);
+  return target;
+};
+const normalizeStaged = () => {
+  if (staged.length === 0) return;
+  // Copied in so its relative patterns resolve against the staging tree, which
+  // mirrors the repository layout, rather than against the repository itself.
+  fs.copyFileSync(
+    path.join(ROOT, ".prettierignore"),
+    path.join(STAGE, ".prettierignore"),
+  );
+  // One Prettier process over the whole staging tree; per-file invocation of a
+  // 436-file comparison is minutes of process startup.
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        path.join(ROOT, "node_modules", "prettier", "bin", "prettier.cjs"),
+        "--write",
+        "--log-level",
+        "error",
+        "--config",
+        path.join(ROOT, "prettier.config.js"),
+        "--ignore-path",
+        ".prettierignore",
+        ".",
+      ],
+      { cwd: STAGE, encoding: "utf8", maxBuffer: 1 << 26, stdio: "pipe" },
+    );
+  } catch (error) {
+    // A file Prettier cannot parse is itself worth knowing about, but it must
+    // not take the whole comparison down: the rest still compares.
+    process.stdout.write(
+      "prettier reported errors while normalizing upstream:\n" +
+        String(error.stderr ?? error.message)
+          .split("\n")
+          .slice(0, 6)
+          .join("\n") +
+        "\n",
+    );
+  }
+};
+
+const upstreamFiles = new Set(
+  execFileSync("git", ["-C", UP, "ls-files"], {
+    encoding: "utf8",
+    maxBuffer: 1 << 26,
+  })
+    .split("\n")
+    .filter(Boolean),
+);
+// Every path the branch touches, not only the ones it adds. Taking a modified
+// file from the working tree instead of from the branch is how four frozen
+// instruction files and the arm review skill stayed at master while the branch
+// had already rewritten them.
+const branchChanged = new Set(
+  execFileSync("git", ["-C", UP, "diff", "--name-only", "master..." + BRANCH], {
+    encoding: "utf8",
+    maxBuffer: 1 << 24,
+  })
+    .split("\n")
+    .filter(Boolean),
+);
+const readUpstream = (rel) =>
+  branchChanged.has(rel)
+    ? execFileSync("git", ["-C", UP, "show", `${BRANCH}:${rel}`], {
+        encoding: "utf8",
+        maxBuffer: 1 << 24,
+      })
+    : fs.readFileSync(path.join(UP, rel), "utf8");
+
+const differing = [];
+const missing = [];
+const extra = [];
+const excused = [];
+let compared = 0;
+let skippedBinary = 0;
+
+const localTracked = new Set(
+  execFileSync("git", ["ls-files"], { encoding: "utf8", maxBuffer: 1 << 26 })
+    .split("\n")
+    .filter(Boolean),
+);
+
+const pending = [];
+const collect = (upRel, localRel) => {
+  const localPath = path.join(ROOT, localRel);
+  if (!fs.existsSync(localPath)) {
+    missing.push(`${localRel}   (upstream ${upRel})`);
+    return;
+  }
+  if (!TEXT.has(path.extname(localRel))) {
+    const a = fs.readFileSync(path.join(UP, upRel));
+    const b = fs.readFileSync(localPath);
+    skippedBinary++;
+    if (!a.equals(b)) differing.push({ localRel, upRel, note: "binary bytes" });
+    return;
+  }
+  pending.push({ upRel, localRel, text: adapt(readUpstream(upRel), localRel) });
+};
+
+const compare = ({ upRel, localRel, text }) => {
+  compared++;
+  const stagedPath = path.join(STAGE, localRel);
+  const want = tokens(
+    fs.existsSync(stagedPath) ? fs.readFileSync(stagedPath, "utf8") : text,
+  );
+  const have = tokens(
+    fs.readFileSync(path.join(ROOT, localRel), "utf8").replace(/\r\n/g, "\n"),
+  );
+  if (want === have) {
+    if (EXCEPTIONS.has(localRel))
+      excused.push(`${localRel}: listed as adapted but compares clean`);
+    return;
+  }
+  if (EXCEPTIONS.has(localRel)) return;
+  // First differing word, for a report that points at something.
+  const w = want.split(" ");
+  const h = have.split(" ");
+  let i = 0;
+  while (i < w.length && i < h.length && w[i] === h[i]) i++;
+  differing.push({
+    localRel,
+    upRel,
+    note: `word ${i}: upstream "${w.slice(i, i + 8).join(" ")}" | here "${h.slice(i, i + 8).join(" ")}"`,
+  });
+};
+
+for (const [upTree, localTree] of TREES) {
+  // Files upstream PR #189 adds exist only on that branch, so walking the
+  // upstream working tree never sees them and every one would be reported as
+  // tracked-here-absent-upstream.
+  const upAll = [
+    ...new Set([
+      ...walk(path.join(UP, upTree)),
+      ...[...branchChanged]
+        .filter((f) => f.startsWith(`${upTree}/`))
+        .map((f) => f.slice(upTree.length + 1)),
+    ]),
+  ];
+  const seen = new Set();
+  for (const rel of upAll) {
+    const upRel = `${upTree}/${rel}`;
+    if (!upstreamFiles.has(upRel) && !branchChanged.has(upRel)) continue;
+    const localRel = `${localTree}/${rel
+      .split("/")
+      .map((s, i, a) => (i === a.length - 1 ? renamed(s) : s))
+      .join("/")}`;
+    seen.add(localRel);
+    collect(upRel, localRel);
+  }
+  for (const rel of walk(path.join(ROOT, localTree))) {
+    const localRel = `${localTree}/${rel}`;
+    if (seen.has(localRel)) continue;
+    if (!localTracked.has(localRel)) continue;
+    if (EXCEPTIONS.has(localRel)) continue;
+    extra.push(localRel);
+  }
+}
+for (const [upRel, localRel] of FILES) collect(upRel, localRel);
+
+fs.rmSync(STAGE, { recursive: true, force: true });
+for (const { localRel, text } of pending)
+  if (PRETTIER_EXT.has(path.extname(localRel))) stage(localRel, text);
+normalizeStaged();
+for (const item of pending) compare(item);
+
+// ------------------------------------------------------------------- report
+const section = (title, rows) => {
+  if (rows.length === 0) return;
+  console.log(`\n=== ${title} (${rows.length}) ===`);
+  for (const r of rows.slice(0, 40)) console.log("  " + r);
+  if (rows.length > 40) console.log(`  ... ${rows.length - 40} more`);
+};
+
+console.log(`upstream master plus ${BRANCH_REF} at ${BRANCH.slice(0, 9)}`);
+console.log(
+  `compared ${compared} text files and ${skippedBinary} binary files against upstream`,
+);
+console.log(`declared adaptations: ${EXCEPTIONS.size} files`);
+section(
+  "DIFFERING — an undeclared difference from upstream",
+  differing.map((d) => `${d.localRel}\n      ${d.note}`),
+);
+section("MISSING — upstream has it, this workspace does not", missing);
+section("EXTRA — tracked here, absent upstream", extra);
+section("STALE EXCEPTION — declared adapted but identical", excused);
+
+const failed =
+  differing.length + missing.length + extra.length + excused.length;
+if (failed === 0) console.log("\nparity: clean");
+else console.log(`\nparity: ${failed} residual(s)`);
+process.exitCode = failed === 0 ? 0 : 1;

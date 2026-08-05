@@ -61,7 +61,7 @@ export const test_ttscgraph_viewer_reducers_rewrite_escaped_identity_paths =
         "default",
       ),
       await loadReducer(
-        "experimental/benchmark/src/graph/TtscBenchmarkGraphReduce.ts",
+        "benchmarks/graph/src/TtscBenchmarkGraphReduce.ts",
         "namespace",
       ),
     ];

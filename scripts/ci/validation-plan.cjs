@@ -16,7 +16,12 @@ const LANES = [
     id: "go",
     name: "go",
     needsGo: true,
-    build: "pnpm --filter ttsc build",
+    // The evidence Go tests stat `packages/evidence/lib`, so the lane that
+    // runs them has to build the package that produces it.
+    build:
+      "pnpm --filter ttsc build && " +
+      "pnpm --filter @ttsc/lint build && " +
+      "pnpm --filter @ttsc/evidence build",
     run: "pnpm run test:go && pnpm --filter ttsc go:vet",
   },
   {
@@ -24,7 +29,12 @@ const LANES = [
     name: "windows-go",
     os: "windows-latest",
     needsGo: true,
-    build: "pnpm --filter ttsc build",
+    // Same reason as the `go` lane: `pnpm run test:go` includes the evidence
+    // rule tests, and those stat `packages/evidence/lib`.
+    build:
+      "pnpm --filter ttsc build && " +
+      "pnpm --filter @ttsc/lint build && " +
+      "pnpm --filter @ttsc/evidence build",
     run:
       "node --test packages/ttsc/scripts/check-flags.test.cjs && " +
       "pnpm run test:go",
@@ -172,6 +182,19 @@ const LANES = [
     build: "pnpm run build:current",
     run: "pnpm --filter @ttsc/test-graph start",
   },
+  {
+    id: "evidence",
+    name: "evidence defenses",
+    needsGo: true,
+    scope: "test-evidence",
+    build: "pnpm run build:current",
+    run:
+      // The benchmark's executables are imported by no suite, so this is the
+      // only pass that reads them at all.
+      "pnpm --filter @ttsc/benchmark-evidence run check && " +
+      "pnpm --filter test-evidence start && " +
+      "pnpm --filter test-evidence-benchmark start",
+  },
 ];
 
 const LANE_BY_ID = new Map(LANES.map((lane) => [lane.id, lane]));
@@ -185,6 +208,7 @@ const E2E_LANE_IDS = [
   ...LINT_LANE_IDS,
   "bundler-defenses",
   "graph",
+  "evidence",
 ];
 const TTSC_DOWNSTREAM_IDS = [
   "go",
@@ -196,6 +220,7 @@ const TTSC_DOWNSTREAM_IDS = [
   ...LINT_LANE_IDS,
   "bundler-defenses",
   "graph",
+  "evidence",
 ];
 const PLATFORM_IDS = [
   "package-defenses",
@@ -263,7 +288,7 @@ const PLATFORM_ROWS = [
 const WORKFLOW_PATHS = {
   benchmark: [
     ".github/workflows/benchmark.yml",
-    "experimental/benchmark/**",
+    "benchmarks/**",
     "packages/ttsc/**",
     "package.json",
     "pnpm-lock.yaml",
@@ -396,10 +421,7 @@ function planForPaths(files) {
       normalized,
       PLATFORM_INTEGRATION_PATHS.pluginCache,
     ),
-    sourceMap: matchesAnyPath(
-      normalized,
-      PLATFORM_INTEGRATION_PATHS.sourceMap,
-    ),
+    sourceMap: matchesAnyPath(normalized, PLATFORM_INTEGRATION_PATHS.sourceMap),
     vscode: matchesAnyPath(normalized, PLATFORM_INTEGRATION_PATHS.vscode),
   };
   const reasons = [];
@@ -429,9 +451,22 @@ function planForPaths(files) {
           ...LINT_LANE_IDS,
           "ttsc-core",
           "ttsc-native",
+          // The evidence rules link into this engine, so a contributor-API
+          // change that breaks them has to fail here, not after a release.
+          "evidence",
         ],
         file,
       );
+      continue;
+    }
+    if (file.startsWith("packages/evidence/")) {
+      add(["evidence", "go"], file);
+      continue;
+    }
+    if (file.startsWith("benchmarks/evidence/")) {
+      // `tests/test-evidence-benchmark` imports this source directly, so the
+      // suite that proves it has to run when it changes.
+      add(["evidence"], file);
       continue;
     }
     if (file.startsWith("packages/banner/")) {
@@ -502,6 +537,12 @@ function planForPaths(files) {
         add(LINT_LANE_IDS, file);
         continue;
       }
+      // Both evidence suites share one lane, and the benchmark suite's
+      // directory name is not the lane id.
+      if (lane === "evidence-benchmark") {
+        add(["evidence"], file);
+        continue;
+      }
       if (LANE_BY_ID.has(lane)) {
         add([lane], file);
         continue;
@@ -564,6 +605,7 @@ function planForPaths(files) {
     }
     if (
       [
+        "scripts/ci/benchmark-source-contract.mts",
         "scripts/ci/dependency-audit.cjs",
         "scripts/ci/dependency-audit.test.cjs",
         "scripts/ci/format-check.cjs",
@@ -576,6 +618,11 @@ function planForPaths(files) {
       continue;
     }
     if (file.startsWith("experimental/test-unplugin/")) {
+      continue;
+    }
+    // The evidence benchmark is claimed above; the two ttsc harnesses under
+    // `benchmarks/` have their own workflow and no lane in this plan.
+    if (file.startsWith("benchmarks/")) {
       continue;
     }
     if (
@@ -596,11 +643,7 @@ function planForPaths(files) {
 
 function planTtscTest(file) {
   if (file.includes("/features/watch/")) return { lanes: [], watch: true };
-  if (
-    file.endsWith(
-      "/test_ttsx_commonjs_loads_prefix_only_node_builtins.ts",
-    )
-  )
+  if (file.endsWith("/test_ttsx_commonjs_loads_prefix_only_node_builtins.ts"))
     return { lanes: ["ttsc-core", "ttsx-node-22"], watch: false };
   if (file.includes("/features/"))
     return { lanes: ["ttsc-core"], watch: false };
@@ -689,9 +732,7 @@ function createPlatformPlan(tasks) {
         tasks.sourceMap && row.representative && row.os === "linux";
       const vscode = tasks.vscode && row.representative;
       const watch = tasks.watch && row.representative;
-      const build =
-        !tasks.experimental &&
-        (watch || pluginCache);
+      const build = !tasks.experimental && (watch || pluginCache);
       return {
         name: row.name,
         os: row.os,
@@ -701,11 +742,7 @@ function createPlatformPlan(tasks) {
         build_scope: watch ? "experimental" : "plugin-cache",
         experimental: tasks.experimental,
         needs_go:
-          tasks.experimental ||
-          bun ||
-          pluginCache ||
-          sourceMap ||
-          watch,
+          tasks.experimental || bun || pluginCache || sourceMap || watch,
         plugin_cache: pluginCache,
         setup_bun: bun || (pluginCache && row.os === "linux"),
         source_map: sourceMap,
@@ -750,13 +787,7 @@ function changedPaths(base, head, eventName) {
   const separator = eventName === "pull_request" ? "..." : "..";
   const result = cp.spawnSync(
     "git",
-    [
-      "diff",
-      "--name-only",
-      "--no-renames",
-      "-z",
-      `${base}${separator}${head}`,
-    ],
+    ["diff", "--name-only", "--no-renames", "-z", `${base}${separator}${head}`],
     {
       cwd: root,
       encoding: "buffer",
@@ -779,7 +810,9 @@ function isSha(value) {
 }
 
 function normalizePath(file) {
-  return String(file).replaceAll("\\", "/").replace(/^\.\/+/, "");
+  return String(file)
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
 }
 
 function matchesAnyPath(files, patterns) {

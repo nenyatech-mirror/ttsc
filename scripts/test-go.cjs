@@ -20,6 +20,7 @@ const runners = [
   "test-go-utility-plugins.cjs",
   "test-go-wasm.cjs",
   "test-go-lint.cjs",
+  "test-go-evidence.cjs",
   "test-go-graph.cjs",
   "test-go-shim.cjs",
 ];

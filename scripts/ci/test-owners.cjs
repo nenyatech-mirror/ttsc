@@ -59,11 +59,14 @@ const OWNERSHIP = {
   "go:packages/banner/test": "scripts/test-go-utility-plugins.cjs",
   "go:packages/paths/test": "scripts/test-go-utility-plugins.cjs",
   "go:packages/strip/test": "scripts/test-go-utility-plugins.cjs",
+  "go:packages/evidence/native": "scripts/test-go-evidence.cjs",
   "go:packages/wasm/test/host": "scripts/test-go-wasm.cjs",
   "go:tests/go-transformer/transformer": "scripts/test-go-transformer.cjs",
 
   // ---- e2e workspace packages ----
   "e2e:tests/test-banner": "test.yml lane: package defenses",
+  "e2e:tests/test-evidence": "test.yml lane: evidence defenses",
+  "e2e:tests/test-evidence-benchmark": "test.yml lane: evidence defenses",
   "e2e:tests/test-factory": "test.yml lane: package defenses",
   "e2e:tests/test-graph": "test.yml lane: graph",
   "e2e:tests/test-lint": "test.yml lanes: lint end-to-end defenses 1-2",
@@ -86,8 +89,7 @@ const OWNERSHIP = {
   "node:packages/ttsc/scripts/check-flags.test.cjs":
     "test.yml lanes: typecheck, windows-go",
   "node:scripts/ci/dependency-audit.test.cjs": "test.yml lane: typecheck",
-  "node:scripts/ci/factory-package.test.cjs":
-    "test.yml lane: package defenses",
+  "node:scripts/ci/factory-package.test.cjs": "test.yml lane: package defenses",
   "node:scripts/ci/line-endings.test.cjs": "test.yml lane: typecheck",
   "node:scripts/ci/test-owners.test.cjs": "test.yml lane: typecheck",
   "node:scripts/ci/validation-plan.test.cjs": "test.yml lane: typecheck",

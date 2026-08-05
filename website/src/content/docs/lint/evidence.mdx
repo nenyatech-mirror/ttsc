@@ -1,0 +1,89 @@
+# `@ttsc/evidence`
+
+The guardrail for goal mode: your spec becomes a compile error.
+
+When Claude Code or Codex works unattended, it can skip a requirement and still report "done". `@ttsc/evidence` makes every configured requirement demand an explicit acknowledgement from the code, test, or document that claims to satisfy it.
+
+Every acknowledgement names an exact target and states why it applies. The compiler does not judge whether that reason is true. It forces the agent to commit to a concrete claim, so a fabricated one can no longer hide inside a plausible diff: it sits beside the declaration it contradicts.
+
+An agent can still lie. It cannot lie by omission.
+
+- **Complete**: every configured obligation is accounted for, or the build fails.
+- **Tested**: every selected export is claimed by a test, by name.
+- **Documented**: decisions and code stay explicitly connected.
+- **Honest**: "done" arrives with a target and a reason.
+- **Integrity**: no citation outlives its target.
+
+## The tag
+
+```tsx
+/**
+ * @evidence docs/discount.md#coupon-stacking Renders the combination limit defined by this rule.
+ */
+export function CouponStackingNotice() {
+  return <p>One seller coupon and one platform coupon may be combined.</p>;
+}
+```
+
+Without that citation the next build stops:
+
+```bash
+$ npx ttsc
+error TS16411: [evidence/graph] Missing acknowledgement for
+  'docs/discount.md#coupon-stacking' (Markdown H2 'Coupon Stacking' at docs/discount.md:3)
+  in Claim 1 reference 1 (markdown, symbols: h2, h3).
+
+  Use @evidence on a selected typescript host or @evidenceExclude on an eligible carrier.
+```
+
+## What a claim can point at
+
+A requirement is not always prose. The graph resolves a citation against any of:
+
+- **Markdown** sections, by heading.
+- **Swagger/OpenAPI** operations, from a file or a URL.
+- **Prisma** schema models, fields, and relations.
+- **TypeScript** symbols, including namespace members and re-exported populations.
+
+## Setup
+
+`@ttsc/evidence` is a contributor to [`@ttsc/lint`](/docs/lint), not a top-level `ttsc` plugin. The compiler never loads it; `lint.config.ts` does, and its rules run inside the lint engine's own binary.
+
+```bash
+npm install -D @ttsc/evidence
+```
+
+```ts filename="lint.config.ts"
+import evidence from "@ttsc/evidence";
+
+export default {
+  plugins: { evidence },
+  rules: {
+    "evidence/graph": ["error", { claims: [] }],
+    "evidence/documented": "error",
+    "evidence/singular": "error",
+    "evidence/todo": "error",
+  },
+};
+```
+
+## The four rules
+
+`evidence/graph` carries the graph itself. Its `claims` array is the whole configuration surface: each entry selects a population of hosts and the references they must acknowledge. The rule is project-scoped, so its entry must carry no `files` selector; the host rejects one that does. Scope a file rule in its own entry when you need to.
+
+The other three are file rules.
+
+- `evidence/documented` requires a JSDoc block on every selected export, because a block is the only place a citation can live.
+- `evidence/singular` keeps one public identity per file, named after the file.
+- `evidence/todo` reports every remaining JSDoc `@todo` tag in a linted file, exported or not. A `@todo` is a contract the declaration has not realized yet, so each tag fails the build with its own text until the work is done and the tag removed.
+
+An eligible carrier that genuinely should not acknowledge a target says so with `@evidenceExclude` rather than staying silent, so the omission is a decision on the record instead of a gap.
+
+Violations surface in every `ttsc` build, every `--noEmit` check, and every `ttsx` run, in the same stream as type errors. There is no separate CI job.
+
+See the [package README](https://github.com/samchon/ttsc/blob/master/packages/evidence/README.md) for the full option reference and the tag grammar.
+
+## Related
+
+- [Rule contributors](/docs/lint/contributing) covers how a contributor package is built and published. `@ttsc/evidence` is the first-party example of one.
+- [The Evidence Graph benchmark](/docs/benchmark/evidence) measures this plugin the only way it can be measured: one coding engine builds the same application twice, once with the graph and once without.

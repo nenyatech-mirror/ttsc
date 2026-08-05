@@ -5,6 +5,10 @@ settings:
   excludeLinksFromLockfile: false
 
 catalogs:
+  prisma:
+    '@prisma/prisma-schema-wasm':
+      specifier: 7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356
+      version: 7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356
   rollup:
     '@rollup/plugin-commonjs':
       specifier: ^29.0.0
@@ -45,6 +49,9 @@ catalogs:
     rimraf:
       specifier: ^6.1.2
       version: 6.1.3
+    yaml:
+      specifier: ^2.9.0
+      version: 2.9.0
 
 overrides:
   '@vscode/vsce@3.9.2>tmp': 0.2.7
@@ -81,6 +88,42 @@ importers:
         specifier: catalog:typescript
         version: 7.0.2
 
+  benchmarks/evidence:
+    devDependencies:
+      '@types/node':
+        specifier: catalog:utils
+        version: 25.9.1
+      ttsc:
+        specifier: workspace:*
+        version: link:../../packages/ttsc
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+      typia:
+        specifier: catalog:samchon
+        version: 13.2.0(@types/node@25.9.1)(ttsc@packages+ttsc)
+      yaml:
+        specifier: catalog:utils
+        version: 2.9.0
+
+  benchmarks/graph:
+    devDependencies:
+      '@types/node':
+        specifier: catalog:utils
+        version: 25.9.1
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+
+  benchmarks/performance:
+    devDependencies:
+      '@types/node':
+        specifier: catalog:utils
+        version: 25.9.1
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+
   config:
     devDependencies:
       '@rollup/plugin-commonjs':
@@ -102,17 +145,39 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
-  experimental/benchmark:
+  packages/banner:
     devDependencies:
       '@types/node':
         specifier: catalog:utils
         version: 25.9.1
+      rimraf:
+        specifier: catalog:utils
+        version: 6.1.3
+      ttsc:
+        specifier: workspace:*
+        version: link:../ttsc
       typescript:
         specifier: catalog:typescript
         version: 7.0.2
 
-  packages/banner:
+  packages/evidence:
+    dependencies:
+      '@prisma/prisma-schema-wasm':
+        specifier: catalog:prisma
+        version: 7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356
+      '@typia/interface':
+        specifier: catalog:samchon
+        version: 13.2.0
+      '@typia/utils':
+        specifier: catalog:samchon
+        version: 13.2.0
+      yaml:
+        specifier: catalog:utils
+        version: 2.9.0
     devDependencies:
+      '@ttsc/lint':
+        specifier: workspace:*
+        version: link:../lint
       '@types/node':
         specifier: catalog:utils
         version: 25.9.1
@@ -439,6 +504,60 @@ importers:
       typescript:
         specifier: catalog:typescript
         version: 7.0.2
+
+  tests/test-evidence:
+    devDependencies:
+      '@nestia/e2e':
+        specifier: catalog:utils
+        version: 12.0.0
+      '@prisma/prisma-schema-wasm':
+        specifier: catalog:prisma
+        version: 7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356
+      '@ttsc/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
+      '@ttsc/lint':
+        specifier: workspace:*
+        version: link:../../packages/lint
+      '@types/node':
+        specifier: catalog:utils
+        version: 25.9.1
+      '@typia/interface':
+        specifier: catalog:samchon
+        version: 13.2.0
+      '@typia/utils':
+        specifier: catalog:samchon
+        version: 13.2.0
+      ttsc:
+        specifier: workspace:*
+        version: link:../../packages/ttsc
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+      yaml:
+        specifier: catalog:utils
+        version: 2.9.0
+
+  tests/test-evidence-benchmark:
+    devDependencies:
+      '@nestia/e2e':
+        specifier: catalog:utils
+        version: 12.0.0
+      '@types/node':
+        specifier: catalog:utils
+        version: 25.9.1
+      ttsc:
+        specifier: workspace:*
+        version: link:../../packages/ttsc
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+      typia:
+        specifier: catalog:samchon
+        version: 13.2.0(@types/node@25.9.1)(ttsc@packages+ttsc)
+      yaml:
+        specifier: catalog:utils
+        version: 2.9.0
 
   tests/test-factory:
     devDependencies:
@@ -2328,6 +2447,9 @@ packages:
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
+
+  '@prisma/prisma-schema-wasm@7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356':
+    resolution: {integrity: sha512-loEbWBr+xUSqtIYaoJCrIuDeVs/fSY29Efshp+3rrTgQtyEqJ2iGuLTt9XnRZYBUE+eWC8ps0nOblyckgBehJQ==}
 
   '@react-aria/focus@3.22.0':
     resolution: {integrity: sha512-ZfDOVuVhqDsM9mkNji3QUZ/d40JhlVgXrDkrfXylM1035QCrcTHN7m2DpbE95sU2A8EQb4wikvt5jM6K/73BPg==}
@@ -8824,6 +8946,8 @@ snapshots:
     optional: true
 
   '@polka/url@1.0.0-next.29': {}
+
+  '@prisma/prisma-schema-wasm@7.10.0-2.d0368e25c88e68caa4d283b5f2d88d1b76ed9356': {}
 
   '@react-aria/focus@3.22.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
