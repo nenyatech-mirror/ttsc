@@ -56,7 +56,7 @@ Branch, commit, pull request, check, and merge flow, `.agents/skills/pull-reques
 
 ### Evidence Graph
 
-The domain model `@ttsc/evidence` enforces: the `@evidence` tag grammar, node kinds, hierarchy, reference resolution, obligation coverage, reference policies, and exclusions, `.agents/skills/evidence-graph/SKILL.md`. Read before changing evidence rule semantics, the tag grammar, its configuration surface, or any of its diagnostics; the Go rule API itself belongs to the development skill.
+The domain model `@ttsc/evidence` enforces: the `@evidence` tag grammar, node kinds, hierarchy, reference resolution, obligation coverage, reference policies, and exclusions, `.agents/skills/evidence-graph/SKILL.md`. Read before changing evidence rule semantics, the tag grammar, its configuration surface, or any of its diagnostics; the Go rule API itself is the contributor contract in `packages/lint/README.md`.
 
 ### Evidence Benchmark Operation
 
