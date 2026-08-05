@@ -18,8 +18,8 @@ const swaggerCacheLimit = 64
 // swaggerDocuments remembers normalization outcomes by document content.
 //
 // This is the rule's own state, not the project state the host publishes. The
-// lint-rule-authoring skill forbids caching a `SetState` value across Program
-// cycles because the host owns that wrapper's lifetime; nothing there governs
+// `@ttsc/lint` contributor contract forbids caching a `SetState` value across
+// Program cycles because the host owns that value's lifetime; nothing there governs
 // memory a rule keeps for itself, and the parallel walk never reaches this
 // because a project rule runs before any file rule. The mutex is not for that
 // walk — it is because a resident host may hold several projects at once, and

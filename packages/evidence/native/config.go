@@ -324,10 +324,9 @@ func decodeReferencePolicy(
 // belongs where the configuration is read. Reported once per reference, before
 // any file is opened, instead of once per citation that later fails to resolve.
 //
-// What this gives up is stated in issue #82 and in `.wiki/design/decisions.md`
-// beside the decision it reverses: documentation can no longer cite code, and
-// the inverse obligation is not the same one. Do not restore the fallback
-// without restoring that record.
+// What this gives up is the decision it reverses: documentation can no longer
+// cite code, and the inverse obligation is not the same one. Do not restore the
+// fallback without restoring that record.
 func rejectForeignTypeScriptReference(
   claimKind artifactKind,
   referenceKind artifactKind,

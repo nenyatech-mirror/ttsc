@@ -26,7 +26,8 @@ import (
 // measures what a watch cycle actually repeats: the graph rebuild over a
 // Program that is already parsed, where the traversal is the whole cost rather
 // than a fraction of parsing. `WatchCycleErpScale` puts that last one at the
-// size the failure in issue #155 was measured at, so the numbers here are
+// size the failure in upstream lint-plugin-evidence#155 was measured at, so
+// the numbers here are
 // answerable against a real application rather than only against each other.
 //
 // Run them with `go test -run XXX -bench . -benchtime 30x ./native`.
@@ -188,7 +189,8 @@ func benchmarkGraphRebuild(
 func BenchmarkWatchCycleSdk50(b *testing.B)  { benchmarkGraphRebuild(b, 50, 50, 3, 1) }
 func BenchmarkWatchCycleSdk200(b *testing.B) { benchmarkGraphRebuild(b, 200, 200, 3, 1) }
 
-// The sizes here are the ones issue #155 measured on a completed application,
+// The sizes here are the ones upstream lint-plugin-evidence#155 measured on a
+// completed application,
 // so these numbers are answerable against a real project rather than only
 // against each other.
 func BenchmarkWatchCycleErpScale(b *testing.B) {

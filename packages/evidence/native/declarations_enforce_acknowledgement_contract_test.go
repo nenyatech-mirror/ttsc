@@ -254,7 +254,7 @@ export interface SecondRef {}
  * another claim's reference.
  *
  * This replaces a case asserting that a plain-token code target from Markdown
- * is ambiguous when two files export one name (issue #82). That hazard is gone
+ * is ambiguous when two files export one name (upstream lint-plugin-evidence#82). That hazard is gone
  * by construction — such a claim cannot declare a TypeScript reference at all —
  * but the configuration guard alone did not finish the job, and what it left
  * was silent. Addresses are indexed from every claim at once, so a Markdown
