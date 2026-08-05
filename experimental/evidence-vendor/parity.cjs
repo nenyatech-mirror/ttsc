@@ -19,9 +19,16 @@ const { execFileSync } = require("node:child_process");
 
 const ROOT = "D:/github/samchon/ttsc";
 const UP = "D:/github/samchon/lint-plugin-evidence";
-// Upstream PR #189 carries live logic fixes on top of master. Files it adds are
-// read from that branch rather than from the working tree.
-const BRANCH = "e651933";
+// Upstream PR #189 carries live logic fixes on top of master, and it is a live
+// campaign branch that moves. Resolving the ref each run rather than pinning a
+// commit is deliberate: a stale pin compares clean against bytes upstream has
+// already replaced, which is the exact failure this script exists to catch.
+const BRANCH_REF = "origin/campaign-luna-0.6.0-cont";
+const BRANCH = require("node:child_process")
+  .execFileSync("git", ["-C", UP, "rev-parse", BRANCH_REF], {
+    encoding: "utf8",
+  })
+  .trim();
 process.chdir(ROOT);
 
 // ------------------------------------------------------------------ mappings
@@ -453,6 +460,7 @@ const section = (title, rows) => {
   if (rows.length > 40) console.log(`  ... ${rows.length - 40} more`);
 };
 
+console.log(`upstream master plus ${BRANCH_REF} at ${BRANCH.slice(0, 9)}`);
 console.log(
   `compared ${compared} text files and ${skippedBinary} binary files against upstream`,
 );

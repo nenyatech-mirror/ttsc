@@ -27,6 +27,16 @@ robocopy <upstream>/tests/test-benchmark/src tests/test-evidence-benchmark/src /
 robocopy <upstream>/.agents/skills/benchmark .agents/skills/benchmark/evidence /MIR /XD node_modules .git
 copy     <upstream>/.agents/skills/evidence-graph/SKILL.md .agents/skills/project/evidence/SKILL.md
 
+# Upstream's open campaign pull request carries live logic fixes that are not on
+# master, and it moves while this branch is open. Take its product diff too; at
+# the time of writing that is two files, and `git diff --name-only master...`
+# against the branch is what decides. `parity.cjs` resolves the same ref rather
+# than a commit, so a tip that has moved is reported instead of compared clean.
+git -C <upstream> show origin/campaign-luna-0.6.0-cont:benchmark/src/EvidenceBenchmarkReconcile.ts \
+  > benchmarks/evidence/src/EvidenceBenchmarkReconcile.ts
+git -C <upstream> show origin/campaign-luna-0.6.0-cont:benchmark/src/executable/EvidenceBenchmarkReconcile.ts \
+  > benchmarks/evidence/src/executable/EvidenceBenchmarkReconcile.ts
+
 # 2. Re-apply every adaptation. Idempotent; ends in a measurement.
 node experimental/evidence-vendor/readapt.cjs
 
