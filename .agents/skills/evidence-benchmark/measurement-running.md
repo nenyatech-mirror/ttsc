@@ -105,7 +105,7 @@ The runner joins each objective with the same arm's `instructions/<arm>/continue
 
 The arms share no runtime instruction bytes. Do not add operator prose.
 
-Only Plain stops at a Review boundary; Evidence runs the eight objectives without stopping. [plain-review.md](plain-review.md) owns that loop.
+Only Plain stops at a Review boundary; Evidence runs the eight objectives without stopping. [plain-review.md](measurement-plain-review.md) owns that loop.
 
 ## What Is Retained
 
@@ -127,7 +127,7 @@ Observe every active cell at least every 30 seconds:
 
 - `state.json`, and benchmark and native process liveness.
 - The recency of `events.jsonl` and of the current stage's `<stage>.log`.
-- The frozen configuration files in every cell. The reporting subagent re-reads them on every cycle and reports a hit as a material change, quoting the diff it just read. [integrity.md](integrity.md) owns what is a hit and what is the cell doing its job.
+- The frozen configuration files in every cell. The reporting subagent re-reads them on every cycle and reports a hit as a material change, quoting the diff it just read. [integrity.md](measurement-integrity.md) owns what is a hit and what is the cell doing its job.
 
 Correct the dashboard on any disagreement immediately, without waiting for its 5-minute interval.
 
