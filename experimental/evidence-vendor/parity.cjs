@@ -339,7 +339,11 @@ const upstreamFiles = new Set(
     .split("\n")
     .filter(Boolean),
 );
-const branchAdded = new Set(
+// Every path the branch touches, not only the ones it adds. Taking a modified
+// file from the working tree instead of from the branch is how four frozen
+// instruction files and the arm review skill stayed at master while the branch
+// had already rewritten them.
+const branchChanged = new Set(
   execFileSync("git", ["-C", UP, "diff", "--name-only", "master..." + BRANCH], {
     encoding: "utf8",
     maxBuffer: 1 << 24,
@@ -347,14 +351,13 @@ const branchAdded = new Set(
     .split("\n")
     .filter(Boolean),
 );
-const readUpstream = (rel) => {
-  if (branchAdded.has(rel) && !fs.existsSync(path.join(UP, rel)))
-    return execFileSync("git", ["-C", UP, "show", `${BRANCH}:${rel}`], {
-      encoding: "utf8",
-      maxBuffer: 1 << 24,
-    });
-  return fs.readFileSync(path.join(UP, rel), "utf8");
-};
+const readUpstream = (rel) =>
+  branchChanged.has(rel)
+    ? execFileSync("git", ["-C", UP, "show", `${BRANCH}:${rel}`], {
+        encoding: "utf8",
+        maxBuffer: 1 << 24,
+      })
+    : fs.readFileSync(path.join(UP, rel), "utf8");
 
 const differing = [];
 const missing = [];
@@ -420,7 +423,7 @@ for (const [upTree, localTree] of TREES) {
   const upAll = [
     ...new Set([
       ...walk(path.join(UP, upTree)),
-      ...[...branchAdded]
+      ...[...branchChanged]
         .filter((f) => f.startsWith(`${upTree}/`))
         .map((f) => f.slice(upTree.length + 1)),
     ]),
@@ -428,7 +431,7 @@ for (const [upTree, localTree] of TREES) {
   const seen = new Set();
   for (const rel of upAll) {
     const upRel = `${upTree}/${rel}`;
-    if (!upstreamFiles.has(upRel) && !branchAdded.has(upRel)) continue;
+    if (!upstreamFiles.has(upRel) && !branchChanged.has(upRel)) continue;
     const localRel = `${localTree}/${rel
       .split("/")
       .map((s, i, a) => (i === a.length - 1 ? renamed(s) : s))
