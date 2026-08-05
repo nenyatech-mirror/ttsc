@@ -4,6 +4,11 @@ node_modules/
 # Build outputs
 lib/
 native/
+# `@ttsc/evidence` ships Go SOURCE from `native/`, not a build output. A lint
+# contributor cannot carry a `go.mod` inside the directory ttsc copies, so the
+# sources sit in a plain directory that happens to collide with the per-platform
+# packages' binary drop. The rule above stays; this package opts back in.
+!packages/evidence/native/
 dist/
 bin/
 !packages/vscode/bin/
