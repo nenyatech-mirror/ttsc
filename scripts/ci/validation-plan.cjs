@@ -189,6 +189,9 @@ const LANES = [
     scope: "test-evidence",
     build: "pnpm run build:current",
     run:
+      // The benchmark's executables are imported by no suite, so this is the
+      // only pass that reads them at all.
+      "pnpm --filter @ttsc/evidence-benchmark check && " +
       "pnpm --filter test-evidence start && " +
       "pnpm --filter test-evidence-benchmark start",
   },
