@@ -122,13 +122,13 @@ Editing does not move a post because original creation time is unchanged. Deleti
 
 Top first selects posts by original creation time:
 
-| Range | Included age at the traversal snapshot |
-| --- | --- |
-| Today | Prior 24 hours |
-| This week | Prior 7 days |
-| This month | Prior 30 days |
-| This year | Prior 365 days |
-| All time | No age cutoff |
+| Range      | Included age at the traversal snapshot |
+| ---------- | -------------------------------------- |
+| Today      | Prior 24 hours                         |
+| This week  | Prior 7 days                           |
+| This month | Prior 30 days                          |
+| This year  | Prior 365 days                         |
+| All time   | No age cutoff                          |
 
 A post exactly at the cutoff is included. Within the selected population, vote score orders highest first, then creation time newest first, then stable post identity. A fresh traversal reflects current scores.
 

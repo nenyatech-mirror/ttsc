@@ -32,12 +32,12 @@ platform-issued coupon on one order. A second coupon from the same issuer is
 refused. An expired coupon is refused even when no other coupon is present.
 ```
 
-| Fact | Extracted requirement |
-| --- | --- |
-| actor | customer |
-| circumstance | applying coupons to an order |
-| behavior | allow at most one coupon per issuer |
-| refusals | duplicate issuer and expired coupon |
+| Fact         | Extracted requirement                               |
+| ------------ | --------------------------------------------------- |
+| actor        | customer                                            |
+| circumstance | applying coupons to an order                        |
+| behavior     | allow at most one coupon per issuer                 |
+| refusals     | duplicate issuer and expired coupon                 |
 | named values | seller, platform, maximum one each, validity window |
 
 The issuer kinds need representation, the limits need enforcement, and the two refusals need distinct tests. Reading only “coupon stacking” would miss them.

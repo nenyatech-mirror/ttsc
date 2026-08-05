@@ -17,15 +17,15 @@ Export every file directly from `structures/index.ts`, then through `src/index.t
 
 Name a root interface from the full singular table name: `shopping_customer_sessions` becomes `IShoppingCustomerSession`. Variants use namespaces:
 
-| Variant | Meaning |
-| --- | --- |
-| base | complete read shape |
-| `.ISummary` | list item |
-| `.ICreate` | caller-supplied creation fields |
-| `.IUpdate` | mutable fields |
-| `.IRequest` | pagination, search, filters, and sort |
-| `.IJoin`, `.ILogin`, `.IRefresh` | authentication input |
-| `.IAuthorized` | actor and issued authorization material |
+| Variant                          | Meaning                                 |
+| -------------------------------- | --------------------------------------- |
+| base                             | complete read shape                     |
+| `.ISummary`                      | list item                               |
+| `.ICreate`                       | caller-supplied creation fields         |
+| `.IUpdate`                       | mutable fields                          |
+| `.IRequest`                      | pagination, search, filters, and sort   |
+| `.IJoin`, `.ILogin`, `.IRefresh` | authentication input                    |
+| `.IAuthorized`                   | actor and issued authorization material |
 
 Use `IPage<T>` for every multi-item response. Do not define a second page wrapper.
 

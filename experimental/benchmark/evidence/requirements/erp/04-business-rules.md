@@ -464,6 +464,7 @@ A filed-return correction must be a new amendment version linked to the original
 
 - The amendment is a new version that retains the original filing reference and states its changed lines.
 - The original version remains reproducible alongside the amendment.
+
 ## REQ-RULE-VENDOR: Vendor Integrity Rules
 
 For Vendor, one primary contact makes the responsible vendor contact unambiguous. Bank-account changes are approval-controlled sensitive actions.
@@ -718,6 +719,7 @@ Weighted average is the default costing method; receipts update the running aver
 
 - Each receipt recalculates the running weighted average from prior value and incoming quantity and cost.
 - A shipment uses the effective running average to post COGS while preserving its source document.
+
 ## REQ-RULE-CUSTOMER: Customer Credit and History Rules
 
 For Customer, one primary contact identifies the responsible customer contact. Credit-limit change is a sensitive approval-controlled action.
@@ -980,6 +982,7 @@ Posting a return creates the applicable revenue, receivable, tax, COGS reversal,
 
 - The posted return remains the source for revenue, receivable, tax, and COGS reversals that apply to the original sale.
 - Any non-restockable value is distinguished from inventory restoration.
+
 ## REQ-RULE-PAYROLL: Payroll Rules
 
 For Payroll Run, hourly import uses only approved time. Calculation keeps every earning, deduction, tax, benefit, and dimension detail.
@@ -1166,6 +1169,7 @@ New production may select only an active BOM valid for the finished item.
 
 - Eligibility is evaluated for the order's finished item at selection time.
 - Drafted, inactive, or superseded BOM versions remain visible as history but cannot be chosen for a new order.
+
 ## REQ-RULE-PRODUCTION: Production Order Rules
 
 For Production Order, release reserves eligible components. Consumption and output use immutable movements.
@@ -1573,6 +1577,7 @@ A conflict response returns current state information sufficient for an authoriz
 Retry reads the current state before proposing a new valid action.
 
 Commands make decisions against a known current business version.
+
 ## REQ-RULE-EMPLOYEE Employee Identity and Visibility Rules
 
 Employee placement connects a global user to one organization, but it does not replace the membership and scoped roles that authorize work. Placement carries the employee's department, position, manager, and cost center. Personal employment and payroll details use a narrower need-to-know boundary than ordinary directory information, while deactivation or termination leaves attributed work and financial history intact.
@@ -1706,6 +1711,7 @@ Only approved timesheets may feed payroll or customer billing.
 
 - Approved hourly time can be imported into payroll and approved billable time can be selected for customer billing.
 - Drafted, submitted, rejected, or reopened time remains ineligible for those downstream uses.
+
 ## REQ-RULE-CREDIT-MEMO Credit Memo Rules
 
 A credit memo retains why value was granted: a return, discount, invoice correction, or customer credit. Applying it is bounded by both the memo's unapplied amount and the invoice's open balance; refunding is a separate settlement. Customer overpayment remains identifiable credit until one of those explicit outcomes occurs.
@@ -1730,6 +1736,7 @@ An overpayment remains customer credit until applied or refunded.
 
 - The credit remains associated with the customer and organization until an explicit invoice application or refund.
 - Recording the overpayment does not silently increase an unrelated invoice settlement.
+
 ## REQ-RULE-TRANSFER Warehouse Transfer Rules
 
 A warehouse transfer separates shipment from receipt. Shipment is bounded by the unshipped request and source availability, while receipt is bounded by what is in transit. The outbound and inbound movements share one transfer reference so partial movement and reconciliation remain visible; cycle-count rules do not govern this journey.
@@ -1754,6 +1761,7 @@ Shipping creates outbound movement and receipt creates inbound movement with the
 
 - Shipment posts a source-warehouse outbound movement and receipt posts a destination-warehouse inbound movement.
 - Both movements reference the same transfer and item so in-transit reconciliation remains possible.
+
 ## REQ-RULE-CYCLE-COUNT Cycle Count and Adjustment Rules
 
 A cycle count compares observed quantity with a fixed expected snapshot, but observation alone does not alter stock. Approval makes its variance eligible for an adjustment movement. The organization's materiality threshold routes large count or standalone adjustments for approval before posting.
@@ -1771,6 +1779,7 @@ A standalone or count adjustment above the configured threshold requires approva
 
 - The organization's adjustment threshold is evaluated before posting.
 - A material variance remains pending until the required approval completes.
+
 ## REQ-RULE-ITEM Item Stock-Effect Rules
 
 Item type controls the physical-stock boundary. Inventory items participate in tracking and movement-derived quantity, while services remain commercial and accounting lines without warehouse movements. Deactivation does not rewrite the type or effects retained on historical documents.
@@ -1788,6 +1797,7 @@ Service items cannot create stock movements.
 
 - A service line can carry prices, tax, revenue, expense, time, or billing meaning without a warehouse quantity delta.
 - A mixed document posts movements only for its stock-tracked lines.
+
 ## REQ-RULE-LOT Inventory Lot Rules
 
 A lot identifies a quantity of one item from receipt through shipment and later operational movement. Lot-tracked entry and exit must name that identity, allowing returns, production, quality, maintenance, and service history to follow the same material.
@@ -1798,6 +1808,7 @@ Lot-tracked receipts and shipments require lot identity.
 
 - Receipt establishes the exact lot receiving quantity and shipment selects the exact lot leaving quantity.
 - Returns, quality holds, production, maintenance, and service movements retain that lot identity after entry.
+
 ## REQ-RULE-SERIAL Item Serial Rules
 
 A serial identifies one physical unit of an item. Each serial-tracked movement accounts for units one by one, and the code cannot be reused for the same item. That identity follows the unit through receipt, shipment, return, quality, asset, and service activity.
@@ -1815,6 +1826,7 @@ A serial code is unique per item.
 
 - Uniqueness is evaluated for the serial code within its item and organization.
 - A duplicate serial for the same item is refused before a stock movement is posted.
+
 ## REQ-RULE-TAX-CODE Tax Code Calculation Rules
 
 Tax treatment is resolved from the party location, item taxability, transaction date, jurisdiction, and effective code rate. Sales invoices calculate output tax and vendor bills calculate input tax. The code and direction select the payable or receivable account retained on the source-linked journal line.
@@ -1832,6 +1844,7 @@ Tax amounts post to the tax payable or receivable account configured by the code
 
 - The posted tax amount uses the payable or receivable ledger account selected for that code and tax direction.
 - The journal line retains the tax code and source document needed for reconciliation.
+
 ## REQ-RULE-ROUTING Routing Version Rules
 
 An active routing is changed by adding a version, leaving the operation sequence already referenced by production intact. Each production order retains its selected routing for labor, machine, and cost evidence. Historical versions remain inspectable, but a new order may select only an active routing for its finished item.

@@ -346,11 +346,11 @@ Every search or category result shows thumbnail, current name, displayed price, 
 
 The first retained image is the thumbnail; a product without images uses a neutral no-image placeholder. Price presentation follows:
 
-| Current variant set | Displayed price |
-| --- | --- |
-| No variants | Product base price |
-| All variants share one effective price | That value |
-| Effective prices differ | Minimum–maximum range |
+| Current variant set                    | Displayed price       |
+| -------------------------------------- | --------------------- |
+| No variants                            | Product base price    |
+| All variants share one effective price | That value            |
+| Effective prices differ                | Minimum–maximum range |
 
 An effective price is the present override, including zero, or otherwise the base price. A product with no variants is marked unavailable. Average rating is absent when no live review exists.
 

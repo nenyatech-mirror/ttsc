@@ -159,6 +159,7 @@ A signed-in user switches the operating context to another active membership wit
 - After switching, authorization, roles, data visibility, reports, and commands use only the target organization; no prior-organization query or draft context carries forward.
 
 If the target membership is no longer active, the switch is refused and the current valid organization context remains selected.
+
 ## REQ-AUTH-MEMBERSHIP: Organization Membership Lifecycle
 
 For Organization Membership, one global user can have a different membership state and different roles in each organization. Invited, active, suspended, and revoked states distinguish pending entry, usable access, temporary loss, and terminal removal.

@@ -120,10 +120,10 @@ Editing never changes author, community, or original creation time. Those relati
 
 Each post has exactly one of these types:
 
-| Type | Full payload |
-| --- | --- |
-| Text | Text content |
-| Link | URL |
+| Type  | Full payload   |
+| ----- | -------------- |
+| Text  | Text content   |
+| Link  | URL            |
 | Image | Uploaded image |
 
 A post never contains several type-specific payloads at once.
@@ -202,10 +202,10 @@ A vote is one user's signed evaluation of one available post or comment. Upvote 
 
 One vote belongs to one user and targets exactly one available post or one available comment. Its active value is:
 
-| Vote | Signed value |
-| --- | ---: |
-| Upvote | +1 |
-| Downvote | -1 |
+| Vote     | Signed value |
+| -------- | -----------: |
+| Upvote   |           +1 |
+| Downvote |           -1 |
 
 One user may vote independently on different targets but may hold at most one active value per target. No vote is an absent state, not a third active value. Voting is permitted on any available post or comment, including the voter's own content.
 
@@ -270,13 +270,13 @@ A user with no received active votes has karma zero, and there is no minimum of 
 Karma follows these vote-state deltas:
 
 | Transition on the user's content | Karma change |
-| --- | ---: |
-| No vote → upvote | +1 |
-| No vote → downvote | −1 |
-| Upvote → downvote | −2 |
-| Downvote → upvote | +2 |
-| Upvote → no vote | −1 |
-| Downvote → no vote | +1 |
+| -------------------------------- | -----------: |
+| No vote → upvote                 |           +1 |
+| No vote → downvote               |           −1 |
+| Upvote → downvote                |           −2 |
+| Downvote → upvote                |           +2 |
+| Upvote → no vote                 |           −1 |
+| Downvote → no vote               |           +1 |
 
 Deleting voted content removes every remaining contribution attached to it. Deleting the author account removes the total with the account.
 

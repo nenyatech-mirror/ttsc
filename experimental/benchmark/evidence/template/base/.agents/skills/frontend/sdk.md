@@ -38,11 +38,11 @@ Persist the issued token when the contract supports a durable session and restor
 
 Render three states:
 
-| State | UI |
-| --- | --- |
-| restoring | shell and identity skeleton |
-| anonymous | public view and sign-in path |
-| authenticated | actor-specific view |
+| State         | UI                           |
+| ------------- | ---------------------------- |
+| restoring     | shell and identity skeleton  |
+| anonymous     | public view and sign-in path |
+| authenticated | actor-specific view          |
 
 Do not render anonymous during restoration; it flashes the wrong identity and may redirect an authenticated user.
 

@@ -73,12 +73,12 @@ A successful mutation invalidates every view it changed, including actor-owned s
 
 ## State Ownership
 
-| State | Owner |
-| --- | --- |
-| server data | query cache |
-| filter, sort, page, open detail | URL |
-| form values and dirty state | form |
-| menu, tab, hover, dialog | component |
+| State                           | Owner       |
+| ------------------------------- | ----------- |
+| server data                     | query cache |
+| filter, sort, page, open detail | URL         |
+| form values and dirty state     | form        |
+| menu, tab, hover, dialog        | component   |
 
 Do not copy query data into component state or synchronize derived values with effects. Derive from the owner during render. Put every request parameter in the query key so out-of-order responses cannot overwrite the current view.
 
