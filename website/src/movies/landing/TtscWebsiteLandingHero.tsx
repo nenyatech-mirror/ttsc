@@ -8,22 +8,22 @@ const CLAIMS = [
       "TypeScript-Go checks natively, in parallel. JavaScript tsc does neither.",
   },
   {
-    value: "90%",
-    label: "fewer agent tokens",
-    detail:
-      "Agents read one compiler-resolved graph over MCP instead of crawling source files.",
-  },
-  {
     value: "800x",
     label: "faster lint loop",
     detail:
       "Rules reuse the AST and types the compiler already built. ESLint parses it all again.",
   },
   {
-    value: "type-safe",
-    label: "script execution",
+    value: "100%",
+    label: "requirement coverage",
     detail:
-      "ttsx type-checks the whole project before Node receives the entrypoint.",
+      "Every configured requirement is acknowledged by name, or the build stops. Counted per obligation, never pooled.",
+  },
+  {
+    value: "90%",
+    label: "fewer agent tokens",
+    detail:
+      "Agents read one compiler-resolved graph over MCP instead of crawling source files.",
   },
 ] as const;
 
@@ -39,14 +39,19 @@ const FLOW = [
     tone: "text-blue-200",
   },
   {
-    name: "@ttsc/graph",
-    text: "code graph for coding agents, over MCP",
-    tone: "text-blue-300",
-  },
-  {
     name: "@ttsc/lint",
     text: "rules as compiler diagnostics",
     tone: "text-cyan-300",
+  },
+  {
+    name: "@ttsc/evidence",
+    text: "requirements as compiler diagnostics",
+    tone: "text-teal-300",
+  },
+  {
+    name: "@ttsc/graph",
+    text: "code graph for coding agents, over MCP",
+    tone: "text-blue-300",
   },
   {
     name: "plugins",
@@ -74,7 +79,8 @@ export default function TtscWebsiteLandingHero() {
 
           <p className="mt-7 max-w-2xl text-xl leading-relaxed text-blue-50 md:text-2xl">
             Build with TypeScript-Go. Run scripts only after they type-check.
-            Let plugins see the same types the compiler sees.
+            Report lint rules, unmet requirements, and plugin findings in the
+            one diagnostic stream your CI already gates on.
           </p>
 
           <div className="mt-8 grid border-y border-white/25 sm:grid-cols-2">

@@ -6,8 +6,9 @@ const meta: MetaRecord = {
 
   "-- features": { type: "separator", title: "📖 Features" },
   ttsc: "TTSC",
-  graph: "Code Graph (MCP)",
   lint: "Lint & Format",
+  evidence: "Evidence Graph",
+  graph: "Code Knowledge Graph",
   plugins: "Plugin Ecosystem",
 
   "-- authoring": { type: "separator", title: "🧰 Authoring" },

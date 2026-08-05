@@ -23,21 +23,39 @@ const CARDS = [
     accent: false,
   },
   {
-    name: "@ttsc/graph",
-    tagline: "Coding agents",
-    description:
-      "Hand a coding agent a checker-resolved graph of your codebase over MCP, so it stops grepping and re-reading files.",
-    meta: "MCP code graph",
-    href: "/docs/graph",
-    accent: false,
-  },
-  {
     name: "@ttsc/lint",
     tagline: "Lint and format",
     description:
       "Report rules as TS diagnostics, apply autofixes, and format through the same compiler pass.",
     meta: "fix / format / TSxxxxx",
     href: "/docs/lint",
+    accent: false,
+  },
+  {
+    name: "@ttsc/evidence",
+    tagline: "Requirement coverage",
+    description:
+      "Make every configured requirement demand a named acknowledgement from the code, test, or document that satisfies it.",
+    meta: "spec as compile error",
+    href: "/docs/evidence",
+    accent: false,
+  },
+  {
+    name: "@ttsc/graph",
+    tagline: "Coding agents",
+    description:
+      "Hand a coding agent a checker-resolved graph of your codebase over MCP, so it stops grepping and re-reading files.",
+    meta: "code knowledge graph",
+    href: "/docs/graph",
+    accent: false,
+  },
+  {
+    name: "plugins",
+    tagline: "Compiler-powered libraries",
+    description:
+      "Run transforms and checks on the types the checker already resolved, on every build and every ttsx run.",
+    meta: "typia / nestia / your own",
+    href: "/docs/plugins",
     accent: false,
   },
 ] as const;
@@ -88,7 +106,7 @@ export default function TtscWebsiteLandingRestOfToolchain() {
         </TtscWebsiteLandingFadeIn>
 
         <TtscWebsiteLandingFadeIn delay={120}>
-          <div className="mt-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {CARDS.map((card) => (
               <a
                 key={card.name}

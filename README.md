@@ -8,8 +8,9 @@ A `typescript-go` toolchain for compiler-powered plugins and type-safe execution
 
 - **`ttsc`**: build, check, and transform.
 - **`ttsx`**: execute TypeScript with type checking.
-- [**`@ttsc/graph`**](https://github.com/samchon/ttsc/tree/master/packages/graph): MCP code graph that reduces agent token usage.
 - [**`@ttsc/lint`**](https://github.com/samchon/ttsc/tree/master/packages/lint): lint violations as compiler errors.
+- [**`@ttsc/evidence`**](https://github.com/samchon/ttsc/tree/master/packages/evidence): requirements as compiler errors until code acknowledges them.
+- [**`@ttsc/graph`**](https://github.com/samchon/ttsc/tree/master/packages/graph): code knowledge graph that reduces agent token usage.
 - **plugin support**: compiler-powered libraries, such as `typia`.
 
 ## Setup
@@ -34,33 +35,6 @@ That covers the CLI. The integrations each have a short guide:
 - [`@ttsc/unplugin`](https://ttsc.dev/docs/setup/unplugin): Vite, Rollup, Rolldown, esbuild, webpack, Rspack, Next.js, Turbopack, Farm, and Bun.
 - [`@ttsc/metro`](https://ttsc.dev/docs/setup/metro): React Native and Expo.
 - [`@ttsc/vscode`](https://ttsc.dev/docs/setup/vscode): live editor diagnostics.
-
-## Graph
-
-Your coding agent answers from the compiler, spending roughly 90% fewer tokens.
-
-`@ttsc/graph` is an MCP server that gives the agent a compiler-resolved graph of your project: what calls what, what a change would touch, and where to start reading. The agent asks the type checker instead of grepping and re-reading files.
-
-Register it with your MCP client. For Claude Code, a `.mcp.json` in the project root:
-
-```bash
-npm install -D ttsc @ttsc/graph typescript
-```
-
-```json
-{
-  "mcpServers": {
-    "ttsc-graph": {
-      "command": "npx",
-      "args": ["-y", "@ttsc/graph"]
-    }
-  }
-}
-```
-
-On the agent-cost benchmark, Claude agents answer reading zero files, cutting tokens by roughly 90% and tool calls by 93% to 96%. The design and per-repository numbers are in the [Code Graph guide](https://ttsc.dev/docs/graph) and the [benchmark](https://ttsc.dev/docs/benchmark/graph).
-
-![Median tokens on the shared onboarding question, lower is better](https://ttsc.dev/benchmark/svg/graph-common-codex-gpt-5.6-sol.svg)
 
 ## Lint
 
@@ -123,6 +97,89 @@ npx ttsc format   # format edits only, never changes behavior
 ```
 
 The rule catalog and every `format` key are in the [Lint & Format guide](https://ttsc.dev/docs/lint).
+
+## Evidence
+
+Your spec becomes a compile error. An agent can still lie, but it cannot lie by omission.
+
+`@ttsc/evidence` makes every requirement you configure demand an explicit acknowledgement from the code, test, or document that claims to satisfy it. A requirement nothing acknowledges fails the build, by name.
+
+```bash
+npm install -D @ttsc/evidence
+```
+
+```ts
+// lint.config.ts
+import { evidence, type ITtscEvidenceGraphConfig } from "@ttsc/evidence";
+import type { ITtscLintConfig } from "@ttsc/lint";
+
+const graph: ITtscEvidenceGraphConfig = {
+  claims: [
+    {
+      type: "typescript",
+      files: ["src/components/**/*.tsx"],
+      symbol: "function",
+      reference: {
+        type: "markdown",
+        files: ["docs/requirements/**/*.md"],
+        symbol: ["h2", "h3"],
+      },
+    },
+  ],
+};
+
+export default {
+  plugins: { evidence },
+  rules: { "evidence/graph": ["error", graph] },
+} satisfies ITtscLintConfig;
+```
+
+That claim reads as one sentence: the components under `src` implement the requirements, so every H2 and H3 under `docs` must be cited by a component. A citation names the target and states why it applies:
+
+```tsx
+/**
+ * @evidence docs/requirements/discount.md#coupon-stacking Renders the combination limit defined by this rule.
+ */
+export function CouponStackingNotice() {
+  return <p>One seller coupon and one platform coupon may be combined.</p>;
+}
+```
+
+Without it, the next build stops:
+
+```text
+$ npx ttsc --noEmit
+error TS16411: [evidence/graph] Missing acknowledgement for 'docs/requirements/discount.md#coupon-stacking' (Markdown H2 'Coupon Stacking' at docs/requirements/discount.md:3) in Claim 1 reference 1 (markdown, symbols: h2, h3). Use @evidence on a selected typescript host or @evidenceExclude on an eligible carrier.
+```
+
+Markdown sections, Prisma models and columns, Swagger operations, and TypeScript symbols can all ground an obligation. Coverage is counted per obligation and never pooled, so a rule the backend honored and the frontend forgot is a compile error naming the section rather than a percentage. The claim surface, tag grammar, and adoption path are in the [Evidence Graph guide](https://ttsc.dev/docs/evidence).
+
+## Graph
+
+Your coding agent answers from the compiler, spending roughly 90% fewer tokens.
+
+`@ttsc/graph` is an MCP server that gives the agent a compiler-resolved graph of your project: what calls what, what a change would touch, and where to start reading. The agent asks the type checker instead of grepping and re-reading files.
+
+Register it with your MCP client. For Claude Code, a `.mcp.json` in the project root:
+
+```bash
+npm install -D ttsc @ttsc/graph typescript
+```
+
+```json
+{
+  "mcpServers": {
+    "ttsc-graph": {
+      "command": "npx",
+      "args": ["-y", "@ttsc/graph"]
+    }
+  }
+}
+```
+
+On the agent-cost benchmark, Claude agents answer reading zero files, cutting tokens by roughly 90% and tool calls by 93% to 96%. The design and per-repository numbers are in the [Code Knowledge Graph guide](https://ttsc.dev/docs/graph) and the [benchmark](https://ttsc.dev/docs/benchmark/graph).
+
+![Median tokens on the shared onboarding question, lower is better](https://ttsc.dev/benchmark/svg/graph-common-codex-gpt-5.6-sol.svg)
 
 ## Plugins
 
