@@ -16,9 +16,8 @@ import { suiteRoot } from "./suiteRoot";
  * shared cache is not a stale-result risk: editing a rule changes the key and
  * the affected cases relink.
  *
- * The repository's own self-lint step shares this directory for the same
- * reason, which is why the path is derived here rather than written out at each
- * caller — see `scripts/lint.mjs`.
+ * Every fixture must agree on that location, which is why the path is derived
+ * here rather than written out at each caller.
  */
 export const pluginCacheDirectory = (): string => {
   const location: string = path.join(suiteRoot, ".cache", "ttsc");
