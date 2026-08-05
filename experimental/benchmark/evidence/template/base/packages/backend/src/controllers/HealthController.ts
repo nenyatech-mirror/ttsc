@@ -1,6 +1,8 @@
 import { Controller, Get, Header } from "@nestjs/common";
 
-/** Reports whether the HTTP application is accepting requests. */
+/**
+ * Reports whether the HTTP application is accepting requests.
+ */
 @Controller("health")
 export class HealthController {
   /**

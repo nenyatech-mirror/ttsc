@@ -9,6 +9,11 @@ native/
 # sources sit in a plain directory that happens to collide with the per-platform
 # packages' binary drop. The rule above stays; this package opts back in.
 !packages/evidence/native/
+# The benchmark template ships a frontend whose sources live in `src/lib`, which
+# the `lib/` rule above reads as build output. Dropping them delivers a
+# workspace whose entry cannot resolve `@/lib/client`.
+!experimental/benchmark/evidence/template/**/src/lib/
+
 dist/
 bin/
 !packages/vscode/bin/

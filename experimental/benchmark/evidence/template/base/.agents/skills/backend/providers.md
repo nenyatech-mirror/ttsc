@@ -4,12 +4,12 @@ Providers under `packages/backend/src/providers/` own business rules, authorizat
 
 ## Layer Split
 
-| Artifact    | Owner                                                  |
-| ----------- | ------------------------------------------------------ |
-| provider    | rules, guards, filters, ordering, transaction boundary |
-| transformer | Prisma selection and row-to-DTO mapping                |
-| collector   | request-to-Prisma creation payload                     |
-| controller  | route guard and one provider call                      |
+| Artifact | Owner |
+| --- | --- |
+| provider | rules, guards, filters, ordering, transaction boundary |
+| transformer | Prisma selection and row-to-DTO mapping |
+| collector | request-to-Prisma creation payload |
+| controller | route guard and one provider call |
 
 Providers reuse transformers and collectors instead of assembling equivalent objects inline.
 
@@ -17,11 +17,11 @@ Providers reuse transformers and collectors instead of assembling equivalent obj
 
 An authenticated actor narrows through the stack:
 
-| Layer                   | Type                                       |
-| ----------------------- | ------------------------------------------ |
+| Layer | Type |
+| --- | --- |
 | controller and provider | `SellerPayload` or an explicit actor union |
-| collector               | `IEntity` when only the id is needed       |
-| transformer             | no actor                                   |
+| collector | `IEntity` when only the id is needed |
+| transformer | no actor |
 
 A payload contains only `id`, `session_id`, and a discriminating `type`. Authentication proves identity. Grade, membership, ownership, approval, and row scope are separate provider checks.
 

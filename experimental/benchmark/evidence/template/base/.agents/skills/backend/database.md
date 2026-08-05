@@ -19,14 +19,14 @@ The connection URL belongs in `prisma.config.ts`, not the schema. Prisma parses 
 
 Every table and column must answer a requirement. Persist facts a row owns, point-in-time captured values, and explicitly required materialized values. Do not store live aggregates, duplicate another table's fact for display convenience, or hide queryable structure in JSON or encoded strings.
 
-| Value                                   | Prisma type |
-| --------------------------------------- | ----------- |
-| text, UUID, semantic string             | `String`    |
-| count or ordinal                        | `Int`       |
-| approximate measurement                 | `Float`     |
-| money, tax, balance                     | `Decimal`   |
-| flag with no third state                | `Boolean`   |
-| instant or UTC-normalized calendar date | `DateTime`  |
+| Value | Prisma type |
+| --- | --- |
+| text, UUID, semantic string | `String` |
+| count or ordinal | `Int` |
+| approximate measurement | `Float` |
+| money, tax, balance | `Decimal` |
+| flag with no third state | `Boolean` |
+| instant or UTC-normalized calendar date | `DateTime` |
 
 Money that may vary by currency stores the currency code. A posted cross-currency amount also stores the rate and converted value honored at posting time.
 
@@ -36,14 +36,14 @@ Every primary key is `id String @id` and is assigned as a UUID by the applicatio
 
 Choose each model's stance before designing endpoints:
 
-| Stance     | Meaning                                           |
-| ---------- | ------------------------------------------------- |
-| actor      | authentication identity with its own lifecycle    |
-| session    | one authenticated connection                      |
-| primary    | independently managed business entity             |
-| subsidiary | managed through a parent                          |
-| snapshot   | immutable point-in-time record                    |
-| material   | read-only `mv_*` projection or maintained pointer |
+| Stance | Meaning |
+| --- | --- |
+| actor | authentication identity with its own lifecycle |
+| session | one authenticated connection |
+| primary | independently managed business entity |
+| subsidiary | managed through a parent |
+| snapshot | immutable point-in-time record |
+| material | read-only `mv_*` projection or maintained pointer |
 
 Use `created_at` on every model. Mutable entities may add `updated_at`; retained entities may add `deleted_at` when restore, moderation, audit, or permanent child references require the row to survive deletion. Snapshots, logs, and join rows normally have only `created_at`.
 

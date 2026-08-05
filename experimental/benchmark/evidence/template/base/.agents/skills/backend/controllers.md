@@ -34,14 +34,14 @@ This allows SDK generation and test authoring before provider logic exists. When
 
 ## Operation Grammar
 
-| Name      | Method | Shape                             |
-| --------- | ------ | --------------------------------- |
-| `index`   | PATCH  | request body to `IPage<ISummary>` |
-| `at`      | GET    | one identified detail             |
-| `create`  | POST   | creation body to detail           |
-| `update`  | PUT    | update body and id to detail      |
-| `erase`   | DELETE | delete by id                      |
-| `restore` | PUT    | `.../{id}/restore`                |
+| Name | Method | Shape |
+| --- | --- | --- |
+| `index` | PATCH | request body to `IPage<ISummary>` |
+| `at` | GET | one identified detail |
+| `create` | POST | creation body to detail |
+| `update` | PUT | update body and id to detail |
+| `erase` | DELETE | delete by id |
+| `restore` | PUT | `.../{id}/restore` |
 
 Use a domain verb only for a distinct workflow. GET and DELETE have no request body. POST, PUT, and PATCH do. Every path parameter has exactly one typed declaration and never duplicates a body field.
 
@@ -61,11 +61,11 @@ Use singular camelCase resource segments derived from schema nouns. One schema h
 
 Implement only lifecycle operations the requirements define:
 
-| Operation | Route                                  | Request     |
-| --------- | -------------------------------------- | ----------- |
-| join      | `POST /<service>/auth/<actor>/join`    | `.IJoin`    |
-| login     | `POST /<service>/auth/<actor>/login`   | `.ILogin`   |
-| refresh   | `POST /<service>/auth/<actor>/refresh` | `.IRefresh` |
+| Operation | Route | Request |
+| --- | --- | --- |
+| join | `POST /<service>/auth/<actor>/join` | `.IJoin` |
+| login | `POST /<service>/auth/<actor>/login` | `.ILogin` |
+| refresh | `POST /<service>/auth/<actor>/refresh` | `.IRefresh` |
 
 Each returns `.IAuthorized` and declares:
 

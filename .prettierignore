@@ -21,3 +21,17 @@ packages/graph/src/structures/
 # mangles the leading `{/* ... */}` MDX comment (escapes the asterisks and joins
 # the lines), which breaks Nextra's acorn parse. Leave it to the generator.
 website/src/content/docs/ttsc/flags.mdx
+
+# Everything the benchmark delivers to a measured agent byte-for-byte. The
+# template is another repository's source and carries `{{token}}` placeholders
+# the runner substitutes: Prettier reads `{{name}}` in a `.tsx` as an object
+# literal and writes `{{ name }}`, which no longer matches the token and arrives
+# as JSX that does not type-check. The requirements and instructions are the
+# frozen inputs a run is identified by, so reflowing their tables changes what
+# the agent read and what the cell is comparable against. Same reason as
+# packages/graph/src/structures above: a formatter must not decide the contents
+# of a frozen artifact. The benchmark's own `src` is this repository's code and
+# stays formatted.
+experimental/benchmark/evidence/template/
+experimental/benchmark/evidence/requirements/
+experimental/benchmark/evidence/instructions/

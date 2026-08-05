@@ -88,10 +88,10 @@ A page number below 1 or a page size below 1 or above 100 is refused.
 
 The active list accepts exactly these completion scopes:
 
-| Filter            | Included active todos                               |
-| ----------------- | --------------------------------------------------- |
-| `all`             | Both `complete` and `incomplete` todos.             |
-| `complete-only`   | Only todos whose completion status is `complete`.   |
+| Filter | Included active todos |
+| --- | --- |
+| `all` | Both `complete` and `incomplete` todos. |
+| `complete-only` | Only todos whose completion status is `complete`. |
 | `incomplete-only` | Only todos whose completion status is `incomplete`. |
 
 Omitting the filter selects `all`. Filtering never brings trashed or other-owned todos into the candidate list. Any other filter value is refused.
@@ -100,11 +100,11 @@ Omitting the filter selects `all`. Filtering never brings trashed or other-owned
 
 The active list accepts exactly these sort combinations:
 
-| Sort field    | Directions                      |
-| ------------- | ------------------------------- |
-| Creation date | Newest first or oldest first.   |
-| Start date    | Earliest first or latest first. |
-| Due date      | Earliest first or latest first. |
+| Sort field | Directions |
+| --- | --- |
+| Creation date | Newest first or oldest first. |
+| Start date | Earliest first or latest first. |
+| Due date | Earliest first or latest first. |
 
 A todo with no start date follows every todo with a start date in both start-date directions. A todo with no due date follows every todo with a due date in both due-date directions.
 

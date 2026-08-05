@@ -1,6 +1,10 @@
-/** One validation or business-rule rejection that a client can render. */
+/**
+ * One validation or business-rule rejection that a client can render.
+ */
 export interface IDiagnosis {
-  /** Human-readable explanation of the rejected value or operation. */
+  /**
+   * Human-readable explanation of the rejected value or operation.
+   */
   message: string;
 
   /**

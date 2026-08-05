@@ -63,12 +63,12 @@ Use shared diagnosers for cross-field rules both backend and frontend enforce. D
 
 Map `typia` paths and server `IDiagnosis.accessor` values to the same field messages. Empty accessors belong to the form as a whole.
 
-| Outcome        | Required behavior                                       |
-| -------------- | ------------------------------------------------------- |
-| submitting     | disable duplicate submit and keep fields readable       |
-| client invalid | focus the first invalid field; do not call the server   |
-| server refusal | keep all input and render actionable diagnoses          |
-| success        | invalidate every affected query, then navigate or close |
+| Outcome | Required behavior |
+| --- | --- |
+| submitting | disable duplicate submit and keep fields readable |
+| client invalid | focus the first invalid field; do not call the server |
+| server refusal | keep all input and render actionable diagnoses |
+| success | invalidate every affected query, then navigate or close |
 
 Send only DTO-declared fields. Omit absent optionals instead of fabricating empty values.
 

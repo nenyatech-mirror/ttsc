@@ -107,12 +107,12 @@ History is not an independent account resource. Every entry belongs to one todo,
 
 Each edit history entry has an edit time and may carry any of these changed-to values:
 
-| Changed-to value | Present when                             |
-| ---------------- | ---------------------------------------- |
-| Title            | The edit changed the todo's title.       |
-| Description      | The edit changed the todo's description. |
-| Start date       | The edit changed the todo's start date.  |
-| Due date         | The edit changed the todo's due date.    |
+| Changed-to value | Present when |
+| --- | --- |
+| Title | The edit changed the todo's title. |
+| Description | The edit changed the todo's description. |
+| Start date | The edit changed the todo's start date. |
+| Due date | The edit changed the todo's due date. |
 
 One entry can carry several changed-to values when one edit changes several fields. A changed-to value is absent when that field did not participate in the edit.
 

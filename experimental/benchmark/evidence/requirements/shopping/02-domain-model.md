@@ -400,12 +400,12 @@ A variant absent at that moment is absent from that snapshot. Stock quantity is 
 
 The other covered concepts retain their concept-specific before-and-after content:
 
-| Concept              | Snapshot content                      |
-| -------------------- | ------------------------------------- |
-| Seller profile       | Shop name, shop description, and logo |
-| Review               | Rating and text content               |
-| Cancellation request | Reason and status changes             |
-| Refund request       | Reason and status changes             |
+| Concept | Snapshot content |
+| --- | --- |
+| Seller profile | Shop name, shop description, and logo |
+| Review | Rating and text content |
+| Cancellation request | Reason and status changes |
+| Refund request | Reason and status changes |
 
 Each snapshot is created only after the corresponding modification succeeds.
 

@@ -9,7 +9,7 @@ export function App() {
       <main className="shell">
         <section className="panel">
           <p className="eyebrow">Requirement-driven benchmark</p>
-          <h1>{{ name }}</h1>
+          <h1>{{name}}</h1>
           <p>
             The workspace is ready. Read every document under{" "}
             <code>docs/analysis</code>, then implement the application and its

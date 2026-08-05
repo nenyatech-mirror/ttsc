@@ -2861,7 +2861,6 @@ An authorized payroll user searches employee payroll configurations within the a
 
 - Results are limited to the selected organization and employees visible to the requesting payroll user.
 - Search supports employee identity, pay schedule, pay basis, configuration status, and effective date, and returns the sensitive fields only when the user's payroll permission allows them.
-
 ## REQ-FUN-PAYROLL-RUN: Payroll Run Operations
 
 For Payroll Run, run creation selects schedule and period before employee calculation. Approved time import and calculation keep auditable details.
@@ -3489,7 +3488,6 @@ The organization System principal runs MRP on schedule.
 
 - The System principal uses the same organization scope and planning inputs as a manual run.
 - The run records System attribution and remains subject to tenant isolation, audit, and immutable run evidence.
-
 ## REQ-FUN-PRODUCTION-ORDER: Production Order Operations
 
 For Production Order, order creation selects exact BOM and routing versions plus source demand, warehouse, dates, quantities, and costs. Release, start, consumption, labor, output, quality, completion, and close are distinct commands.
@@ -3774,7 +3772,6 @@ An authorized user approves use-as-is and releases stock.
 
 - Use-as-is records the approval and posts a quality-release movement for the approved quantity.
 - The inspection, waiver rationale, risk, and approver remain immutable after release.
-
 ## REQ-FUN-EQUIPMENT: Equipment Operations
 
 For Equipment, equipment creation distinguishes machines, vehicles, tools, and facilities. Discovery supports type, status, location, custodian, criticality, and due maintenance.
@@ -5296,7 +5293,6 @@ Authorized users verify stock availability, lot and serial traceability, account
 The service branch begins with a customer, sold serial, case, and assigned work order.
 
 Parts, labor, warranty, billing, invoice, and expense outcomes keep stock and accounting links.
-
 ## REQ-FUN-MRP-RECOMMENDATION MRP Recommendation Operations
 
 Each MRP recommendation belongs to one run and item-warehouse planning context. Planned purchase, planned production, expedite, delay, and shortage outcomes remain distinguishable in discovery. Acceptance creates one traceable supply document; dismissal is a separate terminal action that preserves the run and explanation instead of erasing planning evidence.
@@ -5328,7 +5324,6 @@ An authorized user dismisses an inapplicable recommendation while preserving the
 
 - Dismissal records the actor, time, and reason without deleting or editing the MRP run.
 - The dismissed recommendation remains searchable and no purchase or production document is created.
-
 ## REQ-FUN-PAY-SCHEDULE Pay Schedule Operations
 
 A pay schedule is the reusable cadence for frequency, period boundaries, cutoff, and payment date. HR Managers can create it, change only its future application, or deactivate it for new assignment while prior payroll keeps its captured schedule. Organization-scoped discovery shows cadence and status without exposing employee compensation.
@@ -5360,7 +5355,6 @@ An authorized payroll user searches pay schedules by name, frequency, status, an
 
 - Results remain in the selected organization and can be filtered by name, frequency, active status, and payment period.
 - The result identifies next applicable cutoff and payment date without exposing employee payroll detail.
-
 ## REQ-FUN-STOCK-QUARANTINE Stock Quarantine Operations
 
 Quarantine begins with specifically identified failed stock and preserves its item, warehouse, location, lot or serial, quantity, inspection, and age. The quantity remains searchable and traceable but is excluded from availability and operational use. Only an approved disposition execution ends or transforms the hold.
