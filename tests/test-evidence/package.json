@@ -1,0 +1,17 @@
+{
+  "private": true,
+  "name": "test-evidence",
+  "version": "0.24.0",
+  "description": "End-to-end feature tests for @ttsc/evidence, driving the real ttsc binary.",
+  "scripts": {
+    "start": "ttsx --no-plugins src/index.ts"
+  },
+  "devDependencies": {
+    "@nestia/e2e": "catalog:samchon",
+    "@ttsc/evidence": "workspace:*",
+    "@ttsc/lint": "workspace:*",
+    "@types/node": "catalog:utils",
+    "ttsc": "workspace:*",
+    "typescript": "catalog:typescript"
+  }
+}

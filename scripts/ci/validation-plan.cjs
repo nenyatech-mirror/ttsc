@@ -172,6 +172,16 @@ const LANES = [
     build: "pnpm run build:current",
     run: "pnpm --filter @ttsc/test-graph start",
   },
+  {
+    id: "evidence",
+    name: "evidence defenses",
+    needsGo: true,
+    scope: "test-evidence",
+    build: "pnpm run build:current",
+    run:
+      "pnpm --filter test-evidence start && " +
+      "pnpm --filter test-evidence-benchmark start",
+  },
 ];
 
 const LANE_BY_ID = new Map(LANES.map((lane) => [lane.id, lane]));
@@ -185,6 +195,7 @@ const E2E_LANE_IDS = [
   ...LINT_LANE_IDS,
   "bundler-defenses",
   "graph",
+  "evidence",
 ];
 const TTSC_DOWNSTREAM_IDS = [
   "go",
@@ -196,6 +207,7 @@ const TTSC_DOWNSTREAM_IDS = [
   ...LINT_LANE_IDS,
   "bundler-defenses",
   "graph",
+  "evidence",
 ];
 const PLATFORM_IDS = [
   "package-defenses",
@@ -396,10 +408,7 @@ function planForPaths(files) {
       normalized,
       PLATFORM_INTEGRATION_PATHS.pluginCache,
     ),
-    sourceMap: matchesAnyPath(
-      normalized,
-      PLATFORM_INTEGRATION_PATHS.sourceMap,
-    ),
+    sourceMap: matchesAnyPath(normalized, PLATFORM_INTEGRATION_PATHS.sourceMap),
     vscode: matchesAnyPath(normalized, PLATFORM_INTEGRATION_PATHS.vscode),
   };
   const reasons = [];
@@ -429,9 +438,16 @@ function planForPaths(files) {
           ...LINT_LANE_IDS,
           "ttsc-core",
           "ttsc-native",
+          // The evidence rules link into this engine, so a contributor-API
+          // change that breaks them has to fail here, not after a release.
+          "evidence",
         ],
         file,
       );
+      continue;
+    }
+    if (file.startsWith("packages/evidence/")) {
+      add(["evidence", "go"], file);
       continue;
     }
     if (file.startsWith("packages/banner/")) {
@@ -596,11 +612,7 @@ function planForPaths(files) {
 
 function planTtscTest(file) {
   if (file.includes("/features/watch/")) return { lanes: [], watch: true };
-  if (
-    file.endsWith(
-      "/test_ttsx_commonjs_loads_prefix_only_node_builtins.ts",
-    )
-  )
+  if (file.endsWith("/test_ttsx_commonjs_loads_prefix_only_node_builtins.ts"))
     return { lanes: ["ttsc-core", "ttsx-node-22"], watch: false };
   if (file.includes("/features/"))
     return { lanes: ["ttsc-core"], watch: false };
@@ -689,9 +701,7 @@ function createPlatformPlan(tasks) {
         tasks.sourceMap && row.representative && row.os === "linux";
       const vscode = tasks.vscode && row.representative;
       const watch = tasks.watch && row.representative;
-      const build =
-        !tasks.experimental &&
-        (watch || pluginCache);
+      const build = !tasks.experimental && (watch || pluginCache);
       return {
         name: row.name,
         os: row.os,
@@ -701,11 +711,7 @@ function createPlatformPlan(tasks) {
         build_scope: watch ? "experimental" : "plugin-cache",
         experimental: tasks.experimental,
         needs_go:
-          tasks.experimental ||
-          bun ||
-          pluginCache ||
-          sourceMap ||
-          watch,
+          tasks.experimental || bun || pluginCache || sourceMap || watch,
         plugin_cache: pluginCache,
         setup_bun: bun || (pluginCache && row.os === "linux"),
         source_map: sourceMap,
@@ -750,13 +756,7 @@ function changedPaths(base, head, eventName) {
   const separator = eventName === "pull_request" ? "..." : "..";
   const result = cp.spawnSync(
     "git",
-    [
-      "diff",
-      "--name-only",
-      "--no-renames",
-      "-z",
-      `${base}${separator}${head}`,
-    ],
+    ["diff", "--name-only", "--no-renames", "-z", `${base}${separator}${head}`],
     {
       cwd: root,
       encoding: "buffer",
@@ -779,7 +779,9 @@ function isSha(value) {
 }
 
 function normalizePath(file) {
-  return String(file).replaceAll("\\", "/").replace(/^\.\/+/, "");
+  return String(file)
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
 }
 
 function matchesAnyPath(files, patterns) {
