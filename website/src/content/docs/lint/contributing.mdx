@@ -118,6 +118,10 @@ Step 4 is the one that matters: it forces the Go source to link into the lint bi
 
 Pin `TTSC_GO_BINARY` and `TTSC_CACHE_DIR` in CI so that build is deterministic across matrix runs.
 
+## A worked example
+
+[`@ttsc/evidence`](/docs/lint/evidence) is a first-party contributor built exactly this way: a descriptor whose `source` points at its own Go directory, a `peerDependencies` entry on `@ttsc/lint`, and four rules a consumer registers from `lint.config.ts`. Read it when a paragraph above needs a real package to point at.
+
 ## Next
 
 → [Rules](/docs/lint/rules), the in-tree families and the namespaces already taken.
