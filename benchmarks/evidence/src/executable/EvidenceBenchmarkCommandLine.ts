@@ -221,8 +221,11 @@ const main = async (): Promise<void> => {
       throw new Error(
         "Checkpoint-only runs cannot resume; derive a run from backend-start.",
       );
-    if (retained.state.status === "quality-failed")
-      throw new Error("Quality-failed benchmark runs cannot resume.");
+    // A run retained under the earlier behaviour, where a scope that exhausted
+    // its supplementations ended the cell. Its boundary is already decided and
+    // its plan already points at that scope's Final, so it resumes there and
+    // finishes the remaining scopes. The verdicts keep saying the review was
+    // never proven; the downstream work stops being absent.
     if (
       cell.checkpointSource !== undefined &&
       retained.state.nativeThreadStartInstructionIndex === undefined
