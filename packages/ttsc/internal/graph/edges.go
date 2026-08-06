@@ -604,6 +604,20 @@ func (g *Graph) callsWithin(checker *shimchecker.Checker, from string, node *shi
   })
 }
 
+// assignedFunctionTarget returns the graph node an `x.y = function` assignment
+// implements, or "" when the assignment implements no node this graph owns.
+//
+// A declaration outside the workspace is not such a node. `globalThis.assert =
+// …` against a `declare global { function assert(…) }`, or a patched member of
+// a dependency's `@types`, resolves to a symbol whose only declaration is in a
+// declaration file — which has no body, holds no facts, and enters the graph as
+// an external boundary leaf. Re-attributing the assigned body to it moved the
+// implementation's calls and type references onto a node that never ran them,
+// under offsets read against the wrong file: `recordImplementation` already
+// refuses an external node, so the evidence file stayed unset and the spans
+// pointed at neither the declaration nor the implementation. And the edge
+// itself was unassemblable, so every request against such a project failed at
+// shard partition.
 func (g *Graph) assignedFunctionTarget(checker *shimchecker.Checker, from string, node *shimast.Node) string {
   binary := node.AsBinaryExpression()
   if binary == nil ||
@@ -614,7 +628,7 @@ func (g *Graph) assignedFunctionTarget(checker *shimchecker.Checker, from string
     return ""
   }
   target := g.resolve(checker, binary.Left)
-  if target == nil || target.Symbol == nil {
+  if target == nil || target.Symbol == nil || target.External {
     return ""
   }
   to := g.ensureTargetNode(target)

@@ -490,16 +490,39 @@ export namespace TtscBenchmarkGraphTraceAuditor {
       if (cells === undefined) {
         throw new Error(`report has neither traceDir nor cells: ${file}`);
       }
-      return cells
-        .filter(
-          (cell) => cell.harness === undefined || cell.harness === "codex",
-        )
-        .map((cell) => optionalString(cell.report))
-        .filter((reportPath): reportPath is string => reportPath !== undefined)
-        .map((reportPath) =>
-          path.isAbsolute(reportPath) ? reportPath : path.resolve(reportPath),
-        )
-        .filter((reportPath) => fs.existsSync(reportPath));
+      return (
+        cells
+          .filter(
+            (cell) => cell.harness === undefined || cell.harness === "codex",
+          )
+          // A cell the suite listed and this audit cannot reach is a failure to
+          // report, not one to drop. Silence here was the other half of the
+          // zero-cell audit: whatever went wrong, the run exited zero and the
+          // reader could not tell an empty suite from an unreadable one.
+          .map((cell) => {
+            const reportPath = optionalString(cell.report);
+            if (reportPath === undefined) {
+              throw new Error(
+                `${file} holds a cell with no report path, so it is not an auditable suite report`,
+              );
+            }
+            // Resolved against the report that recorded it, the one base every
+            // reader of this field uses. Against the current directory it named
+            // a different file whenever the run directory was not the directory
+            // the audit was typed in, which is every documented invocation:
+            // `pnpm --dir benchmarks/graph` puts the audit in the package while
+            // the run directory is always somewhere below it.
+            const resolved = path.isAbsolute(reportPath)
+              ? reportPath
+              : path.resolve(path.dirname(file), reportPath);
+            if (!fs.existsSync(resolved)) {
+              throw new Error(
+                `suite cell report is missing: ${resolved} (recorded in ${file})`,
+              );
+            }
+            return resolved;
+          })
+      );
     }
 
     function auditCell(
@@ -507,11 +530,30 @@ export namespace TtscBenchmarkGraphTraceAuditor {
       baselineIndex: Map<string, Baseline> | null,
     ): AuditCell {
       const report = readRawCellReport(reportPath);
-      const traceDir = path.resolve(report.traceDir);
+      // Against the report that recorded it, the base `cells[].report` uses in
+      // `rawReportsFromSuiteReport` just above. Both harnesses record this
+      // absolute, so the base only decides what a relative one would mean - and
+      // it decides what the error below is allowed to name.
+      const traceDir = path.resolve(path.dirname(reportPath), report.traceDir);
+      // The last link of the per-cell reachability chain. A cell whose traces
+      // are unreachable used to die on a bare ENOENT that named neither the
+      // cell nor the report recording it, and a cell whose trace directory is
+      // empty audited as `runs: 0` at exit zero - folding a median of zero into
+      // the suite summary, a recorded number stating something no trace says.
+      if (!fs.existsSync(traceDir)) {
+        throw new Error(
+          `cell trace directory is missing: ${traceDir} (recorded in ${reportPath})`,
+        );
+      }
       const traces = fs
         .readdirSync(traceDir)
         .filter((file) => file.endsWith(".stream.jsonl"))
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      if (traces.length === 0) {
+        throw new Error(
+          `cell trace directory holds no *.stream.jsonl: ${traceDir} (recorded in ${reportPath})`,
+        );
+      }
       const runs: AuditRun[] = traces.map((file) => {
         const match = /^(.*)-run-(\d+)\.stream\.jsonl$/.exec(file);
         const parsed = parseTrace(
@@ -526,7 +568,16 @@ export namespace TtscBenchmarkGraphTraceAuditor {
       });
 
       const cell: AuditCell = {
-        report: path.relative(process.cwd(), reportPath),
+        // Absolute, so this audit's own `cells[].report` reads back under the
+        // same rule the runner's does - and this file is itself accepted as a
+        // `--report` input. Recorded against the current directory it named a
+        // different file whenever the run directory was not the directory the
+        // audit was typed in, which is every documented invocation.
+        //
+        // `traceDir` and `runsDetail[].file` stay current-directory relative on
+        // purpose: nothing resolves them, they are provenance a human reads,
+        // and a short path reads better than an absolute one.
+        report: reportPath,
         traceDir: path.relative(process.cwd(), traceDir),
         repo: report.repo,
         fixtureBranch: report.fixtureBranch,
@@ -3228,6 +3279,15 @@ export namespace TtscBenchmarkGraphTraceAuditor {
         throw new Error("self-test setup did not produce expected audit data");
       }
       assertSelf(reasoningText.available, "reasoning text should be detected");
+      // `auditSyntheticCell` rebuilds the cell literal instead of calling
+      // `auditCell`, and that duplication is how the recorded spelling drifted
+      // apart in the first place: an audit's own cells are read back through
+      // `--report`, so a relative one names a different file. Pin the property
+      // rather than the duplicate.
+      assertSelf(
+        path.isAbsolute(cell.report),
+        "an audit cell must record its report path absolute",
+      );
       assertSelf(
         comparisonDelta.deltaFromFirst.medianTokens === -12,
         "comparison should track median token deltas",
@@ -3352,7 +3412,9 @@ export namespace TtscBenchmarkGraphTraceAuditor {
         ...parsed,
       };
       const cell: AuditCell = {
-        report: path.relative(process.cwd(), reportPath),
+        // Same spelling the real audit path records, so the self-test models
+        // the shape this file actually produces rather than a superseded one.
+        report: reportPath,
         traceDir: path.relative(process.cwd(), report.traceDir),
         repo: report.repo,
         fixtureBranch: report.fixtureBranch,

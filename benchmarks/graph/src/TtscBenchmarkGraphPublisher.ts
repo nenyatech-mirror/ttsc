@@ -19,10 +19,15 @@
 // https://ttsc.dev/docs/benchmark#code-graph-mcp.
 //
 // Usage:
-//   pnpm --dir benchmarks/graph publish
-//   pnpm --dir benchmarks/graph publish -- --from <dir>
-//   pnpm --dir benchmarks/graph publish -- --reset
-//   pnpm --dir benchmarks/graph publish -- --dry-run
+//   pnpm --dir benchmarks/graph run publish
+//   pnpm --dir benchmarks/graph run publish -- --from <dir>
+//   pnpm --dir benchmarks/graph run publish -- --reset
+//   pnpm --dir benchmarks/graph run publish -- --dry-run
+//
+// A relative --from resolves against the current directory, the same base the
+// runners' --out uses. Every source directory must contribute a measurement,
+// the defaulted `.work/graph` included; one that contributes none fails before
+// the website JSON is written.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -157,7 +162,6 @@ export namespace TtscBenchmarkGraphPublisher {
     const dryRun: boolean = args.includes("--dry-run");
     const sourceDirs: string[] = parseSourceDirs(
       args,
-      repositoryRoot,
       path.join(benchmarkRoot, ".work"),
     );
 
@@ -186,7 +190,16 @@ export namespace TtscBenchmarkGraphPublisher {
     };
 
     for (const sourceDir of sourceDirs) {
-      foldSourceDir(context, sourceDir);
+      if (!foldSourceDir(context, sourceDir)) {
+        // Publication writes a committed file. A source directory that added
+        // nothing is indistinguishable from one whose cells were already
+        // present, so accepting it reported a successful publish of nothing -
+        // and with `--reset`, which empties the agent block before the first
+        // fold, it replaced the served dashboard with an empty one.
+        throw new Error(
+          `graph benchmark source directory contributed no measurement: ${sourceDir}`,
+        );
+      }
     }
 
     if (!dryRun) {
@@ -201,12 +214,30 @@ export namespace TtscBenchmarkGraphPublisher {
     );
   }
 
-  function foldSourceDir(context: IPublisherContext, sourceDir: string): void {
+  /**
+   * Folds one source directory, reporting whether it carried a measurement.
+   *
+   * The answer counts measured cells and a structural report, not files that
+   * happened to be present: a `report.json` whose sample sets are all empty is
+   * a run that measured nothing, and a publish that accepted it would report
+   * success for a document it did not add to - which with `--reset`, already
+   * emptied before the first fold, is how the served dashboard loses its
+   * cells.
+   *
+   * A cell the publisher measured and then deliberately kept out, because what
+   * is already published is thicker, still counts. That skip is the publisher's
+   * own rule working, not an empty directory.
+   */
+  function foldSourceDir(
+    context: IPublisherContext,
+    sourceDir: string,
+  ): boolean {
     const mainReportPath = path.join(sourceDir, "report.json");
     const mainReport = readJson(mainReportPath);
+    let folded = false;
     let structuralReport: IStructuralReport | null = null;
     if (mainReport !== null && isSuiteReport(mainReport)) {
-      foldSuite(context, mainReport, sourceDir);
+      folded = foldSuite(context, mainReport, sourceDir) !== 0;
     } else if (mainReport !== null && isStructuralReport(mainReport)) {
       structuralReport = mainReport;
     } else if (mainReport !== null) {
@@ -232,19 +263,25 @@ export namespace TtscBenchmarkGraphPublisher {
       }
       structuralReport = nestedStructural;
     }
-    if (structuralReport !== null) foldStructural(context, structuralReport);
+    if (structuralReport !== null) {
+      foldStructural(context, structuralReport);
+      folded = true;
+    }
 
     // Agent cells: upsert each available report by harness/tool/repo/model.
-    foldAgentFile(
-      context,
-      path.join(sourceDir, "agent-ab-report.json"),
-      "claude-code",
-    );
-    foldAgentFile(
-      context,
-      path.join(sourceDir, "agent-ab-codex-report.json"),
-      "codex",
-    );
+    folded =
+      foldAgentFile(
+        context,
+        path.join(sourceDir, "agent-ab-report.json"),
+        "claude-code",
+      ) || folded;
+    folded =
+      foldAgentFile(
+        context,
+        path.join(sourceDir, "agent-ab-codex-report.json"),
+        "codex",
+      ) || folded;
+    return folded;
   }
 
   function foldStructural(
@@ -259,18 +296,24 @@ export namespace TtscBenchmarkGraphPublisher {
     );
   }
 
+  /**
+   * Folds a suite report, reporting how many of its cells carried a
+   * measurement.
+   *
+   * A cell the publisher considered and deliberately kept out of the document -
+   * one thinner than the sample set already published - still counts: the run
+   * measured it, and refusing the directory over a policy the publisher applied
+   * on purpose would fail a publish for succeeding at its own rule.
+   */
   function foldSuite(
     context: IPublisherContext,
     report: ISuiteReport,
     sourceDir: string,
-  ): void {
+  ): number {
     const seenReports = new Set<string>();
+    let measured = 0;
     for (const cell of report.cells) {
-      const sourceReportPath = resolveReportPath(
-        cell.report,
-        sourceDir,
-        context.repositoryRoot,
-      );
+      const sourceReportPath = resolveReportPath(cell.report, sourceDir);
       const reportKey = pathIdentity(sourceReportPath);
       if (seenReports.has(reportKey)) {
         throw new Error(`duplicate suite cell report: ${cell.report}`);
@@ -299,6 +342,11 @@ export namespace TtscBenchmarkGraphPublisher {
       const version = modelVersionId(rawModel);
       const samples = sanitizeSamples(sourceReport.samples, sourceReport.runs);
       if (samples.baseline.length === 0 && samples.graph.length === 0) {
+        // Named, not dropped in silence. The count below would otherwise be the
+        // only trace of a cell the suite listed and that measured nothing, and
+        // the difference between the two numbers is what a reader has to
+        // explain.
+        console.warn(`skip cell with no measured sample: ${sourceReportPath}`);
         continue;
       }
       const toolSetupMs =
@@ -345,34 +393,49 @@ export namespace TtscBenchmarkGraphPublisher {
         question: sourceReport.question,
         samples,
       });
+      measured += 1;
     }
     console.log(
-      `suite: ${path.relative(context.repositoryRoot, sourceDir)} (${
+      `suite: ${path.relative(context.repositoryRoot, sourceDir)} (${measured} of ${
         report.cells.length
-      } cell(s))`,
+      } cell(s) measured)`,
     );
+    return measured;
   }
 
+  /** Folds one agent report, reporting whether it carried a measurement. */
   function foldAgentFile(
     context: IPublisherContext,
     file: string,
     harness: string,
-  ): void {
+  ): boolean {
     const report = readJson(file);
-    if (report === null) return;
+    if (report === null) return false;
     if (!isAgentReport(report)) {
       throw new TypeError(`invalid graph agent report: ${file}`);
     }
-    foldAgent(context, report, harness);
+    const measured = foldAgent(context, report, harness);
+    if (!measured) {
+      // Named the way its twin in `foldSuite` names a cell, and named here
+      // because this is where the file is: a report that measured nothing is
+      // otherwise indistinguishable from one the publisher never looked at,
+      // and with several `--from` directories the harness alone does not say
+      // which one lost its cell.
+      console.warn(`skip report with no measured sample: ${file}`);
+    }
+    return measured;
   }
 
+  /** Folds one agent report, reporting whether it carried a measurement. */
   function foldAgent(
     context: IPublisherContext,
     report: Record<string, unknown>,
     harness: string,
-  ): void {
+  ): boolean {
     const samples = sanitizeSamples(report.samples, report.runs);
-    if (samples.baseline.length === 0 && samples.graph.length === 0) return;
+    if (samples.baseline.length === 0 && samples.graph.length === 0) {
+      return false;
+    }
     const rawModel =
       stringValue(report.modelVersion) ??
       stringValue(report.model) ??
@@ -423,6 +486,7 @@ export namespace TtscBenchmarkGraphPublisher {
         stringValue(report.model) ?? rawModel
       } (${n} graph runs)`,
     );
+    return true;
   }
 
   function stableAgentModel(
@@ -461,6 +525,14 @@ export namespace TtscBenchmarkGraphPublisher {
     return `codex-${tier}`;
   }
 
+  /**
+   * Upserts one agent cell, declining when either arm of the stored cell holds
+   * more samples than the one offered.
+   *
+   * The decline is the rule this namespace's header states, not a failure, so
+   * it warns and returns rather than reporting anything the caller must act
+   * on.
+   */
   function upsertAgentCell(
     context: IPublisherContext,
     cell: IPublishedAgentCell,
@@ -552,21 +624,36 @@ export namespace TtscBenchmarkGraphPublisher {
     return parseJsonFile(file);
   }
 
-  function resolveReportPath(
-    reportPath: string,
-    sourceDir: string,
-    repositoryRoot: string,
-  ): string {
+  /**
+   * Resolves a cell's recorded report path against the report that recorded it,
+   * which is `<sourceDir>/report.json`.
+   *
+   * Both writers record the field absolute, so the relative branch is for a
+   * hand-edited or older report. It resolves against the recording report
+   * rather than the repository root or the current directory, which is the one
+   * base `TtscBenchmarkGraphSuite` and the trace auditor also use, so a
+   * relative spelling cannot mean two files depending on which entrypoint reads
+   * it.
+   */
+  function resolveReportPath(reportPath: string, sourceDir: string): string {
     if (!reportPath) return "";
-    if (path.isAbsolute(reportPath)) return reportPath;
-    const fromRoot = path.resolve(repositoryRoot, reportPath);
-    if (fs.existsSync(fromRoot)) return fromRoot;
-    return path.resolve(sourceDir, reportPath);
+    return path.isAbsolute(reportPath)
+      ? reportPath
+      : path.resolve(sourceDir, reportPath);
   }
 
+  /**
+   * Selects the run directories to fold, defaulting to the package work root.
+   *
+   * A relative operator-supplied directory resolves against the current
+   * directory, the way `--out` on both runners and `--dir` / `--report` /
+   * `--out` on the trace auditor already resolve one. Resolving it against the
+   * repository root instead made the same relative string name the run
+   * directory on the way out and a different, non-existent one on the way in,
+   * which is the whole documented parallel-sweep workflow.
+   */
   function parseSourceDirs(
     argv: readonly string[],
-    repositoryRoot: string,
     workRoot: string,
   ): string[] {
     const dirs: string[] = [];
@@ -575,11 +662,11 @@ export namespace TtscBenchmarkGraphPublisher {
       if (arg === "--from" || arg === "--source") {
         const next = argv[++i];
         if (!next) throw new Error(`${arg} requires a directory`);
-        dirs.push(path.resolve(repositoryRoot, next));
+        dirs.push(path.resolve(next));
       } else if (arg.startsWith("--from=")) {
-        dirs.push(path.resolve(repositoryRoot, arg.slice("--from=".length)));
+        dirs.push(path.resolve(arg.slice("--from=".length)));
       } else if (arg.startsWith("--source=")) {
-        dirs.push(path.resolve(repositoryRoot, arg.slice("--source=".length)));
+        dirs.push(path.resolve(arg.slice("--source=".length)));
       }
     }
     const selected = dirs.length > 0 ? dirs : [path.join(workRoot, "graph")];

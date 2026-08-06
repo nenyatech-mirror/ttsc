@@ -21,7 +21,9 @@ pnpm --dir benchmarks/graph run index-time -- --all                     # cold i
 pnpm --dir benchmarks/graph run publish -- --from <out-dir>             # publish a completed --no-website suite
 ```
 
-`publish` is also a pnpm subcommand, so always spell these as `pnpm run <script>` rather than `pnpm <script>`.
+`publish` and `audit` are also pnpm subcommands, so always spell these as `pnpm run <script>` rather than `pnpm <script>`. `pnpm audit` reports dependency vulnerabilities; it is not this package's trace auditor.
+
+Every directory these commands take (`--out`, `--from`, `--dir`, `--report`) resolves against the current directory, which `pnpm --dir benchmarks/graph` sets to this package. A source directory that contributes no measurement, named or defaulted, is refused rather than published as a run that added nothing.
 
 ## Layout
 
@@ -121,10 +123,23 @@ Use `pnpm --dir benchmarks/graph run audit -- --compare=<before>,<after>` on aud
 
 ## Environment overrides
 
+Every environment variable this package consults, `PATH` aside, is here.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `TTSC_GRAPH_BENCH_WORK` | `../graph-benchmark-work` | Fixture clone directory. It defaults outside the repo so a measured agent does not inherit ttsc's `CLAUDE.md` / `AGENTS.md` from a parent directory. |
+| `TTSC_GRAPH_BENCH_WORK` | `../graph-benchmark-work` | Fixture clone directory, checkouts only. It defaults outside the repo so a measured agent does not inherit ttsc's `CLAUDE.md` / `AGENTS.md` from a parent directory. Reports never follow it; they stay under `.work/`. |
+| `TTSC_GRAPH_BENCH_OUT` | `.work/graph/<timestamp>` | Report directory for `src/executable/index.ts`, below `--out` and above the default. |
+| `TTSC_GRAPH_BENCH_TIMEOUT_MS` | `1800000` | Timeout on every child either runner spawns: an agent cell, a comparator index build, a fixture clone or install, the trace-audit pass, and the `ttscgraph` build. Not a per-sample budget: one agent child runs `arms × --runs` samples. |
+| `TTSC_BENCH_CONCURRENCY` | unlimited | Cap on concurrently launched agent samples. A low cap keeps the host quiet enough for per-run timings and token counts to settle. |
+| `TTSC_BENCH_REQUIRE_QUIET` | - | `1` turns `src/executable/index-time.ts`'s host-load warning into a hard error. Set it for every publication run. |
+| `TTSC_BENCH_SKIP_LOAD_CHECK` | - | `1` disables that host-load check. It only ever bites on POSIX; `os.loadavg()` reports zeros on Windows. |
+| `TTSC_CLAUDE_RUN_TIMEOUT_MS` | `900000` | Budget for one Claude Code sample, when `--claude-run-timeout-ms` is not passed. |
+| `TTSC_CLAUDE_STARTUP_GRACE_MS` | `5000` | Delay before the prompt reaches a graph-arm Claude Code sample, so its MCP server is up first. `--claude-startup-grace-ms` overrides it; `0` disables the delay. |
+| `CODEX_MCP_STARTUP_TIMEOUT_SEC` | Codex's own | MCP startup timeout written into the generated Codex config, when `--mcp-startup-timeout-sec` is not passed. |
+| `CODEX_MCP_TOOL_TIMEOUT_SEC` | Codex's own | MCP tool-call timeout written into the generated Codex config, when `--mcp-tool-timeout-sec` is not passed. |
 | `CODEBASE_MEMORY_MCP_BINARY` | `codebase-memory-mcp` | Binary used by the `codebase-memory` comparator when `--codebase-memory-binary` is not passed. |
+| `TTSC_BENCH_CBM_MODE` | codebase-memory's own (`full`) | Index mode passed to `codebase-memory-mcp` (`full`, `moderate`, `fast`). `fast` is the only mode that indexes `vscode` without the full mode's memory blowup, and the mode is recorded on the cell. |
+| `CBM_LOG_LEVEL` | `warn` | Log level of the `codebase-memory` comparator's index build. |
 | `SERENA_MCP_COMMAND` | `uvx` | Command used to launch Serena when `--serena-command` is not passed. |
 | `SERENA_MCP_ARGS` | Serena's `uvx --from git+https://github.com/oraios/serena ...` args | Argument list used to launch Serena when `--serena-args` is not passed. |
 | `SERENA_SOURCE` | `git+https://github.com/oraios/serena` | Package source the Serena launcher installs from when `--serena-source` is not passed. |
@@ -136,6 +151,7 @@ Use `pnpm --dir benchmarks/graph run audit -- --compare=<before>,<after>` on aud
 | `.work/graph/<timestamp>/report.json` | Per-cell agent samples: tokens, cached and reasoning tokens, turns, tool calls, reads, greps, shell calls, graph calls, source touches, cost, wall time, and attempt counts. |
 | `.work/graph/<timestamp>/codex-trace-audit.json` | Codex trace audit written automatically for Codex cells: full exposed message timeline, tool-call ledger, reasoning token counts, visible-input ledger, baseline-median savings, duplicate-output exact savings, graph-replaceable shell-output surface, candidate MCP overfetch estimates, and observed later-turn prompt replay exposure. |
 | `.work/graph/structural/report.json` | Deterministic structural metrics from `src/executable/bench.ts`: load time, graph build time, and the share the build adds on top of the load it rides. |
+| `.work/graph-index/<timestamp>/report.json` | Cold index build time per (tool × fixture) from `src/executable/index-time.ts`, with the per-fixture scale block and the host it ran on. |
 | `website/public/benchmark/graph.json` | Graph dashboard data consumed by https://ttsc.dev/benchmark. `src/executable/index.ts` upserts measured agent cells by the visible axes: harness, tool, repo, prompt id or family, stable model tier, and daemon mode. Fixture branch, effort, and setup time remain metadata and never fork a visible cell. `src/executable/publish.ts` folds local reports in, replacing the `structural` block whole and upserting agent cells by key. `src/executable/index-time.ts` owns only the top-level `index` key (`{ host, scale, cells }`), upserted by (project, tool). |
 
 `.work/` is git-ignored; results are an ephemeral artifact and never committed. For parallel `--no-website` runs, publish afterward with `pnpm --dir benchmarks/graph run publish -- --from <out-dir>`; never let concurrent runners write `graph.json` directly.

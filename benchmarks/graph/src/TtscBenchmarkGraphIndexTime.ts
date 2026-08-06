@@ -2,10 +2,10 @@
  * Cold index build-time benchmark for the graph tool axis: what _readiness_
  * costs before a tool can answer its first question, per (tool × fixture).
  *
- * The agent benchmark (`src/executable/graph/index.ts`) measures what a
- * question costs once a tool is ready; this runner measures the readiness
- * itself. Per cell it deletes the tool's index, runs its build step once, and
- * takes wall time:
+ * The agent benchmark (`src/executable/index.ts`) measures what a question
+ * costs once a tool is ready; this runner measures the readiness itself. Per
+ * cell it deletes the tool's index, runs its build step once, and takes wall
+ * time:
  *
  * - `ttsc-graph`: `ttscgraph dump --cwd <fixture> --tsconfig <tsconfig>` — the
  *   MCP launcher runs exactly this at startup, so the agent's first question
@@ -114,7 +114,6 @@ export namespace TtscBenchmarkGraphIndexTime {
     // Counting was correct only while the executables sat one directory deeper,
     // and it failed silently when they moved: every path below stayed a valid
     // string and pointed one level outside the repository.
-    const benchmarkRoot = TtscBenchmarkConstant.ROOT;
     const repoRoot = TtscBenchmarkConstant.REPOSITORY_ROOT;
     const ttscDir = path.join(repoRoot, "packages", "ttsc");
     const workDir = TtscBenchmarkGraph.resolveWorkDir(repoRoot);
@@ -148,8 +147,14 @@ export namespace TtscBenchmarkGraphIndexTime {
     const tools = selectTools(
       parsed.values.tools ?? parsed.values.tool ?? "all",
     );
+    // A report is an artifact of this package, so it lands under the package
+    // work root like every sibling harness's. `workDir` is the fixture clone
+    // root, and it sits outside the repository for a reason that belongs to
+    // checkouts alone: a measured agent walks parent directories for
+    // `CLAUDE.md` and `AGENTS.md`.
     const outDir = path.resolve(
-      parsed.values.out ?? path.join(workDir, "graph-index", timestamp()),
+      parsed.values.out ??
+        path.join(TtscBenchmarkConstant.WORK_ROOT, "graph-index", timestamp()),
     );
     const reportPath = path.join(outDir, "report.json");
     const runRoot = path.join(outDir, `.run-${process.pid}`);
