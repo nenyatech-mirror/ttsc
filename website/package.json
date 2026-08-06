@@ -1,7 +1,7 @@
 {
   "name": "@ttsc/website",
   "version": "0.25.0",
-  "description": "ttsc Guide Documents, Tutorial, and Playground.",
+  "description": "ttsc.dev website.",
   "private": true,
   "scripts": {
     "build": "pnpm run prebuild && pnpm run build:next && pnpm run postbuild",
