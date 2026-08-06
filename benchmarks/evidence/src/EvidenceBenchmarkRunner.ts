@@ -2019,13 +2019,17 @@ export namespace EvidenceBenchmarkRunner {
         (pendingResume
           ? pause.resumedAt !== undefined
           : verdict.action === "quality-failed"
-            ? !latest ||
-              state.status !== "quality-failed" ||
+            ? // Retained history once the run continued past it. The scope
+              // still ended on the last permitted attempt and still failed,
+              // and that is what stays checkable; the rest described a run
+              // that stopped there, which this one no longer does.
               verdict.decision !== "fail" ||
               pause.attempt !==
                 EvidenceBenchmarkInstruction.REVIEW_SUPPLEMENT_LIMIT ||
-              pause.resumedAt !== undefined ||
-              state.nextInstructionIndex !== pause.goalIndex + 1
+              (latest &&
+                (state.status !== "quality-failed" ||
+                  pause.resumedAt !== undefined ||
+                  state.nextInstructionIndex !== pause.goalIndex + 1))
             : pause.resumedAt === undefined)
       )
         throw new Error("Plain review verdict transition is invalid.");
