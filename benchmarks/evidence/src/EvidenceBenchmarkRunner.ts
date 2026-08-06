@@ -85,10 +85,14 @@ export namespace EvidenceBenchmarkRunner {
         throw new Error("Plain review history lacks its retained root.");
       EvidenceBenchmarkSupervision.assertHistory(props.runRoot, state);
     }
-    if (state.status === "quality-failed") {
-      await props.onState?.(structuredClone(state));
-      return state;
-    }
+    // A run retained under the earlier behaviour, where exhausting a scope's
+    // supplementations ended the cell. The boundary it stopped at is already
+    // decided and its plan already points at that scope's Final, so a resume
+    // continues from there. What the scope failed to prove stays retained in
+    // its verdicts; what the cell builds afterwards becomes measurable instead
+    // of absent.
+    if (state.status === "quality-failed")
+      state.status = "awaiting-review-verdict";
     if (state.status === "awaiting-review-verdict") {
       if (props.runRoot === undefined)
         throw new Error("Plain review-verdict resume lacks its retained root.");
@@ -2013,7 +2017,7 @@ export namespace EvidenceBenchmarkRunner {
             next.reviewAttempt !== pause.attempt + 1 ||
             next.reviewFeedback !== verdict.feedback)) ||
         (pendingResume
-          ? pause.resumedAt !== undefined || verdict.action === "quality-failed"
+          ? pause.resumedAt !== undefined
           : verdict.action === "quality-failed"
             ? !latest ||
               state.status !== "quality-failed" ||

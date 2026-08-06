@@ -313,8 +313,7 @@ export namespace EvidenceBenchmarkSupervision {
       verdict.scope !== pause.scope ||
       verdict.attempt !== pause.attempt ||
       verdict.goalIndex !== goal.index ||
-      verdict.terminalTurnId !== goal.terminalTurnId ||
-      verdict.action === "quality-failed"
+      verdict.terminalTurnId !== goal.terminalTurnId
     )
       throw new Error(
         "Review-verdict resume lacks an exact retained decision.",
@@ -325,7 +324,9 @@ export namespace EvidenceBenchmarkSupervision {
     if (
       // Final is reached either by passing or by exhausting the bound, so the
       // decision is not constrained here; the continuation is.
-      (verdict.action === "final" &&
+      // `quality-failed` is the same continuation under the earlier behaviour:
+      // a run retained with it resumes into that scope's Final.
+      ((verdict.action === "final" || verdict.action === "quality-failed") &&
         (next?.kind !== "base" ||
           next.name !== `${pause.scope}-final` ||
           (verdict.decision !== "pass" &&
