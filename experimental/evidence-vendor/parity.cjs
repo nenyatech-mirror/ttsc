@@ -142,6 +142,26 @@ const EXCEPTIONS = new Map([
     "local only: upstream's benchmark sits at `<repository>/benchmark`, so one root answered both questions and no such module exists there",
   ],
   [
+    ".agents/skills/benchmark/evidence/measurement/aggregate.md",
+    "carries the coverage composition of issue #1088, which upstream applied by hand while writing it up rather than publishing as a command",
+  ],
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkCoverage.ts",
+    "local only: composes the provenance graph's thirteen measured edges into one coverage figure for issue #1088, whose method upstream applied by hand while writing it up",
+  ],
+  [
+    "benchmarks/evidence/src/structures/ITtscEvidenceBenchmarkCoverage.ts",
+    "local only: the coverage composition's measurement input and composed result",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkCoverage.ts",
+    "local only: publishes the coverage composition beside the aggregate",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_coverage_composes_over_the_reference_graph.ts",
+    "local only: locks the coverage composition's operators, since the arithmetic is the only thing that module contains",
+  ],
+  [
     "benchmarks/evidence/src/EvidenceBenchmarkWorkspace.ts",
     "re-rooted through EvidenceBenchmarkLayout, `workspacePackageVersions` is restored because a workspace never lists itself in a catalog, and the delivered workspace overrides the toolchain to locally packed archives because this repository is ttsc, where upstream's registry resolution would measure a published release",
   ],
