@@ -17,19 +17,64 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
-const ROOT = "D:/github/samchon/ttsc";
-const UP = "D:/github/samchon/lint-plugin-evidence";
+// This file sits two directories below the repository root, so the root is
+// derived rather than spelled. A path written into the source is a path that
+// stops being true without anything saying so.
+const ROOT = path.resolve(__dirname, "..", "..");
+// Where the upstream checkout is, which is a property of the machine rather
+// than of the vendoring. The directory does not have to be named after the
+// repository, and this one is not: `samchon/lint-plugin-evidence` is cloned as
+// `evidence`.
+//
+// The argument wins over the environment, because it is the more specific
+// statement: an exported variable is ambient and easy to forget, and a run that
+// names a path on the command line means that path. An empty value is unset
+// rather than a location, since `path.resolve("")` is the current directory,
+// which would point the whole comparison at this repository.
+const supplied = (value) =>
+  typeof value === "string" && value.trim() !== "" ? value : undefined;
+const UP = path.resolve(
+  supplied(process.argv[2]) ??
+    supplied(process.env.EVIDENCE_UPSTREAM) ??
+    "D:/github/samchon/evidence",
+);
 // Upstream PR #189 carries live logic fixes on top of master, and it is a live
 // campaign branch that moves. Resolving the ref each run rather than pinning a
 // commit is deliberate: a stale pin compares clean against bytes upstream has
 // already replaced, which is the exact failure this script exists to catch.
 const BRANCH_REF = "origin/campaign-luna-0.6.0-cont";
-const BRANCH = require("node:child_process")
-  .execFileSync("git", ["-C", UP, "rev-parse", BRANCH_REF], {
-    encoding: "utf8",
-  })
-  .trim();
+const BRANCH = upstreamCommit();
 process.chdir(ROOT);
+
+/**
+ * Resolve the campaign ref, and say what to do when the checkout is not there.
+ *
+ * This runs before any comparison, so its failure is the first thing a reader
+ * sees. Surfacing git's own message would report a missing ref inside a
+ * directory that does not exist, which sends the reader after the wrong thing.
+ */
+function upstreamCommit() {
+  const hint =
+    `Pass the checkout as the first argument, or export EVIDENCE_UPSTREAM:\n` +
+    `  node ${path.relative(process.cwd(), __filename).replaceAll("\\", "/")} <path-to-lint-plugin-evidence>`;
+  if (fs.existsSync(path.join(UP, ".git")) === false)
+    throw new Error(
+      `No git checkout at ${UP}, which is where samchon/lint-plugin-evidence is expected.\n${hint}`,
+    );
+  try {
+    // git's own stderr is captured rather than inherited. Letting it through
+    // printed `fatal: ambiguous argument` above the explanation below it, which
+    // is the raw report this wrapper exists to replace.
+    return execFileSync("git", ["-C", UP, "rev-parse", BRANCH_REF], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (error) {
+    throw new Error(
+      `${UP} has no ${BRANCH_REF}. Fetch it, or point this at the checkout that has it.\n${hint}\n${String(error)}`,
+    );
+  }
+}
 
 // ------------------------------------------------------------------ mappings
 const TREES = [
@@ -142,8 +187,36 @@ const EXCEPTIONS = new Map([
     "local only: upstream's benchmark sits at `<repository>/benchmark`, so one root answered both questions and no such module exists there",
   ],
   [
+    "benchmarks/evidence/src/EvidenceBenchmarkChart.ts",
+    "local only: upstream renders inside its report writer, which reaches the charts only through the ignored run tree. Rendering is separated here so the tracked aggregate is a first-class input, and the coverage figures it draws are read from that aggregate rather than from a table hardcoded in the renderer",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkChart.ts",
+    "local only: the entry point for redrawing the charts from the tracked aggregate, which upstream has no equivalent of",
+  ],
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkReport.ts",
+    "rendering moved to EvidenceBenchmarkChart, re-rooted through EvidenceBenchmarkLayout, and an empty collection is refused rather than published over the tracked aggregate",
+  ],
+  [
+    "benchmarks/evidence/README.md",
+    "documents the chart set this repository publishes, `summary.svg` and a per-subject `arms.svg`, plus the `charts` command upstream has no equivalent of",
+  ],
+  [
     ".agents/skills/benchmark/evidence/measurement/aggregate.md",
-    "carries the coverage composition of issue #1088, which upstream applied by hand while writing it up rather than publishing as a command",
+    "same as the README: four published artifacts rather than upstream's three, and the redraw command beside them; and it carries the coverage composition of issue #1088, which upstream applied by hand while writing it up rather than publishing as a command",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_chart_draws_every_published_chart_from_the_tracked_aggregate.ts",
+    "local only: upstream has no render path that takes the tracked aggregate, so it has nothing to prove here",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_chart_closes_a_bar_against_the_total_its_row_prints.ts",
+    "local only: pins both directions of the stage-to-total mismatch, which upstream's renderer handles in one direction and does not test",
+  ],
+  [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_chart_omits_coverage_it_was_not_given.ts",
+    "local only: upstream's coverage figures are a table in its renderer, so there is no data-driven block for it to test",
   ],
   [
     "benchmarks/evidence/src/EvidenceBenchmarkCoverage.ts",
@@ -183,7 +256,7 @@ const EXCEPTIONS = new Map([
   ],
   [
     "benchmarks/evidence/src/executable/EvidenceBenchmarkCommandLine.ts",
-    "re-rooted through EvidenceBenchmarkLayout, and packs the workspace toolchain per cell through EvidenceBenchmarkToolchain because this repository is ttsc, so the benchmark installs `ttsc`, `@ttsc/lint`, `@ttsc/unplugin`, and the platform package from locally packed archives rather than the registry",
+    "re-rooted through EvidenceBenchmarkLayout, and packs the workspace toolchain per cell through EvidenceBenchmarkToolchain because this repository is ttsc, so the benchmark installs `ttsc`, `@ttsc/lint`, `@ttsc/unplugin`, and the platform package from locally packed archives rather than the registry; and it no longer refuses to resume a quality-failed run",
   ],
   [
     "benchmarks/evidence/src/structures/ITtscEvidenceBenchmarkWorkspaceArtifact.ts",
@@ -236,10 +309,6 @@ const EXCEPTIONS = new Map([
   [
     "benchmarks/evidence/src/EvidenceBenchmarkSupervision.ts",
     "the supplementation bound chooses the continuation rather than ending the run",
-  ],
-  [
-    "benchmarks/evidence/src/executable/EvidenceBenchmarkCommandLine.ts",
-    "packs the workspace toolchain, and no longer refuses to resume a quality-failed run",
   ],
   [
     "benchmarks/evidence/template/base/.gitignore",

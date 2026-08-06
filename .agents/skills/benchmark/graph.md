@@ -52,11 +52,13 @@ pnpm --dir benchmarks/graph run publish -- --from <out-dir>
 
 Never let concurrent runners write `graph.json` directly.
 
+A relative `--out` and a relative `--from` resolve against the same directory, so name the run the same way in both. Publication refuses a source directory that contributes no measurement, the defaulted one included, instead of writing a dashboard nothing added to; that refusal is what keeps `--reset` from replacing the served cells with an empty set.
+
 `benchmarks/graph/src/TtscBenchmarkGraphWebsiteCell.ts` is the single published-cell key. Key only by fields the website renders. Metadata such as fixture branch, reasoning effort, or setup time must not create a second visible copy of the same cell.
 
 ## Trace Audit
 
-Codex suites write `codex-trace-audit.json` automatically. Use the `graph:audit` package command only to re-audit existing output or compare before and after runs.
+Codex suites write `codex-trace-audit.json` automatically. Use the `audit` package command only to re-audit existing output or compare before and after runs.
 
 The audit records exposed assistant messages, shell and MCP calls in timeline order, per-turn usage, and `reasoning_output_tokens`. Codex does not expose hidden reasoning text; never invent it.
 

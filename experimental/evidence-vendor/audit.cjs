@@ -1,7 +1,8 @@
 // One sweep over every assumption the vendored tree can carry from upstream.
 const fs = require("node:fs");
 const path = require("node:path");
-const ROOT = "D:/github/samchon/ttsc";
+// Two directories below the repository root, derived rather than spelled.
+const ROOT = path.resolve(__dirname, "..", "..");
 process.chdir(ROOT);
 
 const TREES = [
@@ -16,7 +17,13 @@ const TREES = [
 const DOCS = [
   "packages/evidence/README.md",
   "benchmarks/evidence/README.md",
-  "website/src/content/docs/lint/evidence.mdx",
+  "website/src/content/docs/evidence/index.mdx",
+  "website/src/content/docs/evidence/claims.mdx",
+  "website/src/content/docs/evidence/tags.mdx",
+  "website/src/content/docs/evidence/rules.mdx",
+  "website/src/content/docs/evidence/wiring.mdx",
+  "website/src/content/docs/evidence/adoption.mdx",
+  "website/src/content/docs/setup/evidence.mdx",
 ];
 const walk = (d, o = []) => {
   if (!fs.existsSync(d)) return o;

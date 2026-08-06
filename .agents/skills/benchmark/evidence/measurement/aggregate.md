@@ -9,11 +9,22 @@ pnpm --filter @ttsc/benchmark-evidence audit-suspensions
 pnpm --filter @ttsc/benchmark-evidence report
 ```
 
-`report` writes three artifacts:
+`report` writes the aggregate and its charts:
 
 - `benchmarks/evidence/aggregate/summary.json`.
 - Stable per-cell JSON under `benchmarks/evidence/aggregate/cells/<model>/<subject>/<arm>.json`.
-- The `tokens.svg` and `time.svg` comparison charts.
+- `website/public/benchmark/evidence/summary.svg`, every subject on one token axis under the coverage block.
+- One `website/public/benchmark/evidence/<model>-<subject>.svg` per subject, carrying its tokens, work time, and API cost.
+
+The aggregate holds the measurement and the charts are a rendering of it, so the charts live where they are served. `report` refuses to write when the collection is empty, because a checkout with no run tree would otherwise replace the tracked measurement with nothing.
+
+Redraw the charts without collecting anything:
+
+```bash
+pnpm --filter @ttsc/benchmark-evidence charts
+```
+
+That reads `summary.json` and `coverage.json` and rewrites only the SVGs, sweeping any a cohort no longer carries. Use it after a chart change; use `report` after a run. The website build rasterizes each one to a 2x PNG under `public/benchmark/png/`.
 
 Raw run records and measured workspaces stay under the ignored `benchmarks/evidence/output/`. Only the aggregate is tracked.
 

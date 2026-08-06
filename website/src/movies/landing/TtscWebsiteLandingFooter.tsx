@@ -9,8 +9,9 @@ const LEARN = [
 const USE = [
   { name: "Compiler (ttsc)", href: "/docs/ttsc/compile" },
   { name: "Runner (ttsx)", href: "/docs/ttsc/execute" },
-  { name: "Code Graph (MCP)", href: "/docs/graph" },
   { name: "Lint & Prettier", href: "/docs/lint" },
+  { name: "Evidence Graph", href: "/docs/evidence" },
+  { name: "Compiler Knowledge Graph", href: "/docs/graph" },
   { name: "Plugin Ecosystem", href: "/docs/plugins" },
   { name: "Playground", href: "/playground" },
 ];
@@ -33,7 +34,8 @@ export default function TtscWebsiteLandingFooter() {
               ttsc
             </p>
             <p className="text-sm leading-relaxed text-blue-100">
-              TypeScript-Go compiler, runner, code graph, lint, and plugin host.
+              TypeScript-Go compiler, runner, lint, evidence graph, code
+              knowledge graph, and plugin host.
             </p>
             <p className="mt-4 font-mono text-xs tracking-wider text-blue-200">
               From the author of{" "}
