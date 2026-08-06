@@ -195,6 +195,10 @@ const EXCEPTIONS = new Map([
     "local only: the entry point for redrawing the charts from the tracked aggregate, which upstream has no equivalent of",
   ],
   [
+    "tests/test-evidence-benchmark/src/features/test_benchmark_chart_reports_what_it_cannot_draw.ts",
+    "local only: covers the chart renderer above, so it exists here for the same reason that module does",
+  ],
+  [
     "benchmarks/evidence/src/EvidenceBenchmarkReport.ts",
     "rendering moved to EvidenceBenchmarkChart, re-rooted through EvidenceBenchmarkLayout, and an empty collection is refused rather than published over the tracked aggregate",
   ],
