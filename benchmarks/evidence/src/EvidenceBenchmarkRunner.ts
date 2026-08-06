@@ -1993,13 +1993,19 @@ export namespace EvidenceBenchmarkRunner {
         verdict.attempt !== pause.attempt ||
         verdict.goalIndex !== pause.goalIndex ||
         verdict.terminalTurnId !== goal.terminalTurnId ||
+        // Final is reached by passing, or by failing the last permitted
+        // supplementation. `quality-failed` remains valid so that a run
+        // retained under the earlier behaviour still validates.
         ((verdict.decision === "pass" || verdict.action === "final") &&
-          (verdict.decision !== "pass" ||
-            verdict.action !== "final" ||
+          (verdict.action !== "final" ||
             next?.kind !== "base" ||
-            next.name !== `${pause.scope}-final`)) ||
+            next.name !== `${pause.scope}-final` ||
+            (verdict.decision !== "pass" &&
+              pause.attempt <
+                EvidenceBenchmarkInstruction.REVIEW_SUPPLEMENT_LIMIT))) ||
         ((verdict.decision === "fail" || verdict.action === "retry") &&
           verdict.action !== "quality-failed" &&
+          verdict.action !== "final" &&
           (verdict.decision !== "fail" ||
             verdict.action !== "retry" ||
             next?.kind !== "review-supplement" ||
