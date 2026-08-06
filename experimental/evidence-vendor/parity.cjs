@@ -210,6 +210,18 @@ const EXCEPTIONS = new Map([
     "imports the benchmark source across a package boundary at this workspace's depth, and carries the packed toolchain because a prepared workspace here binds this repository's own compiler",
   ],
   [
+    "benchmarks/evidence/src/EvidenceBenchmarkRunner.ts",
+    "a scope that exhausts its supplementations continues into its Final here, and a run retained as quality-failed resumes into it",
+  ],
+  [
+    "benchmarks/evidence/src/EvidenceBenchmarkSupervision.ts",
+    "the supplementation bound chooses the continuation rather than ending the run",
+  ],
+  [
+    "benchmarks/evidence/src/executable/EvidenceBenchmarkCommandLine.ts",
+    "packs the workspace toolchain, and no longer refuses to resume a quality-failed run",
+  ],
+  [
     "benchmarks/evidence/template/base/.gitignore",
     "ignores the packed toolchain this repository delivers; upstream installs ttsc from the registry and has no such directory",
   ],

@@ -13,6 +13,12 @@ node_modules/
 # of compiler, so counting it as authored work misreports the cell by two
 # orders of magnitude, and committing it would put it in the retained record.
 .ttsc-repair-*/
+# Nestia writes its debug dump and a per-process runtime scratch file into the
+# package it is generating from. Both are tooling output: the dump landed 420
+# files and 110k lines in one measured tree, counted as authored work, and the
+# scratch file lives for milliseconds and lost a race with the dashboard.
+packages/*/.nestia-debug-out/
+.nestia.runtime.*.json
 
 # Local environment
 .env
