@@ -489,12 +489,17 @@ const collectReviewVerdicts = (
     // A failing verdict carries no feedback. Every failed scope receives the
     // same prescribed reminder, so nothing cell-specific exists to carry, and
     // the decision itself refuses text bound for the cell.
+    // Final is reached by passing, or by failing the last permitted
+    // supplementation — a scope that exhausts its attempts now continues into
+    // its Final rather than ending the cell. `quality-failed` stays valid so a
+    // run retained under the earlier behaviour still renders.
     const validTransition: boolean =
       verdict.feedback === undefined &&
       ((verdict.decision === "pass" && verdict.action === "final") ||
         (verdict.decision === "fail" &&
           (verdict.action === "retry" ||
-            (verdict.action === "quality-failed" &&
+            ((verdict.action === "quality-failed" ||
+              verdict.action === "final") &&
               lastOfScope[index] === true))));
     if (
       (verdict.decision !== "pass" && verdict.decision !== "fail") ||
