@@ -103,7 +103,7 @@ Found 3 errors.
 
 Without those tags, the build fails once per obligation, because one reference never covers another. An AI coding agent has to clear them to finish, and clearing them means citing each target and writing down why its code answers for it.
 
-![Coverage and token spend, Plain against Evidence](https://ttsc.dev/benchmark/png/evidence-summary.png)
+![Coverage and token spend, Plain against Evidence](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
 ## Compiler Knowledge Graph
 
@@ -124,7 +124,7 @@ One typed MCP tool over a graph the type checker resolved: what calls what, what
 
 Across 64 measured question and model pairs, the median answer costs 92% fewer tokens and 95% fewer tool calls than the same agent with no MCP. The design and the comparators are in [`@ttsc/graph`](https://github.com/samchon/ttsc/tree/master/packages/graph).
 
-![Median tokens on the shared onboarding question, lower is better](https://ttsc.dev/benchmark/svg/graph-common-codex-gpt-5.6-sol.svg)
+![Median tokens on the shared onboarding question, lower is better](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/graph-common-codex-gpt-5.6-sol.png)
 
 ## Plugins
 

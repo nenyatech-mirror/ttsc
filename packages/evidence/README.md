@@ -48,7 +48,7 @@ Without those tags, the build fails once per obligation, because one reference n
 
 An AI coding agent has to clear them to finish, and clearing them means citing each target and writing down why its code answers for it. Coverage reaches 100% on its own, as the residue of the errors it closed.
 
-![Coverage and token spend across all four subjects](https://ttsc.dev/benchmark/png/evidence-summary.png)
+![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
 ## Setup
 
