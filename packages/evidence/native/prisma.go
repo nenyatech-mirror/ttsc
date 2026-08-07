@@ -566,6 +566,29 @@ func prismaDeclarationsFromComments(
           inventory.Declarations = append(inventory.Declarations, declaration)
         }
       }
+      // An unattached run is the one position that accepts `@evidenceExclude`
+      // and never `@evidence`, and a lint-only `.schema` ledger is built out of
+      // exactly these. Its exclusions owe a review like any other
+      // acknowledgement, so the review has to be readable here too. Collecting
+      // it only where a declaration is attached would leave the ledger reporting
+      // every exclusion unreviewed forever, with the repair written in a comment
+      // nothing reads back — the same dead end the attached case just escaped.
+      for _, review := range parseReviews(run.Body) {
+        shared := &evidenceReview{
+          HostID:          "prisma:" + run.Path + ":file",
+          SemanticHostIDs: []string{"prisma:" + run.Path + ":file"},
+          Reviews:         review.Reviews,
+          Type:            artifactPrisma,
+          Target:          review.Target,
+          Fingerprint:     review.Fingerprint,
+          Description:     review.Description,
+          Path:            run.Path,
+          Line:            run.Line + review.LineOffset,
+        }
+        for _, inventory := range hosted {
+          inventory.Reviews = append(inventory.Reviews, shared)
+        }
+      }
       continue
     }
     if run.Key == "" {
@@ -620,6 +643,28 @@ func prismaDeclarationsFromComments(
       }
       for _, inventory := range hosted {
         inventory.Declarations = append(inventory.Declarations, declaration)
+      }
+    }
+    // Reviews are read here for the same reason the citations are. Without
+    // this, a Prisma claim citing a reference that requires a review reports
+    // every citation unreviewed forever, and the repair the message names —
+    // write the tag in this documentation comment — has no effect, because
+    // nothing reads the tag back out. A diagnostic must never name a repair the
+    // author cannot perform.
+    for _, review := range parseReviews(run.Body) {
+      shared := &evidenceReview{
+        HostID:          host.ID,
+        SemanticHostIDs: []string{host.ID},
+        Reviews:         review.Reviews,
+        Type:            artifactPrisma,
+        Target:          review.Target,
+        Fingerprint:     review.Fingerprint,
+        Description:     review.Description,
+        Path:            run.Path,
+        Line:            run.Line + review.LineOffset,
+      }
+      for _, inventory := range hosted {
+        inventory.Reviews = append(inventory.Reviews, shared)
       }
     }
   }

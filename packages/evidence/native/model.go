@@ -15,6 +15,8 @@ const documentedRuleName = "evidence/documented"
 
 const todoRuleName = "evidence/todo"
 
+const reviewRuleName = "evidence/review"
+
 type artifactKind string
 
 const (
@@ -87,6 +89,45 @@ type referencePolicy struct {
   // SingleEvidencePerSymbol requires exactly one distinct selected unit from
   // every selected semantic claim host, including the hosts carrying no tag.
   SingleEvidencePerSymbol bool
+  // RequireReview demands that every acknowledgement of this population carry
+  // an `@evidenceReview` whose fingerprint matches the cited scope's current
+  // content, so a review expires when the thing it reviewed moves.
+  RequireReview bool
+}
+
+// evidenceReview is one verification statement bound to its host and target.
+//
+// It is a sibling of evidenceDeclaration rather than a variant of it. Nothing
+// that counts acknowledgements may reach a review, so the two never share a
+// slice, a map, or a type. Target is the token as written and is compared
+// against a declaration's target rather than resolved again: the citation and
+// its review spell one address, and resolving twice would let a review answer a
+// scope its citation does not name.
+type evidenceReview struct {
+  // HostID is the source-position identity, kept only so a carrier with no
+  // semantic identity can still be matched. It must not be the primary key: a
+  // merged identity's halves sit at different positions and therefore carry
+  // different HostIDs, so matching on it alone refuses a review written on
+  // `namespace I` for a citation on `interface I` — placement the graph
+  // elsewhere calls not worth a diagnostic, and which `evidence/review` accepts.
+  HostID string
+  // SemanticHostIDs are the selected graph identities this review is written on,
+  // which is what a citation is matched by.
+  SemanticHostIDs []string
+  // Reviews names which acknowledgement this review answers for. It is part of
+  // the match, never inferred: verifying a citation and verifying an exclusion
+  // are opposite questions, so a review of one must not discharge the other.
+  Reviews     tagKind
+  Type        artifactKind
+  Target      string
+  Fingerprint string
+  Description string
+  Path        string
+  Line        int
+}
+
+func (review *evidenceReview) location() string {
+  return review.Path + ":" + decimal(review.Line)
 }
 
 // entrySelected reports whether this reference materializes by traversal.
@@ -152,6 +193,30 @@ type evidenceUnit struct {
   // never selected and never hosts a declaration; it is retained only so a
   // citation of it can be told why the target it names is not there.
   Hidden string
+  // Digest is this unit's content, hashed after normalization and with every
+  // position a tag can live in removed.
+  //
+  // How much "its content" is depends on the artifact, and the difference is
+  // load-bearing rather than incidental. A Markdown heading owns the lines
+  // between it and the next heading, so a subsection's body belongs to the
+  // subsection. A TypeScript unit owns its whole declaration text, which
+  // **contains** every nested member's text, because that is what a declaration
+  // is: there is no reading of `interface ISale` that excludes its properties.
+  //
+  // So a nested change moves both its own unit's digest and every enclosing
+  // unit's. `scopeIndex` composes ancestors and descendants anyway, so detection
+  // is unaffected, but nothing here may assume a unit's digest is independent of
+  // its subtree. A feature built on that assumption was reverted once already.
+  //
+  // Removing the documentation comment is what stops the review from
+  // invalidating itself: writing an `@evidenceReview` inside a unit that is
+  // itself cited would otherwise change the digest that the review's own
+  // fingerprint is checked against, and the repair would never terminate.
+  //
+  // Empty when the loader for this artifact kind cannot see the unit's
+  // content. A reference over such a population refuses `requireReview` at
+  // decode rather than comparing against nothing.
+  Digest string
 }
 
 func (unit *evidenceUnit) location() string {
@@ -204,7 +269,10 @@ type artifactInventory struct {
   Type         artifactKind
   Units        []*evidenceUnit
   Declarations []*evidenceDeclaration
-  Problems     []inventoryProblem
+  // Reviews are the verification statements this artifact carries, kept apart
+  // from Declarations so no consumer counting acknowledgements can reach one.
+  Reviews  []*evidenceReview
+  Problems []inventoryProblem
   // LoadFailed distinguishes an unreadable or rejected artifact from a
   // healthy artifact that legitimately materializes no selected units.
   // Coverage is a completeness claim, so a failed inventory cannot be used
@@ -251,6 +319,7 @@ type claimState struct {
   Paths        []string
   Hosts        []*evidenceUnit
   Declarations []*evidenceDeclaration
+  Reviews      []*evidenceReview
   References   []referenceState
   Healthy      bool
   // OutsideCarrier names declarations this claim selected from a file its
@@ -264,6 +333,12 @@ type referenceState struct {
   Paths  []string
   Units  []*evidenceUnit
   Scopes []*evidenceUnit
+  // Population is every unit this reference's files materialized, selected or
+  // not. Units and Scopes are both narrowed by the `symbol` selector, so
+  // neither can answer what a cited scope structurally contains, and a review
+  // fingerprint has to be a property of the cited address rather than of the
+  // reference that asked for it.
+  Population []*evidenceUnit
   // Published names the module-and-address pairs a citation may use, for a
   // population selected by walking module exports. Left empty when the
   // population's addresses belong to the files that declare them.
