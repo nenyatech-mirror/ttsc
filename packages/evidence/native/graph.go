@@ -267,6 +267,10 @@ func materializeClaimStates(
         state.Declarations,
         inventories[path].Declarations...,
       )
+      // Reviews travel beside declarations and never among them. They carry no
+      // obligation of their own; they are looked up by host and target when a
+      // reference demands one.
+      state.Reviews = append(state.Reviews, inventories[path].Reviews...)
       if len(claim.ExclusionCarriers.Patterns) != 0 && !carrierPaths[path] {
         for _, declaration := range inventories[path].Declarations {
           state.OutsideCarrier[declaration.ID] = true
@@ -389,6 +393,19 @@ func materializeClaimStates(
         }
       }
       sortUnits(referenceState.Scopes)
+      // The complete materialized population is kept because a review
+      // fingerprint must not depend on this reference's `symbol` selector.
+      // Units and Scopes hold only what this reference selected plus the
+      // ancestors of those, so an unselected descendant appears in neither, and
+      // composing a scope digest from them made the value a function of the
+      // reference rather than of the cited address: a narrowed selector dropped
+      // the subtree from the digest, and two references over one scope demanded
+      // two different values from a tag that carries one token, which no author
+      // could satisfy.
+      for _, unit := range availableUnits {
+        referenceState.Population = append(referenceState.Population, unit)
+      }
+      sortUnits(referenceState.Population)
       if len(referencePaths) != 0 &&
         len(referenceState.Units) == 0 &&
         referenceState.Healthy &&
@@ -628,6 +645,10 @@ func evaluateEvidenceGraph(
         uncertain[declaration.ID] = true
       }
     }
+    // One ledger per claim, because reviews belong to the claim rather than to
+    // any one of its references, and built on first use so a claim with no
+    // reviewing reference pays nothing.
+    var reviewLedgerForClaim *reviewLedger
     for _, reference := range state.References {
       if !reference.Healthy {
         for _, declaration := range state.Declarations {
@@ -668,6 +689,11 @@ func evaluateEvidenceGraph(
       for _, scope := range reference.Scopes {
         scopesByID[scope.ID] = scope
       }
+      // Built on first use and shared by every citation of this reference. The
+      // index spans the whole materialized population, so building it per
+      // citation is quadratic, and nil until a citation actually needs it so a
+      // reference without the policy pays nothing.
+      var reviewScopes *scopeIndex
       for _, declaration := range state.Declarations {
         scopeID := resolved[declaration.ID]
         covered := reference.UnitsByScope[scopeID]
@@ -710,6 +736,30 @@ func evaluateEvidenceGraph(
             "Forbidden @evidenceExclude for '"+scopesByID[scopeID].Target+"' at "+declaration.location()+" in "+claimLabel(state.Spec)+" "+referenceLabel(reference.Spec)+": noEvidenceExclude requires positive @evidence for this reference. Remove the exclusion and cite the target from a selected "+string(state.Spec.Type)+" host.",
           )
           continue
+        }
+        if reference.Spec.Policy.RequireReview {
+          if reviewScopes == nil {
+            // Withdrawn units are absent from Population by construction, and
+            // the scope composite still needs their identities so a member
+            // leaving the public surface moves the fingerprint.
+            reviewScopes = newScopeIndex(
+              append(
+                append([]*evidenceUnit{}, reference.Population...),
+                reference.Hidden...,
+              ),
+            )
+          }
+          if reviewLedgerForClaim == nil {
+            reviewLedgerForClaim = newReviewLedger(state.Reviews)
+          }
+          problems = append(problems, reviewProblems(
+            declaration,
+            scopesByID[scopeID],
+            reference,
+            state,
+            reviewScopes,
+            reviewLedgerForClaim,
+          )...)
         }
         if declaration.Tag == tagEvidence && declaration.HostID != "" {
           byScope := evidenceByHostAndScope[declaration.HostID]
@@ -881,6 +931,174 @@ func evaluateEvidenceGraph(
   return problems
 }
 
+// reviewProblems judges one acknowledgement against the review it owes.
+//
+// The review is found by host and target rather than resolved again. A citation
+// and its review spell one address, so resolving the review separately would let
+// it answer a scope its citation does not name, and would report an unresolved
+// target for a tag whose only job is to annotate one that already resolved.
+//
+// Three states are reported and they are mutually exclusive, because each repair
+// subsumes the one after it: without a review there is nothing to carry a
+// fingerprint, and without a fingerprint there is nothing to compare. Every
+// message states the expected value, because completions cannot: the host
+// publishes a rule's corpus only on a cycle where the rule reports nothing, and
+// a stale fingerprint is a report.
+//
+// An empty expected value means this population's loader could not see the
+// cited content. Decode already refuses `requireReview` for the artifact kinds
+// where that is true, so reaching it here is a loader gap rather than a
+// configuration one, and reporting a mismatch against nothing would name a
+// repair no author can perform.
+func reviewProblems(
+  declaration *evidenceDeclaration,
+  scope *evidenceUnit,
+  reference referenceState,
+  state claimState,
+  scopes *scopeIndex,
+  reviews *reviewLedger,
+) []string {
+  if declaration == nil || scope == nil {
+    return nil
+  }
+  // The complete population is what the digest walks, never Units or Scopes.
+  // Both of those are narrowed by this reference's `symbol` selector, so an
+  // unselected descendant is absent from each: a Markdown reference selecting
+  // only `h2` would fingerprint a cited section without the H3 bodies inside it,
+  // and a review of it would never expire however much of that subtree was
+  // rewritten. Worse, two references over one scope under different selectors
+  // would then expect two different digests from a tag that carries exactly one
+  // fingerprint token, and no value an author could write would satisfy both.
+  expected := scopes.fingerprint(scope.ID)
+  if expected == "" {
+    return nil
+  }
+  where := " at " + declaration.location() + " in " +
+    claimLabel(state.Spec) + " " + referenceLabel(reference.Spec)
+  // Every message names the review tag that answers for *this* acknowledgement.
+  // A generic `@evidenceReview` in the repair would send the author of an
+  // exclusion to write the tag that does not answer it, which is the one mistake
+  // the split into two tags exists to prevent.
+  marker := reviewMarkerFor(declaration.Tag)
+  review := reviews.find(declaration)
+  if review == nil {
+    return []string{
+      "Unreviewed @" + string(declaration.Tag) + " for '" + displayTarget(declaration.Target) + "'" + where +
+        ": requireReview asks what was verified, which the reason does not answer. Add '" + marker + " " +
+        displayTarget(declaration.Target) + " #" + expected + " <what you checked>' to the same documentation block.",
+    }
+  }
+  if review.Fingerprint == "" {
+    return []string{
+      "Unfingerprinted " + marker + " for '" + displayTarget(declaration.Target) + "'" + where +
+        ": the review states what was checked and nothing binds it to what it checked, so it can never expire. Write '" +
+        marker + " " + displayTarget(declaration.Target) + " #" + expected + " " + firstReviewWords(review.Description) + "'.",
+    }
+  }
+  if review.Fingerprint != expected {
+    return []string{
+      "Stale " + marker + " for '" + displayTarget(declaration.Target) + "'" + where +
+        ": the review names '#" + review.Fingerprint + "' and that scope now digests to '#" + expected +
+        "'. The cited content changed after this review was written. Read it again and replace the review, including the new fingerprint.",
+    }
+  }
+  return nil
+}
+
+// reviewLedger indexes a claim's reviews by the identity they were written on.
+//
+// Two properties are load-bearing and neither is obvious.
+//
+// The key is a *semantic* host identity, never `HostID`. `HostID` is a source
+// position, so the two halves of a merged identity carry different ones: keying on
+// it refused a review written on `namespace I` for a citation on `interface I`,
+// which is placement the graph elsewhere calls not worth a diagnostic and which
+// `evidence/review` accepts. The two rules then disagreed about the same file.
+// `model.go` says as much where it defines the field.
+//
+// It is built once per claim rather than scanned per citation. A linear search
+// over every review, for every declaration, for every reference, is cubic in the
+// three things a large project has most of.
+type reviewLedger struct {
+  byHostAndTarget map[string]*evidenceReview
+}
+
+func newReviewLedger(reviews []*evidenceReview) *reviewLedger {
+  ledger := &reviewLedger{
+    byHostAndTarget: make(map[string]*evidenceReview, len(reviews)),
+  }
+  for _, review := range reviews {
+    if review == nil {
+      continue
+    }
+    for _, hostID := range reviewLedgerHostIDs(review) {
+      key := reviewLedgerKey(hostID, review.Reviews, review.Target)
+      if ledger.byHostAndTarget[key] == nil {
+        ledger.byHostAndTarget[key] = review
+      }
+    }
+  }
+  return ledger
+}
+
+// reviewLedgerHostIDs is every identity a review answers on.
+//
+// The position identity is kept as a fallback for a carrier that has no semantic
+// host at all, such as an unattached Prisma documentation run, whose declarations
+// are keyed the same way.
+func reviewLedgerHostIDs(review *evidenceReview) []string {
+  if len(review.SemanticHostIDs) != 0 {
+    return review.SemanticHostIDs
+  }
+  if review.HostID == "" {
+    return nil
+  }
+  return []string{review.HostID}
+}
+
+// find locates the review bound to one declaration's identity and target.
+func (ledger *reviewLedger) find(
+  declaration *evidenceDeclaration,
+) *evidenceReview {
+  if ledger == nil {
+    return nil
+  }
+  hostIDs := declaration.SemanticHostIDs
+  if len(hostIDs) == 0 && declaration.HostID != "" {
+    hostIDs = []string{declaration.HostID}
+  }
+  for _, hostID := range hostIDs {
+    key := reviewLedgerKey(hostID, declaration.Tag, declaration.Target)
+    if review := ledger.byHostAndTarget[key]; review != nil {
+      return review
+    }
+  }
+  return nil
+}
+
+// reviewLedgerKey composes the one key both sides of the ledger use.
+//
+// Spelled once rather than at each site. The acknowledgement kind is part of it,
+// because verifying a citation and verifying an exclusion are opposite questions
+// and a review of one must never be found for the other; two independent
+// three-part spellings would agree only by inspection, and the day they stop
+// agreeing every review silently stops matching.
+func reviewLedgerKey(hostID string, tag tagKind, target string) string {
+  return hostID + "\x00" + reviewKey(tag, target)
+}
+
+// firstReviewWords echoes enough of a description to show where it goes.
+func firstReviewWords(description string) string {
+  words := strings.Fields(description)
+  if len(words) == 0 {
+    return "<what you checked>"
+  }
+  if len(words) > 6 {
+    words = append(words[:6], "...")
+  }
+  return strings.Join(words, " ")
+}
+
 // declarationEligibleForClaim keeps ownership evidence on the selected host
 // while allowing an intentional exclusion to live on a claim-file carrier.
 func declarationEligibleForClaim(
@@ -987,6 +1205,10 @@ func applyTraversedScopes(state *referenceState, reached []*evidenceUnit) {
     }
   }
   sortUnits(state.Scopes)
+  // Every reached declaration, selected or not, so a review fingerprint over a
+  // cited scope walks the structure rather than this reference's selection.
+  state.Population = append(state.Population, reached...)
+  sortUnits(state.Population)
 }
 
 // materializeLocalTypeScriptReference selects modules of the active project

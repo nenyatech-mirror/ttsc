@@ -148,6 +148,16 @@ func scanMarkdownInventory(
   hostAtLine := make([]string, len(lines))
   hostIDAtLine := make([]string, len(lines))
   fencedAtLine := make([]bool, len(lines))
+  // commentAtLine marks the lines a citation or a review can live on, so the
+  // content digest can leave them out. A fenced block is not marked: an
+  // `<!-- -->` inside one hosts no tag, and its text is content of the section.
+  commentAtLine := make([]bool, len(lines))
+  // The nearest heading *unit* enclosing each line, which is not the same as its
+  // host: a heading may open a region without materializing a unit. Kept apart
+  // from hostIDAtLine because that value decides where a declaration sits, and
+  // widening it would move citations rather than only digests.
+  digestHostIDAtLine := make([]string, len(lines))
+  currentDigestHostID := fileUnitID
   currentHost := "file"
   currentHostID := fileUnitID
   fenceMarker := rune(0)
@@ -160,6 +170,11 @@ func scanMarkdownInventory(
     if marker, length, remainder, ok := markdownFence(line); ok {
       fencedAtLine[index] = true
       hostIDAtLine[index] = currentHostID
+      // Fenced content is content. It hosts no tag, so it is never excluded as a
+      // tag position, and leaving it unattributed would drop every code block out
+      // of its section's digest: rewriting the example in a cited section would
+      // then expire nothing.
+      digestHostIDAtLine[index] = currentDigestHostID
       if fenceMarker == 0 {
         fenceMarker = marker
         fenceLength = length
@@ -176,6 +191,7 @@ func scanMarkdownInventory(
       fencedAtLine[index] = true
       hostAtLine[index] = currentHost
       hostIDAtLine[index] = currentHostID
+      digestHostIDAtLine[index] = currentDigestHostID
       continue
     }
     if inHTMLComment {
@@ -184,6 +200,8 @@ func scanMarkdownInventory(
       }
       hostAtLine[index] = currentHost
       hostIDAtLine[index] = currentHostID
+      digestHostIDAtLine[index] = currentDigestHostID
+      commentAtLine[index] = true
       continue
     }
     if strings.HasPrefix(trimmed, "<!--") {
@@ -193,6 +211,8 @@ func scanMarkdownInventory(
       }
       hostAtLine[index] = currentHost
       hostIDAtLine[index] = currentHostID
+      digestHostIDAtLine[index] = currentDigestHostID
+      commentAtLine[index] = true
       continue
     }
     level, title, ok := markdownHeading(line)
@@ -202,6 +222,21 @@ func scanMarkdownInventory(
       if level <= 4 {
         for descendantLevel := level; descendantLevel <= 4; descendantLevel++ {
           headingUnitIDs[descendantLevel] = ""
+        }
+      }
+      // A heading that materializes no unit still opens a region, and that
+      // region's content belongs to the nearest heading unit enclosing it. An
+      // H5, and an H2 whose title yields no anchor, are both such headings.
+      // Carrying the previous unit forward instead would attribute the region to
+      // whatever unit the walk happened to see last, which is a sibling rather
+      // than an ancestor when the skipped heading is shallower: editing text
+      // under an anchorless H2 would then expire a review of the H3 above it,
+      // which does not contain that text.
+      currentDigestHostID = fileUnitID
+      for ancestorLevel := level - 1; ancestorLevel >= 1; ancestorLevel-- {
+        if headingUnitIDs[ancestorLevel] != "" {
+          currentDigestHostID = headingUnitIDs[ancestorLevel]
+          break
         }
       }
       if level <= 4 && targetablePath {
@@ -235,11 +270,13 @@ func scanMarkdownInventory(
           }
           inventory.Units = append(inventory.Units, unit)
           headingUnitIDs[level] = unit.ID
+          currentDigestHostID = unit.ID
         }
       }
     }
     hostAtLine[index] = currentHost
     hostIDAtLine[index] = currentHostID
+    digestHostIDAtLine[index] = currentDigestHostID
   }
 
   sequence := 0
@@ -269,8 +306,71 @@ func scanMarkdownInventory(
         Sequence:        sequence,
       })
     }
+    for _, review := range parseReviews(comment) {
+      inventory.Reviews = append(inventory.Reviews, &evidenceReview{
+        HostID:          hostIDAtLine[line-1],
+        SemanticHostIDs: []string{hostIDAtLine[line-1]},
+        Reviews:         review.Reviews,
+        Type:            artifactMarkdown,
+        Target:          review.Target,
+        Fingerprint:     review.Fingerprint,
+        Description:     review.Description,
+        Path:            address.Display,
+        Line:            line + review.LineOffset,
+      })
+    }
   }
+  assignMarkdownDigests(inventory, lines, digestHostIDAtLine, commentAtLine)
   return inventory, problems
+}
+
+// assignMarkdownDigests gives every unit the text it alone owns.
+//
+// A heading owns its own line and the body under it up to the next heading, and a
+// deeper heading starts a unit of its own, so the partition is exactly what
+// `digestHostIDAtLine` records while walking. Composing a subtree belongs to
+// `scopeIndex`, which is why nothing is folded in here: an H2 whose own body never
+// changed keeps its own digest even when an H3 beneath it did.
+//
+// This is where Markdown and TypeScript genuinely differ. A document can be
+// partitioned into disjoint regions, so a Markdown unit's digest really is
+// independent of its subtree. A declaration cannot: `interface ISale` textually
+// contains its properties, so a TypeScript unit's digest covers its descendants
+// whether anything wants it to or not. `evidenceUnit.Digest` records the
+// consequence; do not carry the Markdown intuition across.
+//
+// HTML comment lines are dropped because that is where a Markdown citation and
+// its review live. Leaving them in would make writing the review change the
+// digest the review's own fingerprint is checked against.
+func assignMarkdownDigests(
+  inventory *artifactInventory,
+  lines []string,
+  digestHostIDAtLine []string,
+  commentAtLine []bool,
+) {
+  owned := map[string][]string{}
+  for index := range lines {
+    id := digestHostIDAtLine[index]
+    if index < len(commentAtLine) && commentAtLine[index] {
+      continue
+    }
+    if id == "" {
+      continue
+    }
+    // A comment opening after prose on the same line is still a tag position:
+    // the declaration scan runs over the whole document, so it finds a citation
+    // or a review there. Only the comment span comes out, never the line, or the
+    // prose beside it would vanish from the digest and a real content change
+    // would stop expiring anything.
+    content := markdownCommentPattern.ReplaceAllString(
+      strings.TrimSuffix(lines[index], "\r"),
+      "",
+    )
+    owned[id] = append(owned[id], content)
+  }
+  for _, unit := range inventory.Units {
+    unit.Digest = contentDigest(strings.Join(owned[unit.ID], "\n"))
+  }
 }
 
 // matchesConfiguredMarkdownFile reports whether a population rooted at this base

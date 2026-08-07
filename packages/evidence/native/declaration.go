@@ -102,6 +102,21 @@ func parseCommentDeclarations(
       }
       continue
     }
+    // A review closes the declaration above it in every host, and it does so
+    // regardless of tagBoundaries. That flag answers whether *another tool's*
+    // `@tag` is a boundary, which is a property of the host's comment grammar:
+    // an HTML comment has no field syntax, so `@architecture approved this` is
+    // ordinary prose belonging to the reason above it, and a test pins that.
+    //
+    // A review is not another tool's tag. It belongs to this grammar, so it is
+    // always a boundary. Without this, an `@evidenceReview` written under an
+    // `@evidence` inside one Markdown comment was swallowed into that citation's
+    // reason: the review vanished and the reason grew a sentence its author
+    // addressed to a different question.
+    if _, _, opened := reviewLine(line); opened {
+      flush()
+      continue
+    }
     if jsdoc && strings.HasPrefix(line, "@") {
       flush()
       continue
@@ -218,6 +233,204 @@ func normalizeMarkdownTarget(target string) string {
     target = strings.TrimPrefix(target, "./")
   }
   return target
+}
+
+// reviewMarkers open a verification statement, one per acknowledgement tag.
+//
+// There are two because the two acknowledgements answer opposite questions and
+// so do their reviews. Verifying an `@evidence` means checking that this
+// declaration does what the cited unit describes. Verifying an
+// `@evidenceExclude` means checking that the unit genuinely does not apply here,
+// which no amount of reading the code can establish and no coverage number can.
+// One tag for both would leave a reader unable to tell which question was
+// answered without finding the sibling tag first, and would let a review of the
+// easier question discharge the harder one.
+//
+// Order is longest marker first, the way `declarationLine` orders its own, so a
+// prefix never shadows a longer tag. The whitespace boundary keeps the four
+// apart on its own — `@evidenceExcludeReview` reaching the `@evidenceExclude`
+// arm is refused exactly as `@evidenceReview` reaching `@evidence` is — but the
+// ordering means that guard is a second line of defense rather than the only one.
+var reviewMarkers = []struct {
+  marker string
+  tag    tagKind
+}{
+  {marker: "@evidenceExcludeReview", tag: tagExclude},
+  {marker: "@evidenceReview", tag: tagEvidence},
+}
+
+// reviewFingerprintLength is how many hex characters a fingerprint presents.
+//
+// Seven is a staleness detector's length, not a security boundary's. A
+// collision costs one review that failed to expire, while the tag stays short
+// enough that an author reads the target beside it instead of scrolling past a
+// full digest.
+const reviewFingerprintLength = 7
+
+// parsedReview is one verification statement read out of a comment.
+//
+// It is deliberately not a `parsedDeclaration`, and the separation is the whole
+// safety property rather than a matter of taste. Every acknowledgement map in
+// `evaluateEvidenceGraph` consumes the declarations of a claim, so a review
+// arriving as a third `tagKind` would discharge coverage, count as a semantic
+// host under `uniqueEvidence`, count as a cited unit under
+// `singleEvidencePerSymbol`, and conflict with an exclusion of the same scope.
+// Each of those is a build turning green because a review was mistaken for
+// evidence. A distinct type cannot reach any of them by construction; a shared
+// type could only be kept out by remembering to, at every one of six sites.
+type parsedReview struct {
+  // Reviews names which acknowledgement this review answers for, so a review of
+  // an exclusion can never discharge a citation's obligation or the reverse.
+  Reviews     tagKind
+  Target      string
+  Fingerprint string
+  Description string
+  LineOffset  int
+}
+
+// marker spells the tag this review was written as, for a diagnostic that has to
+// name the repair rather than describe it.
+func (review parsedReview) marker() string {
+  return reviewMarkerFor(review.Reviews)
+}
+
+// parseReviews reads every verification statement one comment carries.
+//
+// `declarationLine` needs no change to keep these out of the declaration
+// stream, and that is worth stating because it looks like an omission. It
+// matches `@evidence` only when the next character is whitespace, so
+// `@evidenceReview` falls through its loop exactly as `@evidenceExclude`
+// reaching the `@evidence` arm does. The marker namespace was already reserved.
+//
+// The scan is independent for the same reason `todoEntries` is: one tag, one
+// pass, no shared state with the parser whose output must never contain it. Any
+// other `@`-opening line closes the review above it, so a review sharing a
+// block with `@param` or a following `@evidence` swallows neither.
+func parseReviews(comment string) []parsedReview {
+  trimmed := strings.TrimLeftFunc(comment, unicode.IsSpace)
+  leadingLines := strings.Count(comment[:len(comment)-len(trimmed)], "\n")
+  comment = trimmed
+  comment = strings.TrimPrefix(comment, "/**")
+  comment = strings.TrimPrefix(comment, "/*")
+  comment = strings.TrimSuffix(comment, "*/")
+  reviews := []parsedReview{}
+  var pending *parsedReview
+  var body []string
+  flush := func() {
+    if pending == nil {
+      return
+    }
+    target, remainder := splitDeclarationBody(strings.Join(body, "\n"))
+    fingerprint, description := splitReviewFingerprint(remainder)
+    pending.Target = target
+    pending.Fingerprint = fingerprint
+    pending.Description = description
+    reviews = append(reviews, *pending)
+    pending = nil
+    body = nil
+  }
+  for index, rawLine := range strings.Split(comment, "\n") {
+    line := strings.TrimSpace(rawLine)
+    line = strings.TrimSpace(strings.TrimPrefix(line, "*"))
+    line = strings.TrimSpace(strings.TrimPrefix(line, "///"))
+    if reviews, remainder, opened := reviewLine(line); opened {
+      flush()
+      pending = &parsedReview{
+        Reviews:    reviews,
+        LineOffset: leadingLines + index,
+      }
+      body = []string{remainder}
+      continue
+    }
+    if strings.HasPrefix(line, "@") {
+      flush()
+      continue
+    }
+    if pending != nil {
+      body = append(body, line)
+    }
+  }
+  flush()
+  return reviews
+}
+
+// reviewLine reports whether a line opens a review, which acknowledgement it
+// answers for, and with what remainder.
+//
+// The whitespace boundary keeps a longer tag out. `@evidenceReviewed` is some
+// other tool's tag or a typo, and consuming it would attach a review to a
+// citation the author never reviewed. The same boundary is what separates
+// `@evidenceExcludeReview` from `@evidenceExclude` in `declarationLine`, so
+// neither parser can claim the other's tag.
+func reviewLine(line string) (tagKind, string, bool) {
+  for _, candidate := range reviewMarkers {
+    if !strings.HasPrefix(line, candidate.marker) {
+      continue
+    }
+    remainder := line[len(candidate.marker):]
+    if remainder != "" && remainder[0] != ' ' && remainder[0] != '\t' {
+      continue
+    }
+    return candidate.tag, strings.TrimSpace(remainder), true
+  }
+  return "", "", false
+}
+
+// splitReviewFingerprint separates an optional fingerprint from the description.
+//
+// The `#` prefix is required rather than inferred, for the reason
+// `splitInlineLinkBody` records about targets: the token stays
+// self-discriminating through a boundary character instead of a guess. A bare
+// fixed-width hex token would reintroduce that guess, and ordinary prose
+// supplies the counter-examples — `cafe`, `deadbeef`, `beefed`.
+//
+// The exact length is checked as well as the prefix, because `#` alone is not
+// enough. A requirement anchor such as `#req-search-policies` opens a
+// description in exactly that shape, and eating it would strip the author's
+// first words and then report a malformed fingerprint they did not write.
+//
+// No target begins with `#`: a Markdown target carries its anchor after a path,
+// a Prisma target carries its `prisma:` prefix, a Swagger target its method,
+// and a code target its brace. So this only ever reads the position after a
+// target that has already been consumed.
+func splitReviewFingerprint(remainder string) (string, string) {
+  remainder = strings.TrimSpace(remainder)
+  if !strings.HasPrefix(remainder, "#") {
+    return "", remainder
+  }
+  candidate := remainder[1:]
+  description := ""
+  for index, char := range candidate {
+    if unicode.IsSpace(char) {
+      candidate, description = candidate[:index], strings.TrimSpace(candidate[index:])
+      break
+    }
+  }
+  if len(candidate) != reviewFingerprintLength || !isLowerHex(candidate) {
+    // A rejected token stays in the description, because it is usually prose: a
+    // requirement anchor such as `#req-search-policies` opens a sentence in
+    // exactly this shape and the author's words must survive.
+    //
+    // Unless it is the whole body. `#A3F9C1D` alone is a fingerprint whose case
+    // is wrong, not a description, and treating it as prose would let the
+    // shortest wrong path an author can take pass silently: paste the expected
+    // value, get the case wrong, stop, and ship a review that states nothing
+    // while satisfying the non-empty test. Reported as malformed instead.
+    if description == "" {
+      return "", ""
+    }
+    return "", remainder
+  }
+  return candidate, description
+}
+
+func isLowerHex(value string) bool {
+  for _, char := range value {
+    if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+      return false
+    }
+  }
+  return value != ""
 }
 
 func containsWhitespace(value string) bool {
