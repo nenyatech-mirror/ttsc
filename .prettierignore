@@ -23,7 +23,7 @@ packages/graph/src/structures/
 website/src/content/docs/ttsc/flags.mdx
 
 # Written by `next build`, which states in the file that it is not to be edited.
-# Next 16 replaced its `/// <reference path>` lines with real imports, and the
+# Next 16 replaced its `/// <reference path>` line with real imports, and the
 # import sorter reorders them; the next build writes its own order straight back,
 # so formatting it would leave the format gate and the website build permanently
 # disagreeing. Leave it to the generator.

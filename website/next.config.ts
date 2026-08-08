@@ -13,12 +13,13 @@ export default withNextra({
   },
   turbopack: {
     resolveAlias: {
-      // Nextra points this specifier at Next's internal
-      // `@vercel/turbopack-next/mdx-import-source` indirection, which Turbopack
-      // only registers when Next itself compiles the MDX. Nextra runs its own
-      // MDX pipeline, so `nextra/mdx-remote` cannot resolve it under Next 16,
-      // where Turbopack is the default builder. Name the file that indirection
-      // stands for.
+      // Nextra's Turbopack default points this specifier at Next's internal
+      // `@vercel/turbopack-next/mdx-import-source`, which does not resolve under
+      // Next 16, so `nextra/mdx-remote` fails to build. Next 15 never hit it
+      // because `next build` ran webpack, where Nextra aliases the same
+      // specifier to the project's own `mdx-components` file. Name that file
+      // directly; Nextra spreads a caller's `resolveAlias` over its own default
+      // for this case.
       "next-mdx-import-source-file": "./mdx-components.jsx",
     },
   },
