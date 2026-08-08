@@ -120,6 +120,7 @@ Common defects:
 | unique foreign key on repeatable history | indexed non-unique foreign key |
 | `updated_at` on immutable history | `created_at` only |
 | live relation used as an as-of snapshot | copy the retained values |
+| effect that leaves the system with nowhere to be recorded | a table the provider writes it to, see `providers.md` |
 
 ## Completion
 
