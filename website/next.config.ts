@@ -11,4 +11,15 @@ export default withNextra({
   images: {
     unoptimized: true,
   },
+  turbopack: {
+    resolveAlias: {
+      // Nextra points this specifier at Next's internal
+      // `@vercel/turbopack-next/mdx-import-source` indirection, which Turbopack
+      // only registers when Next itself compiles the MDX. Nextra runs its own
+      // MDX pipeline, so `nextra/mdx-remote` cannot resolve it under Next 16,
+      // where Turbopack is the default builder. Name the file that indirection
+      // stands for.
+      "next-mdx-import-source-file": "./mdx-components.jsx",
+    },
+  },
 });
