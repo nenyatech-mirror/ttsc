@@ -8,8 +8,8 @@ const withNextra = nextra({ latex: true });
 export default withNextra({
   // `next dev` otherwise writes its own `AGENTS.md` and `CLAUDE.md` into this
   // directory on every start. `AGENTS.md` at the repository root is the single
-  // entry point both Claude Code and Codex CLI read, and a generated pair under
-  // `website/` takes precedence there for anyone working on the site.
+  // entry point both Claude Code and Codex CLI read, and a generated pair here
+  // becomes what they read for the site's own directory.
   agentRules: false,
   output: "export",
   trailingSlash: true,
