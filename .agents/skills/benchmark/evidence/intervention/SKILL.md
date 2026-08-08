@@ -12,6 +12,8 @@ Every remedy lands outside the measured workspace or in this repository.
 | --- | --- |
 | A cell edited a frozen configuration file | Confirm it against [measurement/integrity.md](../measurement/integrity.md) first, then [warn it](warning.md) and resume. A prescribed `disabled` deletion or a new dependency is not a violation |
 | A cell stopped, a process died, or a launch or resume failed | [Diagnose](recovery.md), then resume the same run |
+| A cell's process is alive while its stage log has stopped growing | [End the hung turn](recovery.md), free its ports, then resume |
+| A silent cell has no objective left | Nothing. [Never restart a finished sequence](recovery.md) |
 | A cell's ports have a listener but no live runner of its own | [Free the ports](recovery.md), then resume |
 | A Plain cell sits at `awaiting-review-verdict` | Resume to retry the inspection. [plain-review.md](../measurement/plain-review.md) owns the loop |
 | The dashboard disagrees with `state.json` | Regenerate it. [dashboard.md](../measurement/dashboard.md) owns the commands |

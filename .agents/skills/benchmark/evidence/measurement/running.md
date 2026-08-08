@@ -8,7 +8,7 @@ One cell is one native session driven through its arm's eight objectives. The op
 2. Use the campaign branch in the repository's single worktree.
 3. Push an empty campaign commit and open a draft pull request.
 4. Record the authorized matrix, benchmark revision, engines, models, efforts, CLI versions, Evidence archive digest, and live dashboard in the pull-request body.
-5. Assign one read-only reporting subagent to update that body every 5 minutes and immediately after a state change or anomaly.
+5. Assign one read-only reporting subagent to update that body every 5 minutes and immediately after a state change or anomaly. [Watch the watcher](#watch-the-watcher) for the duty that outlives it.
 
 ## Launch A Cell
 
@@ -125,10 +125,35 @@ Setup time stays separate from model-process time, and the record carries no bui
 
 Observe every active cell at least every 30 seconds:
 
+- The growth of `events.jsonl` and of the current stage's `<stage>.log`.
 - `state.json`, and benchmark and native process liveness.
-- The recency of `events.jsonl` and of the current stage's `<stage>.log`.
 - The frozen configuration files in every cell. The reporting subagent re-reads them on every cycle and reports a hit as a material change, quoting the diff it just read. [integrity.md](integrity.md) owns what is a hit and what is the cell doing its job.
 
 Correct the dashboard on any disagreement immediately, without waiting for its 5-minute interval.
+
+### Liveness Is Growth, Not Presence
+
+A cell is advancing when its stage log or `events.jsonl` has grown since the last observation. Nothing else proves work.
+
+A live process proves only that something is attached to the thread. A turn can hang while its process stays resident and its status stays `running`, and that shape produces no diagnostic, no exit, and no status change. Presence is therefore never sufficient, and a supervisor that accepts it reports a stopped cell as healthy for as long as the process survives.
+
+Absence of growth is not sufficient either. One objective can run past an hour without emitting a line, so a supervisor that treats every silence as death restarts working cells.
+
+Both signals are needed, and they are not symmetric:
+
+| Growth | Process | Reading |
+| --- | --- | --- |
+| yes | yes | advancing |
+| yes | no | the turn ended; expect the next to start or the run to settle |
+| no | yes | **hung**, once silence exceeds the threshold |
+| no | no | stopped |
+
+Set the silence threshold above the longest silence any completed objective in the cohort has shown, and record the figure in the pull-request body with the objective it came from. A threshold chosen without that measurement is a guess in whichever direction it is wrong.
+
+### Watch The Watcher
+
+Supervision that a restart can end silently is not supervision. Verify on every session start, and after any machine restart, that the reporting subagent and every liveness watcher are alive, and restart the ones that are not.
+
+A watcher stopping is invisible from its own output, because a healthy watcher and a dead one both say nothing. Confirm liveness by observing that the dashboard advanced, never by observing that no alarm arrived.
 
 Take anything else to [intervention/SKILL.md](../intervention/SKILL.md), and diagnose before touching it.
