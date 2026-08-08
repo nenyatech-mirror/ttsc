@@ -136,6 +136,14 @@ The runner's own review manifest reaches further than these — `config/lint.con
 
 Together these files decide what each Program contains and where a package resolves to, and so they decide what every evidence population selects from. That is why a change no one asked for voids the measurement instead of failing it: an empty population demands nothing, and a claim that reaches that state reports full coverage while checking nothing.
 
+## Publishing A Number
+
+Derive every published figure a second way and compare the two before it leaves the record.
+
+A generator reports what it read, and a reading can be correct and still answer a different question than the one the table's column implies. Per-stage sums against a cell total, a token figure against the thread counter it came from, and an elapsed figure against the interval it spans each cost one command and each catches a class the generator cannot catch about itself.
+
+Publish the figure only when both derivations agree. When they disagree, publish neither and report the disagreement, because the one thing that must never reach a reader is a number nobody can reproduce.
+
 ## On A Confirmed Hit
 
 Warn the cell and resume it. Never restart it, and never repair the workspace yourself. [intervention/warning.md](../intervention/warning.md) owns the channel and its contents.

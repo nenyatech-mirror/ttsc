@@ -8,6 +8,10 @@ Always read the launcher's own output after a resume. A refused launch says so t
 
 `state.json` reports what the runner last wrote, never what is true now. A record can read `running` after its runner is gone, and a record can read `interrupted` while the cell is being carried forward by other means. Establish the cell's actual condition from log growth first, as [measurement/running.md](../measurement/running.md) defines it, and read the status as one input rather than as the answer.
 
+Copy `state.json` aside before resuming. A resume overwrites the retained interruption record, so the cause of the stop survives only in the copy taken before the command that clears it.
+
+A failure notice reaches you well after the event it describes. Read the record before acting on one, or you will diagnose a cell that has already moved.
+
 When the resume conditions below match, resume immediately after diagnosis and any required runner correction. Do not wait for operator prose or the next reporting interval.
 
 ## Recover A Hung Turn

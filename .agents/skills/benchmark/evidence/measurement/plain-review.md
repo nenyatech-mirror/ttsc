@@ -48,6 +48,14 @@ Four rather than eight because a cell that answers a reminder answers the first 
 
 The runner retains each decision's exact bytes and digest alongside the workspace digest and Goal boundary, and refuses a decision whose earlier retained verdict files no longer match their digests.
 
+### Read The Loop By Its Verdict Files
+
+A new file under `supervision/` is the only reliable sign that a decision landed. Count them to know how many attempts a scope has spent, and read the newest to know what the last one decided.
+
+Neither the status nor the plan answers this. `instructionPlan` grows when a failing verdict inserts a supplementation, so its length is a consequence of a decision rather than a record of one, and reading it between a stop and the verdict that follows describes a plan that is about to change. A cursor compared against a stale length has twice produced the conclusion that a cell was one objective from finishing when it was not.
+
+Read the plan only after a transition completes, and never to infer how much of the bound is left.
+
 ## When The Inspection Cannot Decide
 
 A spawn failure, a failed turn, an unreadable decision, an unaccountable token report, or the inspection timeout leaves the pause undecided. The reason lands on that attempt's `failure`, naming what did not match with the raw text excerpted.
