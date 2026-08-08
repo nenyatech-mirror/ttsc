@@ -310,8 +310,13 @@ export namespace EvidenceBenchmarkRunner {
     // browser server and a copied `auth.json`, so the operator's own
     // `AGENTS.md`, hooks, personality, and MCP table cannot reach a cell and
     // the retained record describes the whole of what the cell saw.
+    // The retained session decides whether this run can be isolated at all. A
+    // run that already owns a thread keeps the home that thread lives in, since
+    // its rollout and Goal state are there and a fresh directory would sever the
+    // resume rather than isolate it.
     const codexHome: string = EvidenceBenchmarkRuntime.prepareCodexHome(
       props.runRoot,
+      state.sessionId,
     );
     const environment: NodeJS.ProcessEnv = {
       ...(props.environment ?? process.env),
