@@ -17,6 +17,10 @@ const { PLATFORM_TARGETS, SCOPES } = require("../build-current.cjs");
 const { PACKAGE_BUILDS_BEFORE_PLATFORMS } = require("../build-platforms.cjs");
 
 const root = path.resolve(__dirname, "..", "..");
+// The workflow assertion below parses YAML, and the root manifest declares no
+// parser. `tests/test-ttsc` is the importer this resolution is anchored on, so
+// its `yaml` entry is this file's dependency: dropping it there as unused stops
+// this file from loading at all, and the typecheck lane runs it.
 const testTtscRequire = createRequire(
   path.join(root, "tests", "test-ttsc", "package.json"),
 );

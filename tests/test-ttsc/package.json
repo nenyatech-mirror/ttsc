@@ -15,6 +15,7 @@
     "@ttsc/testing": "workspace:*",
     "@types/node": "catalog:utils",
     "ttsc": "workspace:*",
-    "typescript": "catalog:typescript"
+    "typescript": "catalog:typescript",
+    "yaml": "^2.9.0"
   }
 }
