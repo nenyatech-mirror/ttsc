@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -138,7 +139,9 @@ export namespace EvidenceBenchmarkWorkspace {
       settled = path.join(output, "workspace");
       adoptRepositoryCatalog(request.repository, settled);
       overrideToolchainResolution(settled, request.toolchain);
+      shortenVirtualStore(settled);
       await pnpm(["install", "--no-frozen-lockfile"], settled, environment);
+      assertExecutablesAreRunnable(settled);
       await run("git", ["init", "-b", "benchmark"], settled, environment);
       await run("git", ["add", "-A"], settled, environment);
       await run(
@@ -167,6 +170,102 @@ export namespace EvidenceBenchmarkWorkspace {
       throw error;
     }
   }
+  /**
+   * Windows refuses to start a program whose path exceeds `MAX_PATH`.
+   *
+   * `CreateProcess` has no long-path escape. Node prefixes its own file
+   * syscalls with `\\?\`, so a package manager creates these files happily and
+   * a directory walk finds them; only the moment something tries to *run* one
+   * does the limit appear, as `The directory name is invalid`.
+   */
+  const WINDOWS_EXECUTABLE_PATH_LIMIT = 259;
+
+  /**
+   * Moves the package manager's virtual store to a short absolute path.
+   *
+   * A run directory is deep by construction — subject, engine, arm, and a
+   * 36-character run id sit under the benchmark's output tree — and pnpm's
+   * store adds an encoded package name and a second `node_modules` on top of
+   * it. The platform package carries a bundled Go toolchain, whose deepest
+   * tool is 142 characters below the workspace root, so the two together put
+   * `go build` past `MAX_PATH` and every source-plugin build in the cell fails
+   * with a message about a directory rather than about a path length.
+   *
+   * The store holds hard links, so it goes on the workspace's own drive. Its
+   * name is derived from the workspace path rather than randomly, so a resumed
+   * or checkpoint-restored run installs into the store it already had.
+   */
+  function shortenVirtualStore(workspace: string): void {
+    if (process.platform !== "win32") return;
+    const resolved: string = path.resolve(workspace);
+    const digest: string = crypto
+      .createHash("sha256")
+      .update(resolved.toLowerCase())
+      .digest("hex")
+      .slice(0, 12);
+    const store: string = path.join(
+      path.parse(resolved).root,
+      ".ttsc-vstore",
+      digest,
+    );
+    const configuration: string = path.join(resolved, ".npmrc");
+    const existing: string = fs.existsSync(configuration)
+      ? fs.readFileSync(configuration, "utf8").replace(/\s*$/u, "\n")
+      : "";
+    fs.writeFileSync(
+      configuration,
+      `${existing}virtual-store-dir=${store}\n`,
+      "utf8",
+    );
+  }
+
+  /**
+   * Refuses a workspace holding a program Windows cannot start.
+   *
+   * The failure this catches is silent in every way that matters: the install
+   * succeeds, the tree looks complete, and the cell only discovers it hours
+   * later when a build reports a directory name it never named. Measuring that
+   * cell measures the path length of its own run directory, so preparation
+   * fails here instead, before a model is ever asked to do anything.
+   */
+  function assertExecutablesAreRunnable(workspace: string): void {
+    if (process.platform !== "win32") return;
+    const offenders: string[] = [];
+    const walk = (directory: string): void => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(directory, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const location: string = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          walk(location);
+          continue;
+        }
+        if (
+          entry.name.toLowerCase().endsWith(".exe") &&
+          location.length > WINDOWS_EXECUTABLE_PATH_LIMIT
+        )
+          offenders.push(location);
+      }
+    };
+    walk(path.resolve(workspace));
+    if (offenders.length === 0) return;
+    throw new Error(
+      [
+        `The prepared workspace holds ${String(offenders.length)} program(s) Windows cannot start,`,
+        `because their paths exceed ${String(WINDOWS_EXECUTABLE_PATH_LIMIT)} characters.`,
+        "A cell installed here would fail every build that runs one of them.",
+        "",
+        ...offenders
+          .slice(0, 3)
+          .map((file) => `  ${String(file.length)} chars: ${file}`),
+      ].join(" "),
+    );
+  }
+
   function renderBase(
     root: string,
     variables: ITtscEvidenceBenchmarkWorkspaceVariables,
