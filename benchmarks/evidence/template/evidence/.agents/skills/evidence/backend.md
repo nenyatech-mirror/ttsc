@@ -16,7 +16,7 @@ Every other backend rule lives in the test configuration because `test/tsconfig.
 
 ## File Rules
 
-`packages/backend/test/lint.config.ts` also declares `evidence/review` and `evidence/singular` at `error`, and `evidence/todo` staged at `"off"`. Both apply to the whole test Program — `packages/backend/src/**` and `packages/backend/test/**` — and to nothing else. `src/prisma/**` is ignored as generated output, and the configuration file itself is ignored. `packages/api` and `packages/frontend` are other Programs and carry neither rule.
+`packages/backend/test/lint.config.ts` also declares `evidence/singular` at `error`, with `evidence/review` and `evidence/todo` both staged at `"off"`. Both apply to the whole test Program — `packages/backend/src/**` and `packages/backend/test/**` — and to nothing else. `src/prisma/**` is ignored as generated output, and the configuration file itself is ignored. `packages/api` and `packages/frontend` are other Programs and carry neither rule.
 
 **`evidence/singular` — one public identity per file, named after the file.** Declaration merging counts as one identity: the scaffold's own `src/MyGlobal.ts` exports a class and a namespace of that name and passes. A second unrelated export does not.
 
@@ -52,6 +52,9 @@ Those four carriers are the only place a backend `@evidenceExclude` may be writt
 Each claim declares its carrier through `evidenceExcludeCarriers`, so an exclusion written anywhere else is a build error naming the file it belongs in. Each carrier ships with a JSDoc block stating what it accepts; read it before adding an entry. `backend-tests` accepts an exclusion for a requirement only — its operation reference refuses one, so a published operation with no test stays a build failure.
 
 ## Examples
+
+Each block shows a finished acknowledgement, tag and review together. Backend Start writes the tags; Backend Review turns `evidence/review` on and adds the reviews as it checks each one.
+
 
 ```prisma
 /// Sale persisted for one seller.

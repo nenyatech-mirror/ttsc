@@ -19,17 +19,30 @@ description: Defines the Evidence Graph tag grammar, per-citation reviews, truth
 @evidenceExcludeReview <target> <what you checked>
 ```
 
-`@evidence` states that the host implements, represents, or proves the target. `@evidenceExclude` states that the claim does not apply to the target and names the actual owner or observable alternative plus the condition that would invalidate the exclusion.
+`@evidence` states that the host implements, represents, or proves the target. `@evidenceExclude` states that the claim does not apply to the target and names the actual owner or observable alternative plus the condition that would invalidate the exclusion. The two review tags state what was checked to know either is true; [Reviews](#reviews) owns them.
 
-Target and non-empty reason are mandatory. One acknowledgement covers the selected target and its selected descendants. Write the reason as a specific responsibility current code could falsify, not a restatement of the target name.
+Every one of the four takes a target and a non-empty sentence; neither is optional. One acknowledgement covers the selected target and its selected descendants. Write the reason as a specific responsibility current code could falsify, not a restatement of the target name.
+
+Every tag must truthfully describe the current host's relation to the target. Never write, move, consolidate, or invent an acknowledgement to pass the compiler: a diagnostic identifies an obligation, not the truthful acknowledgement for it, and a clean gate proves structure, not truth.
+
+- Several hosts may cite the same target when each independently implements or proves it.
+- One host cites one resolved target once.
+- Within one claim-reference obligation, `@evidenceExclude` scopes never overlap each other or any `@evidence` scope, even across carriers.
+- A parent target is truthful only when the host owns the complete selected subtree.
 
 ## Reviews
 
-Every acknowledgement carries a review of the same target: `@evidenceReview` beside each `@evidence`, `@evidenceExcludeReview` beside each `@evidenceExclude`. A review annotates a citation. It discharges no coverage and satisfies no obligation, so writing one can never change a graph diagnostic.
+Every acknowledgement carries a review of the same target: `@evidenceReview` beside each `@evidence`, `@evidenceExcludeReview` beside each `@evidenceExclude`. A review annotates an acknowledgement. It discharges no coverage and satisfies no obligation, so writing one can never change a graph diagnostic.
 
-The reason and the review answer different questions. The reason says why this host answers for that target. The review says what you checked to know it does. Only the first is written unless something asks for the second, which is why an unverified citation and a verified one are otherwise identical bytes.
+One review answers one acknowledgement, in the tag that matches it. A review whose target this host does not acknowledge answers nothing, a second review of one acknowledgement verifies it twice, and `@evidenceReview` on a target this host excludes answers the wrong question.
+
+The reason and the review answer different questions. The reason says why this host answers for that target. The review says what you checked to know it does.
+
+Write the review where the check happens. `evidence/review` ships `"off"` and the Review for each layer turns it on, so reviews are written while that Review inspects each acknowledgement, not while the artifact is still being built. A review written away from its check is written from memory.
 
 Name the artifact you read and the behavior you confirmed, in the form you actually worked from. "Confirmed" and "verified" are conclusions, not checks.
+
+The two tags are checked differently. A citation is checked by reading the target and exercising this host against it. An exclusion is checked by finding what does own the unit, which nothing in the declaration the tag sits on can tell you.
 
 ```ts
 /**
@@ -37,10 +50,6 @@ Name the artifact you read and the behavior you confirmed, in the form you actua
  * @evidenceReview docs/analysis/03-functional-requirements.md#req-order-checkout read the section's three rules and ran the checkout test: reservation, total, and the empty-cart refusal
  */
 ```
-
-Write the review where the check happens. `evidence/review` ships `"off"` and the Review for each layer turns it on, so reviews are written while that Review inspects each acknowledgement, not while the artifact is still being built. A review written away from its check is written from memory.
-
-An exclusion's review answers a different question, and no reading of the declaration it sits on can answer it. A citation is checked by reading the target and exercising this host against it. An exclusion is checked by finding what does own the unit.
 
 ```ts
 /**
@@ -50,13 +59,6 @@ An exclusion's review answers a different question, and no reading of the declar
 ```
 
 A symbol accumulating citations is the signal this rule exists to raise. Writing one honest review per target forces each to be defended separately, and citations that cannot share a single defensible check were never one responsibility. Split the symbol along the line the reviews expose rather than writing a review broad enough to cover both.
-
-Every tag must truthfully describe the current host's relation to the target. Never write, move, consolidate, or invent an acknowledgement to pass the compiler: a diagnostic identifies an obligation, not the truthful acknowledgement for it, and a clean gate proves structure, not truth.
-
-- Several hosts may cite the same target when each independently implements or proves it.
-- One host cites one resolved target once.
-- Within one claim-reference obligation, `@evidenceExclude` scopes never overlap each other or any `@evidence` scope, even across carriers.
-- A parent target is truthful only when the host owns the complete selected subtree.
 
 ## Claim Activation
 
@@ -78,7 +80,9 @@ Do not add, remove, or change claim objects as implementation advances — after
 
 A claim is declared in the configuration of the Program its hosts live in; [backend.md](backend.md) and [frontend.md](frontend.md) name each claim's configuration and why it lives there.
 
-All three configuration files and every claim object are frozen except the prescribed `disabled` deletions. Keep `evidence/graph` and `evidence/review` at `error` in every gate; no environment value turns either off, and a result produced with one weakened is invalid. Do not create phase-specific config or compiler files, and do not add or remove a rule.
+All three configuration files and every claim object are frozen except the prescribed stagings: deleting a claim's `disabled` property at its own layer, raising `evidence/review` from `"off"` to `"error"` at that layer's Review, and, on the backend, raising `evidence/todo` where [backend.md](backend.md) says. Nothing else changes.
+
+Keep `evidence/graph` at `error` in every gate, and `evidence/review` at `error` once its Review has raised it; no environment value turns either off, and a result produced with one weakened is invalid. Do not create phase-specific config or compiler files, and do not add or remove a rule.
 
 ## Placement
 
@@ -100,7 +104,7 @@ A claim that declares no carrier accepts no exclusion at all. Write the missing 
 
 Use the narrowest truthful target. "Not applicable", "internal", "future work", and "not implemented" are conclusions, not reasons; name the actual owner or observable alternative and a concrete invalidating condition.
 
-Every exclusion carries an `@evidenceExcludeReview` naming what you checked, the same as a citation does. The Reviews section owns its shape.
+Every exclusion carries an `@evidenceExcludeReview` naming what does own the unit; the Reviews section owns its shape.
 
 An exclusion states that this claim does not cover the target, never that the target is unfinished. If the layer owes the target and has not built it, the honest record is a build failure, so implement it rather than excluding it. An exclusion written to clear a diagnostic converts missing work into a green build, which is the one outcome this graph exists to prevent.
 

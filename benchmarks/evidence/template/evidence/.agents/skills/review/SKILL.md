@@ -1,11 +1,13 @@
 ---
 name: review
-description: Defines the review of @evidence and @evidenceExclude for fake citations, of their @evidenceReview statements for checks never performed, for cited requirements the code contradicts, and for exclusions created solely to evade compiler errors, of configuration edited beyond the one permitted activation, and of the compiler and runtime gates each scope must pass. Read only for a review objective; backend.md and frontend.md carry the per-scope configuration and gates.
+description: Defines the review of every @evidence and @evidenceExclude for citations that are not true of their host, for cited requirements the code contradicts, and for exclusions standing in for work this layer owes; the review statement each judgement is recorded as; the configuration this scope may change and the differences that are findings; and the compiler and runtime gates each scope must pass. Read only for a review objective; backend.md and frontend.md carry the per-scope carriers, configuration, and gates.
 ---
 
 # Review
 
-The compiler owns target resolution, host eligibility, overlap, and coverage. What it cannot own is whether a cited requirement was obeyed, because that is a question about behavior rather than about the graph. Review inspects the full acknowledgement population for fake citations, for cited requirements the code contradicts, and for exclusions created solely to evade compiler errors, then proves the gates its scope names.
+The compiler owns target resolution, host eligibility, overlap, coverage, and, once this scope raises `evidence/review`, whether every acknowledgement carries a review at all. What it cannot own is whether a cited requirement was obeyed, because that is a question about behavior rather than about the graph.
+
+Review inspects the full acknowledgement population for citations that are not true of their host, for cited requirements the code contradicts, and for exclusions standing in for work this layer owes. Each judgement is written down as that acknowledgement's review, so the inspection leaves a record rather than only corrections. Then it proves the gates its scope names.
 
 Two scopes and no third. Read the per-scope document for the current objective before beginning:
 
@@ -18,9 +20,11 @@ Frontend Review is the last one, so the checks that need both layers finished be
 
 Before review, confirm every claim for the current phase is enabled. If an earlier stage left a prescribed `disabled` property, delete it before reviewing.
 
+Then set `evidence/review` to `"error"` in the configurations the scope document names. Every acknowledgement now reports itself as unreviewed, and that report is the worklist: an acknowledgement still reporting is one this review has not reached.
+
 For every `@evidence`, read the target, reason, and complete current host. A citation is justified only when the artifact actually implements, represents, or proves the target and the reason states that specific relation; mere relevance is not enough. Correct every fake citation.
 
-Reading the target means reading what it requires, then checking the host against it. A disagreement between the two is a finding the compiler cannot make: resolution proves the target exists and coverage proves it was cited, neither proves it was obeyed.
+Reading the target means reading what it requires, then checking the host against it. A disagreement between the two is the finding this inspection exists to make.
 
 Which of the three is wrong decides what you correct, and the requirement is not one of them — it is a frozen input and it is right by definition:
 
@@ -34,7 +38,9 @@ Where two artifacts cite one target — a type and the provider behind it, an op
 
 Several hosts may truthfully cite one target; do not consolidate them. A clean compiler gate does not prove a tag truthful.
 
-Read each acknowledgement's review with it. `evidence/review` proves a review is present and names the same target; whether it describes a check that was performed, and whether that check would detect the host failing this target, is this inspection's question. A review that restates the reason, or that concludes without naming what was read or run, is a finding on the same footing as a fake citation.
+Write the review as you finish each acknowledgement, naming what you read or ran. That statement is the record of this inspection, and it is what a later reader has instead of your presence. A review that restates the reason, or that concludes without naming what was read or run, states nothing and is a finding on the same footing as a fake citation.
+
+An exclusion's review answers a different question. A citation is checked against this host; an exclusion is checked by finding what does own the unit, so its review names that owner rather than anything about the declaration the tag sits on.
 
 A host carrying several acknowledgements is read as one decision about that host. Reviews that cannot be written separately, or that a single check would have to be stretched to cover, mean the citations are not one responsibility. Split the host along the line they expose. Consolidating the reviews instead hides the seam the rule surfaced.
 

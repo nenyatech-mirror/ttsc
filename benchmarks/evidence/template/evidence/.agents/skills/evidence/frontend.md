@@ -33,6 +33,8 @@ Those two carriers are the only place a frontend `@evidenceExclude` may be writt
 - `packages/frontend/src/components/SCREEN_EVIDENCE_EXCLUDE.ts`
 - `packages/frontend/tests/journeys/JOURNEY_EVIDENCE_EXCLUDE.ts`
 
+A review sits beside the tag it answers for, in the same block, on the same host or carrier. Frontend Review turns `evidence/review` on and writes them; `SKILL.md` owns their shape.
+
 Each claim declares its carrier through `evidenceExcludeCarriers`, so an exclusion written anywhere else is a build error naming the file it belongs in. Each carrier ships with a JSDoc block stating what it accepts; read it before adding an entry. `frontend-hooks` declares no carrier at all, and the hook reference of `frontend-screens` refuses one too: an operation no hook calls and a hook no screen renders are missing work, so write the hook or the screen.
 
 ## Staged Unlock

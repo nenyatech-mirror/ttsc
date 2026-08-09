@@ -2,6 +2,8 @@
 
 The scope is the frontend: every active acknowledgement in the `frontend-hooks`, `frontend-screens`, and `frontend-journeys` claims.
 
+Raise `evidence/review` before anything else; [Configuration](#configuration) names where and why.
+
 ## Exclusion Carriers
 
 Read both in full:
@@ -17,11 +19,15 @@ Frontend Review runs after Backend Final, so it is the one scope that can see bo
 
 Then read this scope's own carriers in the same direction. An entry deferring a requirement to the backend is a finding unless an operation and its test carry it, and both are now built.
 
+What you find on the other side of a deferral is what its `@evidenceExcludeReview` states, since an exclusion is verified by naming what does own the unit.
+
 Neither layer alone can make this check, which is why it sits here rather than in a scope of its own.
 
 ## Configuration
 
-Compare `packages/frontend/lint.config.ts` with the baseline. Compare the backend's three as well, since this is the last scope that reviews anything: `packages/api/lint.config.ts` and `packages/backend/test/lint.config.ts`.
+Raise `evidence/review` to `"error"` in `packages/frontend/lint.config.ts`. Every acknowledgement then reports itself as unreviewed, and one still reporting is one this scope has not reached.
+
+That is this scope's one permitted edit. Compare that file with the baseline afterwards, and the backend's two as well since this is the last scope that reviews anything: `packages/api/lint.config.ts` and `packages/backend/test/lint.config.ts`, where the rule is already `"error"`. Every other difference is a finding.
 
 ## Gates
 

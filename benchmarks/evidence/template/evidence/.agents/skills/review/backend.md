@@ -2,6 +2,8 @@
 
 The scope is the backend: every active acknowledgement in the `schema-models`, `api-operations`, `dto-types`, `dto-properties`, and `backend-tests` claims.
 
+Raise `evidence/review` before anything else; [Configuration](#configuration) names where and why.
+
 ## Exclusion Carriers
 
 Read all four in full:
@@ -15,7 +17,9 @@ Read all four in full:
 
 ## Configuration
 
-Compare `packages/api/lint.config.ts` (DTO claims) and `packages/backend/test/lint.config.ts` (schema, operation, and test claims with the file rules) with the baseline.
+Raise `evidence/review` to `"error"` in `packages/api/lint.config.ts` (DTO claims) and `packages/backend/test/lint.config.ts` (schema, operation, and test claims with the file rules). Every acknowledgement then reports itself as unreviewed, and one still reporting is one this scope has not reached.
+
+That is this scope's one permitted edit. Compare both files with the baseline afterwards; every other difference is a finding.
 
 ## Gates
 
