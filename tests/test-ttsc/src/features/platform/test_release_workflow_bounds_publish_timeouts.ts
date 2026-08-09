@@ -71,7 +71,7 @@ function assertReleaseTimeouts(lines: string[]): void {
 
   for (const [job, budget] of [
     ["publish", 60],
-    ["marketplace-gate", 5],
+    ["marketplace-report", 5],
     ["wasm-smoke", 15],
     ["vscode-smoke", 15],
     ["release", 15],
@@ -89,7 +89,7 @@ function assertReleaseTimeouts(lines: string[]): void {
     .map((line) => line.trim().slice(0, -1));
   assert.deepEqual(jobNames, [
     "publish",
-    "marketplace-gate",
+    "marketplace-report",
     "wasm-smoke",
     "vscode-smoke",
     "release",

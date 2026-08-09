@@ -19,16 +19,16 @@ import { assert, fs, path, workspaceRoot } from "../../internal/toolchain";
  * Publication order is not a dependency. The extension leads the release, but
  * v0.26.0 answered 401 at the Marketplace and took the whole npm release down
  * with it, publishing the compiler, the runtime, and seven platform binaries
- * nowhere. The Marketplace step therefore tolerates its own rejection, and a
- * separate `marketplace-gate` job carries the verdict so the run still ends
- * red.
+ * nowhere. Both recorded Marketplace failures were the gallery's own, so the
+ * step tolerates its rejection and `marketplace-report` annotates the run
+ * without failing it.
  *
  * 1. Read the release workflow and drop its comment lines.
  * 2. Locate deterministic preflight, build, credentials, and both publications.
  * 3. Assert preflight precedes every mutation and no Marketplace probe is wired
  *    into the release path.
  * 4. Assert releases serialize, and that a Marketplace rejection neither blocks
- *    npm nor passes unreported.
+ *    npm, nor fails the release, nor passes unreported.
  */
 export const test_release_workflow_runs_preflight_before_publication = () => {
   const source = fs.readFileSync(
@@ -102,20 +102,34 @@ export const test_release_workflow_runs_preflight_before_publication = () => {
     "a Marketplace rejection must not withhold the npm release",
   );
 
-  // Tolerated is not forgiven: the outcome still has to fail the run.
+  // Tolerated, reported, and still not fatal. Both recorded Marketplace
+  // failures were the gallery's own — a 401 and a request timeout — so the
+  // report annotates the run and must never exit non-zero.
+  // Bound the slice at the next job: `exit 1` anywhere downstream is somebody
+  // else's business, and reading to end-of-file would borrow it.
+  const reportStart = workflow.indexOf("\n  marketplace-report:\n");
+  assert.notEqual(reportStart, -1, "marketplace-report job is missing");
+  const reportEnd = workflow.indexOf("\n  wasm-smoke:\n", reportStart);
+  assert.notEqual(reportEnd, -1, "marketplace-report must precede wasm-smoke");
+  const report = workflow.slice(reportStart, reportEnd);
   assert.match(
     workflow,
-    /^ {2}marketplace-gate:$/m,
+    /^ {2}marketplace-report:$/m,
     "a tolerated Marketplace failure needs a job that reports it",
   );
   assert.match(
-    workflow,
-    /needs\.publish\.outputs\.marketplace != 'success'/,
-    "marketplace-gate must fail on the Marketplace step's own outcome",
+    report,
+    /^ {4}if: needs\.publish\.outputs\.marketplace != 'success'$/m,
+    "the report must key off the Marketplace step's own outcome",
+  );
+  assert.equal(
+    report.includes("exit 1"),
+    false,
+    "reporting a Marketplace failure must not fail the release",
   );
   assert.match(
     workflow,
     /^ {6}marketplace: \$\{\{ steps\.marketplace\.outcome \}\}$/m,
-    "the publish job must export the Marketplace outcome for that gate",
+    "the publish job must export the Marketplace outcome for that report",
   );
 };

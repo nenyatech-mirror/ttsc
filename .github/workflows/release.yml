@@ -116,24 +116,37 @@ jobs:
         # stalled publish silently for hours (#1008).
         timeout-minutes: 20
         run: pnpm run package:latest:publish
-  # A tolerated Marketplace rejection must still end the run in red. Keeping the
-  # verdict in its own job is what lets npm's smoke jobs and the release notes
-  # run on the packages that did publish, instead of a Marketplace outage
-  # cancelling the evidence that the npm half of the release is sound.
-  marketplace-gate:
+  # A Marketplace rejection is reported, never fatal. Both failures on record
+  # were the gallery's, not the tag's: a 401 and a three-minute request timeout
+  # on two runs that had already produced every artifact. Failing the release
+  # over them would re-block the npm half this change exists to free, so this
+  # job only annotates the run and writes the recovery into the summary, where
+  # it is visible without reading a thirty-thousand-line log.
+  #
+  # The job-level `if` skips it outright on success, and a skipped job cannot
+  # colour the run.
+  marketplace-report:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: publish
+    if: needs.publish.outputs.marketplace != 'success'
     steps:
-      - name: Require the Marketplace publish to have succeeded
-        if: needs.publish.outputs.marketplace != 'success'
+      - name: Report that the Marketplace publish did not succeed
         run: |
-          echo "Marketplace publish outcome: ${{ needs.publish.outputs.marketplace }}" >&2
-          echo "npm published this tag; samchon.ttsc did not." >&2
-          echo "A 401 means VSCE_PAT is expired or revoked - rotate the secret." >&2
-          echo "Then republish the extension alone:" >&2
-          echo "  VSCE_PAT=... bash scripts/publish-vscode-marketplace.sh" >&2
-          exit 1
+          {
+            echo "### VS Code Marketplace publish did not succeed"
+            echo
+            echo "Outcome: \`${{ needs.publish.outputs.marketplace }}\`"
+            echo
+            echo "npm published \`${GITHUB_REF_NAME}\`; \`samchon.ttsc\` did not."
+            echo "A 401 means \`VSCE_PAT\` is expired or revoked; rotate the secret."
+            echo "Then republish the extension on its own:"
+            echo
+            echo '```sh'
+            echo "VSCE_PAT=... bash scripts/publish-vscode-marketplace.sh"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=Marketplace publish did not succeed::npm published ${GITHUB_REF_NAME}; samchon.ttsc did not. Rotate VSCE_PAT if this was a 401, then run scripts/publish-vscode-marketplace.sh."
   wasm-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
