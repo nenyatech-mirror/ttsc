@@ -86,7 +86,7 @@ func judgeReviewedHost(ctx *rule.Context, host documentedHost) {
       host.Node,
       "Unreviewed @"+string(unreviewed.tag)+" for '"+displayTarget(unreviewed.target)+"' on "+host.describe()+
         ". "+acknowledgementQuestion(unreviewed.tag)+" Nothing states what was verified. Add '"+
-        reviewMarkerFor(unreviewed.tag)+" "+displayTarget(unreviewed.target)+" <what you checked>' to the same documentation block.",
+        reviewMarkerFor(unreviewed.tag)+" "+displayTarget(unreviewed.target)+" <what you checked>' to the same documentation block, or correct this host when the check does not pass."+untrueReviewWarning,
     )
   }
   for _, key := range reviewed.order {

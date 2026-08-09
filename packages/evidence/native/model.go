@@ -17,6 +17,19 @@ const todoRuleName = "evidence/todo"
 
 const reviewRuleName = "evidence/review"
 
+// Appended to every diagnostic a tag could silence, because the cheapest way to
+// clear one of these is to write a tag that is not true, and the reader is
+// usually an agent whose next action is conditioned on this text alone.
+//
+// It names the motive rather than the truth value. A tag written to pass may
+// happen to be true and is still wrong, and "do not write a false tag" invites
+// exactly that reading.
+const untrueTagWarning = " Never write an untrue tag just to pass this check; it removes the error, not the problem."
+
+// The same warning for the two review tags, which are written about a check
+// rather than about a host.
+const untrueReviewWarning = " Never write an untrue review just to pass this check; it removes the error, not the problem."
+
 type artifactKind string
 
 const (

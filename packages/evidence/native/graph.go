@@ -609,7 +609,7 @@ func evaluateEvidenceGraph(
       }
       problems = append(
         problems,
-        "Unresolved evidence target '"+declaration.Target+"' at "+declaration.location()+" for "+context+": no configured source materializes that evidence unit. Correct the target, or make one of the named references select the source unit this claim actually uses.",
+        "Unresolved evidence target '"+declaration.Target+"' at "+declaration.location()+" for "+context+": no configured source materializes that evidence unit. Correct the target, remove the tag when this host does not answer for it, or make one of the named references select the source unit this claim actually uses."+untrueTagWarning,
       )
     case 1:
       for unitID := range candidates {
@@ -867,9 +867,12 @@ func evaluateEvidenceGraph(
       }
       for _, unit := range reference.Units {
         if !acknowledged[unit.ID] {
-          repair := "Use @evidence on a selected " + string(state.Spec.Type) + " host or @evidenceExclude on an eligible carrier."
+          // Building the host is named first because the other two hide it. A
+          // repair offering only the two tags frames the whole problem as which
+          // tag to write, and an unbuilt unit then leaves as an exclusion.
+          repair := "Build the host that owns this unit, cite an existing one with @evidence on a selected " + string(state.Spec.Type) + " host, or write @evidenceExclude on an eligible carrier when nothing here owes it." + untrueTagWarning
           if reference.Spec.Policy.NoExclude {
-            repair = "Use @evidence on a selected " + string(state.Spec.Type) + " host; this reference forbids @evidenceExclude."
+            repair = "Build the host that owns this unit, or cite an existing one with @evidence on a selected " + string(state.Spec.Type) + " host; this reference forbids @evidenceExclude." + untrueTagWarning
           }
           problems = append(
             problems,
@@ -987,21 +990,21 @@ func reviewProblems(
     return []string{
       "Unreviewed @" + string(declaration.Tag) + " for '" + displayTarget(declaration.Target) + "'" + where +
         ": requireReview asks what was verified, which the reason does not answer. Add '" + marker + " " +
-        displayTarget(declaration.Target) + " #" + expected + " <what you checked>' to the same documentation block.",
+        displayTarget(declaration.Target) + " #" + expected + " <what you checked>' to the same documentation block, or correct this host when the check does not pass." + untrueReviewWarning,
     }
   }
   if review.Fingerprint == "" {
     return []string{
       "Unfingerprinted " + marker + " for '" + displayTarget(declaration.Target) + "'" + where +
         ": the review states what was checked and nothing binds it to what it checked, so it can never expire. Write '" +
-        marker + " " + displayTarget(declaration.Target) + " #" + expected + " " + firstReviewWords(review.Description) + "'.",
+        marker + " " + displayTarget(declaration.Target) + " #" + expected + " " + firstReviewWords(review.Description) + "'." + untrueReviewWarning,
     }
   }
   if review.Fingerprint != expected {
     return []string{
       "Stale " + marker + " for '" + displayTarget(declaration.Target) + "'" + where +
         ": the review names '#" + review.Fingerprint + "' and that scope now digests to '#" + expected +
-        "'. The cited content changed after this review was written. Read it again and replace the review, including the new fingerprint.",
+        "'. The cited content changed after this review was written. Read it again and replace the review, including the new fingerprint." + untrueReviewWarning,
     }
   }
   return nil
