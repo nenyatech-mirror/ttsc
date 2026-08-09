@@ -43,6 +43,12 @@ export default {
   },
   rules: {
     "evidence/singular": "error",
+    // A review states what was checked, which the reason does not. It ships
+    // "off" because a review is a record of a check, and the checks happen in
+    // Backend Review, which owns the schema, operation, and test claims declared here. Set this to
+    // "error" there, and every acknowledgement reports itself as unreviewed
+    // until that Review reaches it.
+    "evidence/review": "off",
     // A controller stub marks the work it has not realized with `@todo`, and
     // the tag is the marker until the provider replaces it. Set this to
     // "error" once every public-operation test is written, and the stubs that

@@ -109,7 +109,7 @@ export const test_evidence_reference_selects_an_installed_package =
       );
       assertIncludes(
         result,
-        "Use @evidence on a selected typescript host or @evidenceExclude on an eligible carrier.",
+        "with @evidence on a selected typescript host, building that artifact first when none does, or write @evidenceExclude on an eligible carrier when nothing here owes it.",
         "The repair must preserve both neutral acknowledgement options.",
       );
     } finally {

@@ -168,6 +168,20 @@ Physical deletion removes the target and lets declared cascades handle dependent
 
 Snapshot rows are append-only. Material rows are read-only except for explicitly maintained projection or current-pointer writes.
 
+## Effects This Workspace Cannot Perform
+
+A requirement may name an effect that leaves the system: mail to a verified address, a message to a device, a charge against a payment network, a call to a third party. The workspace has no transport for any of them and none will be added.
+
+Record the effect instead of performing it. The record is a real table, written in the same transaction as the state that caused it, holding the recipient, the kind, the payload, and the time. Nothing about the requirement changes: the effect still happens at the moment the requirement says, carries what the requirement says, and is refused when the requirement says.
+
+That record is the delivery boundary, and three rules follow from it.
+
+- **A secret delivered out of band never returns to the caller.** A recovery proof, a one-time code, or a verification token belongs in the record and in nothing the operation responds with. Returning it publishes an account takeover, whatever the response property is called.
+- **A flow that consumes such a secret reads it from the record.** An operation that verifies a proof no operation can issue is unreachable code behind a published route.
+- **Discarding the effect is not an implementation.** A comment naming the transport that would have sent it leaves the requirement unmet and the omission invisible.
+
+Tests assert against the record: the row exists, addresses the right recipient, carries the right payload, and appears only under the conditions the requirement states. That is what makes an unperformable effect observable, and it is the whole reason it is stored rather than simulated at the call site.
+
 ## Errors And Boundary Validation
 
 Throw through `ErrorUtil` with the public meaning:

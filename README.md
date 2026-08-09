@@ -96,7 +96,11 @@ error TS16411: [evidence/graph] Missing acknowledgement for 'docs/discount.md#co
   (Markdown H2 'Coupon Stacking' at docs/discount.md:3)
   in Claim 1 reference 1 (markdown, symbols: h2, h3).
 
-  Use @evidence on a selected typescript host or @evidenceExclude on an eligible carrier.
+  Cite the artifact that answers for this unit with @evidence on a selected
+  typescript host, building that artifact first when none does, or write
+  @evidenceExclude on an eligible carrier when nothing here owes it. Never
+  leave an untrue tag standing just to pass this check; it removes the error,
+  not the problem.
 
 Found 3 errors.
 ```

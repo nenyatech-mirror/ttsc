@@ -402,7 +402,7 @@ export interface ISale {
 `,
     "src/api/index.ts":    "export * from \"./sale.js\";\n",
     "src/views/detail.ts": "export function detail(): void {}\n",
-  }, entryClaimConfig), "matched 1 file(s) but materialized no selected evidence units (function)")
+  }, entryClaimConfig), "matched 1 file(s) but found no selected evidence units (function)")
 }
 
 /**

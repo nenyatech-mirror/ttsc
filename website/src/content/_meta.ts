@@ -10,6 +10,7 @@ const meta: MetaRecord = {
       toc: false,
       sidebar: false,
       breadcrumb: false,
+      copyPage: false,
     },
   },
   docs: {
@@ -28,6 +29,7 @@ const meta: MetaRecord = {
       toc: false,
       sidebar: false,
       breadcrumb: false,
+      copyPage: false,
     },
   },
 };

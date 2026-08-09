@@ -1,19 +1,19 @@
 # Evidence Frontend Review
 
-Review the frontend only: find and correct every fake `@evidence` and `@evidenceExclude`, especially tags added only to evade compiler errors, and every place the code contradicts a requirement it cites.
+Review the frontend only: find and correct every `@evidence` and `@evidenceExclude` that is not true of its host, and every place the code contradicts a requirement it cites.
+
+Set `"evidence/review"` to `"error"` in `packages/frontend/lint.config.ts` first, then write a review beside every acknowledgement as you check it. The rule proves a review is present; whether it names a check you performed is this review's question.
 
 Read `.agents/skills/review/SKILL.md` and `.agents/skills/review/frontend.md` before working, and follow them exactly.
 
 ## Final Checklist
 
-- [ ] Every active frontend `@evidence` and `@evidenceExclude`, its target, reason, and complete host inspected.
-- [ ] Every fake `@evidence`, including any added only to evade compiler errors, corrected.
-- [ ] Every cited requirement read and the host checked against it; each disagreement resolved in whichever is wrong — the code, the reason, or the target — never in the requirement.
-- [ ] Every exclusion carrier read in full and every entry decided; each names its owner or alternative and invalidating condition, and every fake exclusion corrected.
-- [ ] No exclusion stands in for an artifact this scope owes, and none sits on a working host instead of its carrier.
-- [ ] Every backend carrier entry naming the frontend as owner checked against what this layer delivers, and every frontend entry deferring to the backend checked against the operation and test that carry it.
-- [ ] Every frontend claim is enabled; no other claim configuration changed and `evidence/graph` remained `error`.
-- [ ] All three configurations compared with the baseline, since no later scope reviews them.
+- [ ] `evidence/review` set to `error` in `packages/frontend/lint.config.ts`.
+- [ ] Every claim in all three configurations still enabled, with `evidence/graph`, `evidence/review`, and `evidence/todo` at `error`.
+- [ ] Nothing else in the three changed, since no later scope reviews them.
+- [ ] Every active frontend `@evidence` and `@evidenceExclude` is true of its host, corrected wherever it was not, and never by correcting the requirement.
+- [ ] Every acknowledgement carries a review naming a check you performed.
+- [ ] Every carrier entry deferring to the other layer checked against what that layer now delivers.
 - [ ] Both `pnpm dev` processes reported no diagnostics after the last file change.
 - [ ] Live-backend `pnpm test:e2e` exits with code 0 after the last correction.
 

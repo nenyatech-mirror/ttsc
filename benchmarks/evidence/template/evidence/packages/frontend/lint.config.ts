@@ -26,7 +26,7 @@ import type { ITtscLintConfig } from "@ttsc/lint";
  *
  * The operation and hook references refuse exclusions, because an unconsumed
  * operation and an unused hook are missing work rather than decisions. The
- * requirement and screen references accept a reviewed one, so a screen outside
+ * requirement and screen references accept a decided one, so a screen outside
  * the journeys is a decision someone has to write down and defend.
  *
  * A journey cites each page it traverses as `{@link ThatPage}` resolved through
@@ -121,5 +121,11 @@ export default {
   },
   rules: {
     "evidence/graph": ["error", graph],
+    // A review states what was checked, which the reason does not. It ships
+    // "off" because a review is a record of a check, and the checks happen in
+    // Frontend Review, which owns the claims declared here. Set this to
+    // "error" there, and every acknowledgement reports itself as unreviewed
+    // until that Review reaches it.
+    "evidence/review": "off",
   },
 } satisfies ITtscLintConfig;

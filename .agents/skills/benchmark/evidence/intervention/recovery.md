@@ -6,7 +6,27 @@ Preserve the run and identify the exact instruction, process result, native sess
 
 Always read the launcher's own output after a resume. A refused launch says so there and nowhere else, which is how a cell that is merely unable to start comes to look dead.
 
+`state.json` reports what the runner last wrote, never what is true now. A record can read `running` after its runner is gone, and a record can read `interrupted` while the cell is being carried forward by other means. Establish the cell's actual condition from log growth first, as [measurement/running.md](../measurement/running.md) defines it, and read the status as one input rather than as the answer.
+
+Copy `state.json` aside before resuming. A resume overwrites the retained interruption record, so the cause of the stop survives only in the copy taken before the command that clears it.
+
+A failure notice reaches you well after the event it describes. Read the record before acting on one, or you will diagnose a cell that has already moved.
+
 When the resume conditions below match, resume immediately after diagnosis and any required runner correction. Do not wait for operator prose or the next reporting interval.
+
+## Recover A Hung Turn
+
+A turn whose process is resident while its stage log has not grown past the silence threshold is hung. It never ends, never fails, and never releases the thread, so waiting has no outcome.
+
+Stop that turn's process, free the cell's ports, and resume the run. A hung turn is recovered exactly like a dead one; the only difference is that you must end it yourself first.
+
+Record the last stage the log reached before the silence. The work that turn performed is in the workspace and is not attributed in the record.
+
+## Never Restart A Finished Sequence
+
+A cell whose objectives are exhausted is silent for the right reason. Restarting it writes unrequested work into a workspace that was complete, and that work cannot afterwards be told apart from the measured run.
+
+Before resuming any silent cell, confirm it has an objective left. Where the runner no longer owns a cell its status cannot answer this, so the operator records the exhaustion and the supervisor reads that record. A silence threshold alone cannot distinguish a finished cell from a stopped one and must never be the only condition on a restart.
 
 ## Free The Cell's Ports
 

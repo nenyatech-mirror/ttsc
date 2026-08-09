@@ -76,5 +76,11 @@ export default {
   },
   rules: {
     "evidence/graph": ["error", graph],
+    // A review states what was checked, which the reason does not. It ships
+    // "off" because a review is a record of a check, and the checks happen in
+    // Backend Review, which owns the DTO claims declared here. Set this to
+    // "error" there, and every acknowledgement reports itself as unreviewed
+    // until that Review reaches it.
+    "evidence/review": "off",
   },
 } satisfies ITtscLintConfig;

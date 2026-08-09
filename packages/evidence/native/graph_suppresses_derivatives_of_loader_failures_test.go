@@ -68,7 +68,7 @@ func TestReferenceLoaderFailureSuppressesOnlyItsOwnDerivedFindings(t *testing.T)
   if states[0].References[0].Healthy || !states[0].References[1].Healthy {
     t.Fatalf("reference health was not preserved: %+v", states[0].References)
   }
-  if countProblemsContaining(messages, "materialized no selected evidence units") != 0 {
+  if countProblemsContaining(messages, "found no selected evidence units") != 0 {
     t.Fatalf("a failed loader was reinterpreted as an empty source:\n%s", strings.Join(messages, "\n"))
   }
   if countProblemsContaining(messages, "Missing acknowledgement") != 1 {

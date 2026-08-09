@@ -159,6 +159,8 @@ Every test needs a business assertion. Type validation alone proves only contrac
 
 Assert the exact status or diagnosis when the public contract states it. Otherwise assert a generic refusal. Await both the refusal assertion and the SDK call inside it.
 
+An effect the workspace cannot perform is asserted through the record that stands for it, never through its absence. `providers.md` owns that boundary; the test reads the row and checks the recipient, the payload, and the conditions the requirement puts on it.
+
 A deliberately malformed wire payload cannot pass through the typed SDK. When a requirement promises runtime boundary refusal, isolate the invalid payload in a raw-HTTP helper and assert the public response without weakening production types.
 
 ## Test Integrity
