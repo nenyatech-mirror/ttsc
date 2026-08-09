@@ -175,7 +175,7 @@ export namespace EvidenceBenchmarkWorkspace {
    *
    * `CreateProcess` has no long-path escape. Node prefixes its own file
    * syscalls with `\\?\`, so a package manager creates these files happily and
-   * a directory walk finds them; only the moment something tries to *run* one
+   * a directory walk finds them; only the moment something tries to _run_ one
    * does the limit appear, as `The directory name is invalid`.
    */
   const WINDOWS_EXECUTABLE_PATH_LIMIT = 259;
@@ -186,10 +186,10 @@ export namespace EvidenceBenchmarkWorkspace {
    * A run directory is deep by construction — subject, engine, arm, and a
    * 36-character run id sit under the benchmark's output tree — and pnpm's
    * store adds an encoded package name and a second `node_modules` on top of
-   * it. The platform package carries a bundled Go toolchain, whose deepest
-   * tool is 142 characters below the workspace root, so the two together put
-   * `go build` past `MAX_PATH` and every source-plugin build in the cell fails
-   * with a message about a directory rather than about a path length.
+   * it. The platform package carries a bundled Go toolchain, whose deepest tool
+   * is 142 characters below the workspace root, so the two together put `go
+   * build` past `MAX_PATH` and every source-plugin build in the cell fails with
+   * a message about a directory rather than about a path length.
    *
    * The store holds hard links, so it goes on the workspace's own drive. Its
    * name is derived from the workspace path rather than randomly, so a resumed

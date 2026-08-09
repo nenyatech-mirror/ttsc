@@ -72,7 +72,9 @@ export const test_benchmark_template_build_modes_decide_simulation =
       0,
       "`pnpm build:contract` is what `pnpm test:contract` runs, so a delivered workspace that cannot build simulated has no contract gate.",
     );
-    const simulatedDigest: string = digestDirectory(path.join(frontend, "dist"));
+    const simulatedDigest: string = digestDirectory(
+      path.join(frontend, "dist"),
+    );
 
     if (liveDigest === simulatedDigest)
       throw new Error(
