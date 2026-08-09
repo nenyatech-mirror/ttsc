@@ -210,7 +210,11 @@ Never auto-exclude, auto-retarget, or delete an artifact or citation to make a g
 
 ## Diagnostic Messages
 
-Most users meet this plugin only through an error message. State what is wrong, then what fixes it. Name the claim, reference, target, source location, and supported repair. Prefer one precise diagnostic to several descendant duplicates.
+Most users meet this plugin only through an error message, and increasingly that user is an agent whose next action is conditioned on the message alone. State what is wrong, then what fixes it. Name the claim, reference, target, source location, and supported repair. Prefer one precise diagnostic to several descendant duplicates.
+
+**A repair that lists only tags teaches that the answer is always a tag.** A unit may be unacknowledged because nothing was built, a target may not resolve because the tag does not belong on this host, and a review may be missing because the check failed. Name the code as an option wherever it is one; a reader who is offered two tags will choose the cheaper of the two.
+
+**A diagnostic a falsehood can clear says so.** Where writing, moving, or keeping an untrue tag would silence it, close the message with the standard refusal in `untrueTagWarning`, or `untrueReviewWarning` for the two review tags. It names the motive rather than the truth value, because a tag written to pass may happen to be true and is still wrong, and it states the consequence in the reader's own terms: the error goes and the problem stays. Leave it off a diagnostic whose only cheap answer is deleting something the graph would then report elsewhere.
 
 ## Identity Rules
 

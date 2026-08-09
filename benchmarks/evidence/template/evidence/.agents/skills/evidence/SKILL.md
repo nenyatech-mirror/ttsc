@@ -40,9 +40,7 @@ The reason and the review answer different questions. The reason says why this h
 
 Write the review where the check happens. `evidence/review` ships `"off"` and the Review for each layer turns it on, so reviews are written while that Review inspects each acknowledgement, not while the artifact is still being built. A review written away from its check is written from memory.
 
-Name the artifact you read and the behavior you confirmed, in the form you actually worked from. "Confirmed" and "verified" are conclusions, not checks.
-
-The two tags are checked differently. A citation is checked by reading the target and exercising this host against it. An exclusion is checked by finding what does own the unit, which nothing in the declaration the tag sits on can tell you.
+Name what you read or ran, in the form you actually worked from. "Confirmed" and "verified" are conclusions, not checks. The two tags need different work: a citation is checked by reading the target and exercising this host against it, an exclusion by finding what does own the unit, which nothing in the declaration the tag sits on can tell you.
 
 ```ts
 /**
@@ -57,8 +55,6 @@ The two tags are checked differently. A citation is checked by reading the targe
  * @evidenceExcludeReview docs/analysis/03-functional-requirements.md#req-order-refund read the section, found ShoppingOrderProvider.refund implements it, and confirmed no structures type carries a refund property
  */
 ```
-
-A symbol accumulating citations is the signal this rule exists to raise. Writing one honest review per target forces each to be defended separately, and citations that cannot share a single defensible check were never one responsibility. Split the symbol along the line the reviews expose rather than writing a review broad enough to cover both.
 
 ## Claim Activation
 
@@ -86,7 +82,9 @@ Keep `evidence/graph` at `error` in every gate, and `evidence/review` at `error`
 
 ## Placement
 
-Keep ownership evidence on the actual selected host; the per-phase documents table each claim's host and exclusion carrier. An exclusion carrier holds one reviewed exclusion per target scope and never holds ownership evidence. Providers are not selected hosts and carry neither tag.
+Keep ownership evidence on the actual selected host; the per-phase documents table each claim's host and exclusion carrier. An exclusion carrier holds one exclusion per target scope and never holds ownership evidence. Providers are not selected hosts and carry neither tag.
+
+A review sits in the same documentation block as the acknowledgement it answers for, on that same host or carrier. It has nowhere else to go: the rule pairs the two by host and target.
 
 ## Behavioral Proof
 

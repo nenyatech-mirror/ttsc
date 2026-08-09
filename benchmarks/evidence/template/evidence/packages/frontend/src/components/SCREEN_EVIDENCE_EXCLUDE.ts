@@ -6,6 +6,6 @@
  * this file and an unused hook stays a build failure.
  *
  * Keep real ownership evidence on the screen that delivers it. Add only
- * reviewed non-applicability decisions here.
+ * settled non-applicability decisions here.
  */
 export const SCREEN_EVIDENCE_EXCLUDE = true;
