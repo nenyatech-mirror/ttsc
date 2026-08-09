@@ -15,16 +15,16 @@ import { EvidenceBenchmarkRuntime } from "../../../../benchmarks/evidence/src/Ev
  * created.
  *
  * Isolation arrived mid-cohort and did exactly that. The first cell resumed
- * after it stopped with `no rollout found for thread id`; seeding the rollout by
- * hand moved the failure to `Retained state has no exact empty Goal boundary`,
- * because the Goal store is a different file and was equally empty. Both
- * symptoms, one cause, and the run was two objectives from finishing.
+ * after it stopped with `no rollout found for thread id`; seeding the rollout
+ * by hand moved the failure to `Retained state has no exact empty Goal
+ * boundary`, because the Goal store is a different file and was equally empty.
+ * Both symptoms, one cause, and the run was two objectives from finishing.
  *
  * 1. A run with no retained session is isolated, whether or not it is a fork.
- * 2. A run that already owns a thread, and has no isolated home of its own,
- *    keeps the home that thread lives in.
- * 3. A run that already owns a thread and does have an isolated home keeps
- *    that one, so isolation survives every resume after the first.
+ * 2. A run that already owns a thread, and has no isolated home of its own, keeps
+ *    the home that thread lives in.
+ * 3. A run that already owns a thread and does have an isolated home keeps that
+ *    one, so isolation survives every resume after the first.
  */
 export const test_benchmark_runtime_keeps_an_existing_thread_in_its_own_home =
   (): void => {
@@ -45,7 +45,9 @@ export const test_benchmark_runtime_keeps_an_existing_thread_in_its_own_home =
           "A run with no thread of its own must be isolated; it returned the operator's home.",
         );
       if (!fs.existsSync(path.join(fresh, "config.toml")))
-        throw new Error("An isolated home must carry the generated configuration.");
+        throw new Error(
+          "An isolated home must carry the generated configuration.",
+        );
 
       // Step 2: a retained session with no isolated home beside it. The thread
       // predates isolation, so the home it lives in is the only one that holds
@@ -74,7 +76,10 @@ export const test_benchmark_runtime_keeps_an_existing_thread_in_its_own_home =
         isolatedRoot,
         "019fd289-2dad-7982-b0fc-118955e08129",
       );
-      if (path.resolve(kept) !== path.resolve(path.join(isolatedRoot, "codex-home")))
+      if (
+        path.resolve(kept) !==
+        path.resolve(path.join(isolatedRoot, "codex-home"))
+      )
         throw new Error(
           `A run launched under isolation must keep it on every later resume, got: ${kept}`,
         );

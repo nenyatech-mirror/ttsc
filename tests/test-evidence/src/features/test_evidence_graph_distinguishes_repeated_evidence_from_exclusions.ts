@@ -177,7 +177,7 @@ export const test_evidence_graph_distinguishes_repeated_evidence_from_exclusions
     assertFailure(missing, "Missing evidence must fail the consumer build.");
     assertIncludes(
       missing,
-      "Use @evidence on a selected typescript host or @evidenceExclude on an eligible carrier.",
+      "with @evidence on a selected typescript host, building that artifact first when none does, or write @evidenceExclude on an eligible carrier when nothing here owes it.",
       "The missing diagnostic must retain both repairs without prescribing filler.",
     );
     assertExcludes(

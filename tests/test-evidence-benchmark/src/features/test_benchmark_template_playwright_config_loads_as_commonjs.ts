@@ -67,7 +67,10 @@ export const test_benchmark_template_playwright_config_loads_as_commonjs =
           /^import \{ defineConfig, devices \} from "@playwright\/test";$/mu,
           "const { defineConfig, devices } = require('./playwright-stub.cjs');",
         )
-        .replace(/^import (\w+) from "node:(\w+)";$/gmu, "const $1 = require('node:$2');")
+        .replace(
+          /^import (\w+) from "node:(\w+)";$/gmu,
+          "const $1 = require('node:$2');",
+        )
         .replace(/^export default /mu, "module.exports = ")
         .replace(/(\w+)\s+as\s+\w+/gu, "$1")
         .replace(/:\s*(?:string|number|boolean)\b/gu, "");

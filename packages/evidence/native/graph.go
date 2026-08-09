@@ -1136,7 +1136,7 @@ func hiddenTargetProblem(
   hidden *evidenceUnit,
   context string,
 ) string {
-  return "Hidden evidence target '" + displayTarget(declaration.Target) + "' at " + declaration.location() + " for " + context + ": " + hidden.Readable + " at " + hidden.location() + " carries '" + hidden.Hidden + "' in its documentation comment, which removes it from the evidence population along with everything nested inside it. Remove the tag if the declaration is public contract, or drop this citation if it is not. Do not remove '@hidden' from the target to make this citation legal."+untrueTagWarning
+  return "Hidden evidence target '" + displayTarget(declaration.Target) + "' at " + declaration.location() + " for " + context + ": " + hidden.Readable + " at " + hidden.location() + " carries '" + hidden.Hidden + "' in its documentation comment, which removes it from the evidence population along with everything nested inside it. Remove the tag if the declaration is public contract, or drop this citation if it is not. Do not remove '@hidden' from the target to make this citation legal." + untrueTagWarning
 }
 
 func declarationResolutionUncertain(owners []claimState) bool {
