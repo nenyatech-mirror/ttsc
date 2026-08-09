@@ -19,7 +19,7 @@ Each heading opens with its own identifier, and that identifier is what a record
 | an omission is a decision | an entry in `omissions.md` naming the identifier, what owns the requirement instead, and the condition that would make the decision false |
 | a family is one decision | an omission naming an H2 identifier covers its H3 children, so a concept no browser delivers is written down once |
 
-The family rule is what makes the largest subject tractable. `shopping` has 427 sections and 73 of them are H2, so its non-visual concepts are 73 decisions rather than 427.
+The family rule is what makes the largest subject tractable. `erp` has 1487 sections and 253 of them are H2, so its non-visual concepts are 253 decisions rather than 1487.
 
 "No screen needed" is a conclusion, not a reason. A section a browser genuinely does not deliver, a persistence rule or an authorization boundary the backend enforces alone, belongs in `omissions.md` with that owner named.
 

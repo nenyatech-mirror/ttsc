@@ -506,6 +506,172 @@
         "obligations": [],
         "edges": []
       }
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "subject": "erp",
+      "arm": "plain",
+      "coverage": {
+        "arm": "plain",
+        "measured": true,
+        "score": 0.3167055414856898,
+        "wholeness": {
+          "test": 1,
+          "journey": 1,
+          "property": 1,
+          "dto": 0.8299120234604106,
+          "screen": 1,
+          "hook": 0.8888888888888888,
+          "api": 0.09794534211051267,
+          "model": 0.44055087930770354
+        },
+        "obligations": [
+          {
+            "name": "model",
+            "edge": "requirementToModel",
+            "rate": 0.6252771618625277,
+            "wholeness": 0.44055087930770354,
+            "value": 0.27546640346956186
+          },
+          {
+            "name": "operation",
+            "edge": "requirementToOperation",
+            "rate": 0.9429778247096093,
+            "wholeness": 0.09794534211051267,
+            "value": 0.09236028564380974
+          },
+          {
+            "name": "dto",
+            "edge": "requirementToDto",
+            "rate": 0.6252771618625277,
+            "wholeness": 0.8299120234604106,
+            "value": 0.518925034624913
+          },
+          {
+            "name": "test",
+            "edge": "requirementToTest",
+            "rate": 0.6589229144667371,
+            "wholeness": 1,
+            "value": 0.6589229144667371
+          },
+          {
+            "name": "screen",
+            "edge": "requirementToScreen",
+            "rate": 0.29088277858176553,
+            "wholeness": 1,
+            "value": 0.29088277858176553
+          },
+          {
+            "name": "journey",
+            "edge": "requirementToJourney",
+            "rate": 0.06367583212735166,
+            "wholeness": 1,
+            "value": 0.06367583212735166
+          }
+        ],
+        "edges": [
+          {
+            "name": "columnToProperty",
+            "eligible": 682,
+            "reached": 566,
+            "rate": 0.8299120234604106
+          },
+          {
+            "name": "screenToJourney",
+            "eligible": 7,
+            "reached": 7,
+            "rate": 1
+          },
+          {
+            "name": "hookToScreen",
+            "eligible": 9,
+            "reached": 8,
+            "rate": 0.8888888888888888
+          },
+          {
+            "name": "accessorToTest",
+            "eligible": 557,
+            "reached": 78,
+            "rate": 0.1400359066427289
+          },
+          {
+            "name": "accessorToHook",
+            "eligible": 557,
+            "reached": 35,
+            "rate": 0.06283662477558348
+          },
+          {
+            "name": "modelToOperation",
+            "eligible": 71,
+            "reached": 71,
+            "rate": 1
+          },
+          {
+            "name": "modelToDto",
+            "eligible": 71,
+            "reached": 67,
+            "rate": 0.9436619718309859
+          },
+          {
+            "name": "requirementToModel",
+            "eligible": 451,
+            "reached": 282,
+            "rate": 0.6252771618625277
+          },
+          {
+            "name": "requirementToOperation",
+            "eligible": 947,
+            "reached": 893,
+            "rate": 0.9429778247096093
+          },
+          {
+            "name": "requirementToDto",
+            "eligible": 451,
+            "reached": 282,
+            "rate": 0.6252771618625277
+          },
+          {
+            "name": "requirementToTest",
+            "eligible": 947,
+            "reached": 624,
+            "rate": 0.6589229144667371
+          },
+          {
+            "name": "requirementToScreen",
+            "eligible": 691,
+            "reached": 201,
+            "rate": 0.29088277858176553
+          },
+          {
+            "name": "requirementToJourney",
+            "eligible": 691,
+            "reached": 44,
+            "rate": 0.06367583212735166
+          }
+        ]
+      }
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "subject": "erp",
+      "arm": "evidence",
+      "coverage": {
+        "arm": "evidence",
+        "measured": false,
+        "score": 1,
+        "wholeness": {
+          "test": 1,
+          "journey": 1,
+          "property": 1,
+          "dto": 1,
+          "screen": 1,
+          "hook": 1,
+          "api": 1,
+          "model": 1
+        },
+        "obligations": [],
+        "edges": []
+      }
     }
   ]
 }

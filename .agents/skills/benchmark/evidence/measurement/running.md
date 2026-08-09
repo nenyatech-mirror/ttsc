@@ -50,6 +50,8 @@ Every cell owns a disjoint block of four ports from base 46000, so two cells nev
 | reddit   | plain    | 46030 | 46031   | 46032 | 46033      |
 | shopping | evidence | 46040 | 46041   | 46042 | 46043      |
 | shopping | plain    | 46050 | 46051   | 46052 | 46053      |
+| erp      | evidence | 46060 | 46061   | 46062 | 46063      |
+| erp      | plain    | 46070 | 46071   | 46072 | 46073      |
 
 The block reaches the workspace as `API_PORT`, `SWAGGER_PORT`, `VITE_DEV_PORT`, `VITE_API_HOST`, and `PLAYWRIGHT_TEST_PORT`, so the cell's own commands and tests inherit it without being told.
 
