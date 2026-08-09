@@ -19,6 +19,7 @@ require (
 	github.com/microsoft/typescript-go/shim/ast v0.0.0
 	github.com/microsoft/typescript-go/shim/core v0.0.0
 	github.com/microsoft/typescript-go/shim/parser v0.0.0
+	github.com/microsoft/typescript-go/shim/scanner v0.0.0
 	github.com/samchon/ttsc/packages/lint v0.0.0
 )
 

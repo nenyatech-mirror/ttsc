@@ -115,8 +115,9 @@ export function parse(value: string): string {
  *
  * This is the rule's correctness constraint made observable: what it accepts
  * must equal what the tag collector can see. A tag written in a `//` comment is
- * silently ignored by the graph today, so accepting one here would certify a
- * declaration that can still never cite anything.
+ * unreadable to the graph, which reports it rather than acting on it, so
+ * accepting one here would certify a declaration that can still never cite
+ * anything.
  *
  *  1. Precede an export with a line comment carrying a citation.
  *  2. Run the rule.
@@ -124,7 +125,7 @@ export function parse(value: string): string {
  */
 func TestDocumentedRejectsLineComments(t *testing.T) {
   messages := runDocumentedRule(t, "src/parse.ts", `
-// @evidence docs/spec.md#parse This tag is invisible to the graph.
+// @evidence docs/spec.md#parse The graph reports this tag rather than reading it.
 export function parse(value: string): string {
   return value;
 }
@@ -144,7 +145,7 @@ export function parse(value: string): string {
  */
 func TestDocumentedRejectsNonJsdocBlockComments(t *testing.T) {
   messages := runDocumentedRule(t, "src/parse.ts", `
-/* @evidence docs/spec.md#parse This tag is invisible to the graph. */
+/* @evidence docs/spec.md#parse The graph reports this tag rather than reading it. */
 export function parse(value: string): string {
   return value;
 }

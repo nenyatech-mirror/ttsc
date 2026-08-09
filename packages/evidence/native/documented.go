@@ -251,20 +251,17 @@ func documentedHosts(file *shimast.SourceFile) []documentedHost {
 
 // hostNodesOf keeps the declarations that can actually carry a citation.
 //
-// A unit's nodes are not all positions a tag can live in. `export const x = 1`
-// records three. The binding identifier names the unit and is recorded for
-// that. The statement wrapper and the declarator are recorded because they are
-// host positions, and every walk from a unit to its declarations has to reach
-// the positions the host map holds. Only the binding is not a host.
+// A unit's nodes are the positions the identity owns, and owning a position is
+// not the same as being able to hold a tag there. A withdrawn identity records
+// declarations that are deliberately not hosts, and the caller has skipped
+// those before asking, so every position reaching this today is one. That makes
+// the filter remove nothing, which is the point: it states the premise the rule
+// depends on rather than waiting for a form that breaks it.
 //
-// Demanding the block at the binding would send an author's `@evidence` where
-// `evidence/graph` rejects it as an unsupported host, the rule steering
-// citations somewhere a citation cannot live, which is the failure it exists to
-// prevent.
-//
-// Narrowing to real hosts also keeps this rule's premise exact. The population
-// that must be able to hold a tag is the population a claim can select as a
-// host, and nothing wider.
+// Demanding a block at a position that is not a host would send an author's
+// `@evidence` where `evidence/graph` rejects it as an unsupported host, the
+// rule steering citations somewhere a citation cannot live, which is the
+// failure it exists to prevent.
 func hostNodesOf(
   nodes []*shimast.Node,
   supported map[*shimast.Node]symbolSet,
@@ -283,8 +280,8 @@ func hostNodesOf(
 //
 // The collector records them as it walks, and the merged forms are folded in
 // afterwards, so the slice arrives in neither order. Placement is defined
-// against the declaration that comes first, so that has to be `Node` — and for
-// a variable the enclosing statement wins over its binding, which is where
+// against the declaration that comes first, so that has to be `Node`, and for a
+// variable the enclosing statement wins over its declarator, which is where
 // TypeScript actually attaches the block.
 func orderIdentityDeclarations(hosts []documentedHost) []documentedHost {
   for index := range hosts {

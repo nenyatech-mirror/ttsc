@@ -237,9 +237,11 @@ type evidenceUnit struct {
   // itself cited would otherwise change the digest that the review's own
   // fingerprint is checked against, and the repair would never terminate.
   //
-  // Empty when the loader for this artifact kind cannot see the unit's
-  // content. A reference over such a population refuses `requireReview` at
-  // decode rather than comparing against nothing.
+  // Empty when the bridge that read this artifact reported no content for the
+  // unit, which is a loader gap rather than a configuration one: every
+  // reference kind may require a review, and every bridge digests what it
+  // parsed. A consumer of an empty digest reports nothing rather than
+  // comparing against nothing.
   Digest string
 }
 
@@ -297,6 +299,14 @@ type artifactInventory struct {
   // from Declarations so no consumer counting acknowledgements can reach one.
   Reviews  []*evidenceReview
   Problems []inventoryProblem
+  // Unreadable lists the tags this artifact carries in a position nothing can
+  // read, already worded as diagnostics.
+  //
+  // They are kept apart from Problems because they are not a health question.
+  // The file loaded and its units are complete, so treating one as a failed
+  // population would suppress the obligations the author still owes while
+  // telling them only about a comment.
+  Unreadable []string
   // LoadFailed distinguishes an unreadable or rejected artifact from a
   // healthy artifact that legitimately materializes no selected units.
   // Coverage is a completeness claim, so a failed inventory cannot be used
@@ -324,6 +334,18 @@ type artifactInventory struct {
   // physical JSDoc declaration to semantic claim-host identities, then releases
   // it; callers with no such use leave it nil.
   UnitNodes map[string][]*shimast.Node
+  // UnitContent maps a unit ID to the nodes whose text is that identity's
+  // content, and is a subset of UnitNodes.
+  //
+  // Belonging to an identity and being its content are different questions,
+  // and a variable is where they part. TypeScript attaches a variable's
+  // leading documentation to the statement wrapper, so the wrapper is a
+  // position this identity owns — but the wrapper is also where its siblings
+  // are declared, and their text is not this identity's content. Answering the
+  // second question with the first makes one declarator's edit move another
+  // declarator's fingerprint. Each declaration site states which of its nodes
+  // is which; nothing here is derived from spans.
+  UnitContent map[string][]*shimast.Node
 }
 
 func (inventory *artifactInventory) recordUnitNode(id string, node *shimast.Node) {
@@ -331,6 +353,23 @@ func (inventory *artifactInventory) recordUnitNode(id string, node *shimast.Node
     return
   }
   inventory.UnitNodes[id] = append(inventory.UnitNodes[id], node)
+}
+
+// recordUnitContent records a node as this identity's content, and as a
+// position it owns.
+//
+// Content is recorded through the position index rather than beside it, so the
+// subset the field documents holds by construction instead of by two callers
+// agreeing.
+func (inventory *artifactInventory) recordUnitContent(id string, node *shimast.Node) {
+  if inventory == nil || node == nil {
+    return
+  }
+  inventory.recordUnitNode(id, node)
+  if inventory.UnitNodes == nil || inventory.UnitContent == nil {
+    return
+  }
+  inventory.UnitContent[id] = append(inventory.UnitContent[id], node)
 }
 
 type inventoryProblem struct {
