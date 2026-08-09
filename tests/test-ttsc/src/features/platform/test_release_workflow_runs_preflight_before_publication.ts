@@ -16,10 +16,19 @@ import { assert, fs, path, workspaceRoot } from "../../internal/toolchain";
  * command is not the command, and a gate that cannot tell them apart fails on
  * the next comment that mentions one.
  *
+ * Publication order is not a dependency. The extension leads the release, but
+ * v0.26.0 answered 401 at the Marketplace and took the whole npm release down
+ * with it, publishing the compiler, the runtime, and seven platform binaries
+ * nowhere. The Marketplace step therefore tolerates its own rejection, and a
+ * separate `marketplace-gate` job carries the verdict so the run still ends
+ * red.
+ *
  * 1. Read the release workflow and drop its comment lines.
  * 2. Locate deterministic preflight, build, credentials, and both publications.
  * 3. Assert preflight precedes every mutation and no Marketplace probe is wired
  *    into the release path.
+ * 4. Assert releases serialize, and that a Marketplace rejection neither blocks
+ *    npm nor passes unreported.
  */
 export const test_release_workflow_runs_preflight_before_publication = () => {
   const source = fs.readFileSync(
@@ -67,5 +76,46 @@ export const test_release_workflow_runs_preflight_before_publication = () => {
   assert.ok(
     marketplacePublish < npmPublish,
     "Marketplace publication must run before npm publication",
+  );
+
+  // Two tags pushed together once put two publish jobs on one npm account and
+  // one Marketplace extension at the same moment, and neither version shipped.
+  assert.match(
+    workflow,
+    /^concurrency:\n {2}group: release\n {2}cancel-in-progress: false$/m,
+    "releases must serialize without cancelling a publish already in flight",
+  );
+
+  // Ordering keeps the extension first; tolerance keeps npm out of its blast
+  // radius. Both halves have to hold, or the pairing is not what it claims.
+  // Slice from the step header, not from the script path: `continue-on-error`
+  // precedes `run`, and the recovery hint in marketplace-gate names the script
+  // again further down.
+  const stepHeader = workflow.indexOf(
+    "      - name: Publish VS Code Marketplace extension\n",
+  );
+  assert.notEqual(stepHeader, -1, "Marketplace publish step is missing");
+  const marketplaceStep = workflow.slice(stepHeader, npmPublish);
+  assert.match(
+    marketplaceStep,
+    /^ {8}continue-on-error: true$/m,
+    "a Marketplace rejection must not withhold the npm release",
+  );
+
+  // Tolerated is not forgiven: the outcome still has to fail the run.
+  assert.match(
+    workflow,
+    /^ {2}marketplace-gate:$/m,
+    "a tolerated Marketplace failure needs a job that reports it",
+  );
+  assert.match(
+    workflow,
+    /needs\.publish\.outputs\.marketplace != 'success'/,
+    "marketplace-gate must fail on the Marketplace step's own outcome",
+  );
+  assert.match(
+    workflow,
+    /^ {6}marketplace: \$\{\{ steps\.marketplace\.outcome \}\}$/m,
+    "the publish job must export the Marketplace outcome for that gate",
   );
 };
