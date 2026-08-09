@@ -86,7 +86,7 @@ func judgeReviewedHost(ctx *rule.Context, host documentedHost) {
       host.Node,
       "Unreviewed @"+string(unreviewed.tag)+" for '"+displayTarget(unreviewed.target)+"' on "+host.describe()+
         ". "+acknowledgementQuestion(unreviewed.tag)+" Nothing states what was verified. Add '"+
-        reviewMarkerFor(unreviewed.tag)+" "+displayTarget(unreviewed.target)+" <what you checked>' to the same documentation block.",
+        reviewMarkerFor(unreviewed.tag)+" "+displayTarget(unreviewed.target)+" <what you checked>' to the same documentation block, or correct this host when what you checked did not hold. "+reviewExample(unreviewed.tag)+untrueReviewWarning,
     )
   }
   for _, key := range reviewed.order {
@@ -133,7 +133,7 @@ func judgeReviewedHost(ctx *rule.Context, host documentedHost) {
     ctx.Report(
       host.Node,
       "Orphan "+review.marker()+" for '"+displayTarget(review.Target)+"' on "+host.describe()+
-        ": this identity carries no @"+string(review.Reviews)+" for that target, so the review answers nothing. Correct the target, add the acknowledgement it reviews, or remove the review.",
+        ": this identity carries no @"+string(review.Reviews)+" for that target, so the review answers nothing. Correct the target, add the acknowledgement it reviews when this host does answer for that target, or remove the review."+untrueReviewWarning,
     )
   }
   for _, duplicate := range reviewed.duplicated {
@@ -151,6 +151,19 @@ func judgeReviewedHost(ctx *rule.Context, host documentedHost) {
 // citation is verified by checking that this declaration does what the cited unit
 // describes. An exclusion is verified by checking that the unit genuinely does not
 // apply here, which no reading of this declaration can establish on its own.
+// reviewExample shows the shape of a check that answers this tag's question.
+//
+// The two examples differ because the two checks do. A citation is answered by
+// reading the target and exercising the host against it. An exclusion is
+// answered by finding what does own the unit, which is work outside the
+// declaration the tag sits on.
+func reviewExample(tag tagKind) string {
+  if tag == tagExclude {
+    return "A review of an exclusion names where the unit is handled instead, as in 'confirmed ShoppingSaleProvider owns it and no DTO publishes it'."
+  }
+  return "A review of a citation names what you read or ran, as in 'read the section's three rules and ran the checkout test'."
+}
+
 func acknowledgementQuestion(tag tagKind) string {
   if tag == tagExclude {
     return "The exclusion states that this claim does not cover that target."

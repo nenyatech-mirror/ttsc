@@ -2,9 +2,15 @@
 
 The scope is the backend: every active acknowledgement in the `schema-models`, `api-operations`, `dto-types`, `dto-properties`, and `backend-tests` claims.
 
+## Configuration
+
+Raise `evidence/review` to `"error"` in `packages/api/lint.config.ts` (DTO claims) and `packages/backend/test/lint.config.ts` (schema, operation, and test claims with the file rules). Every acknowledgement then reports itself as unreviewed, and one still reporting is one this scope has not reached.
+
+That is this scope's one permitted edit. Compare both files with the baseline afterwards; every other difference is a finding.
+
 ## Exclusion Carriers
 
-Read all four in full:
+The rule lists every unreviewed exclusion, but reading a carrier whole is what shows two entries deferring one requirement to each other. Read all four:
 
 - `packages/backend/prisma/schema/exclude.schema`
 - `packages/api/src/structures/DTO_EVIDENCE_EXCLUDE.ts`
@@ -12,10 +18,6 @@ Read all four in full:
 - `packages/backend/test/features/TEST_EVIDENCE_EXCLUDE.ts`
 
 `backend-tests` accepts an exclusion for a requirement only. An entry there answering for an operation, or any exclusion standing in for a schema model, an operation, or a test this layer owes, is a finding.
-
-## Configuration
-
-Compare `packages/api/lint.config.ts` (DTO claims) and `packages/backend/test/lint.config.ts` (schema, operation, and test claims with the file rules) with the baseline.
 
 ## Gates
 

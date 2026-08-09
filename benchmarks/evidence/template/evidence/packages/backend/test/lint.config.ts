@@ -43,13 +43,12 @@ export default {
   },
   rules: {
     "evidence/singular": "error",
-    // One verification statement beside every acknowledgement. The graph counts
-    // whether a target is cited; it cannot count whether the citing host does
-    // what the target asks, so a citation that is wrong and one that is right
-    // are the same bytes to it. Writing what was actually checked is what makes
-    // the difference visible, and it is what turns a symbol carrying several
-    // unrelated citations into several symbols.
-    "evidence/review": "error",
+    // A review states what was checked, which the reason does not. It ships
+    // "off" because a review is a record of a check, and the checks happen in
+    // Backend Review, which owns the schema, operation, and test claims declared here. Set this to
+    // "error" there, and every acknowledgement reports itself as unreviewed
+    // until that Review reaches it.
+    "evidence/review": "off",
     // A controller stub marks the work it has not realized with `@todo`, and
     // the tag is the marker until the provider replaces it. Set this to
     // "error" once every public-operation test is written, and the stubs that

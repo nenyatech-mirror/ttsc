@@ -17,6 +17,25 @@ const todoRuleName = "evidence/todo"
 
 const reviewRuleName = "evidence/review"
 
+// Appended to every diagnostic a tag could silence, because the cheapest way to
+// clear one of these is to write a tag that is not true, and the reader is
+// usually an agent whose next action is conditioned on this text alone.
+//
+// It names the motive rather than the truth value. A tag written to pass may
+// happen to be true and is still wrong, and "do not write a false tag" invites
+// exactly that reading.
+//
+// "Leave standing" rather than "write", because writing is only one of the ways
+// a falsehood clears a diagnostic. A tag can also be moved onto a declaration
+// that does not own its target, or kept when the conflicting one is deleted.
+// One verb covers all three, so every diagnostic carries the same sentence and
+// the reader meets one rule rather than three variants of it.
+const untrueTagWarning = " Never leave an untrue tag standing just to pass this check; it removes the error, not the problem."
+
+// The same warning for the two review tags, which are written about a check
+// rather than about a host.
+const untrueReviewWarning = " Never leave an untrue review standing just to pass this check; it removes the error, not the problem."
+
 type artifactKind string
 
 const (

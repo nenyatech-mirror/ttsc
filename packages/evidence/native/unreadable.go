@@ -93,7 +93,8 @@ func unreadableTagProblem(tag string, location string, line int) string {
   return "Unreadable " + tag + " at " + location + ":" + decimal(line) +
     ": the parser attaches this comment to no declaration, so nothing reads the tag." +
     " Move it into a documentation block written directly above the declaration it answers for," +
-    " or delete it with the code it was written against."
+    " or delete it with the code it was written against." +
+    untrueTagWarning
 }
 
 // readableCommentBody strips the syntax a comment opens with, so a line that

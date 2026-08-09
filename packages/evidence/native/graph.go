@@ -422,7 +422,7 @@ func materializeClaimStates(
         !selectedInventoryProblem {
         problems = append(
           problems,
-          claimLabel(claim)+" "+referenceLabel(reference)+" matched "+decimal(len(referencePaths))+" file(s) but materialized no selected evidence units ("+reference.Symbols.names()+"). Select symbol kinds present in those files or correct the reference globs.",
+          claimLabel(claim)+" "+referenceLabel(reference)+" matched "+decimal(len(referencePaths))+" file(s) but found no selected evidence units ("+reference.Symbols.names()+"). Select symbol kinds present in those files or correct the reference globs.",
         )
       }
       state.References = append(state.References, referenceState)
@@ -552,7 +552,7 @@ func evaluateEvidenceGraph(
     if !declaration.valid() {
       problems = append(
         problems,
-        "Malformed @"+string(declaration.Tag)+" declaration at "+declaration.location()+" for "+context+": target and non-empty reason are mandatory. Write '@"+string(declaration.Tag)+" <target> <reason>'.",
+        "Malformed @"+string(declaration.Tag)+" declaration at "+declaration.location()+" for "+context+": target and non-empty reason are mandatory. Write '@"+string(declaration.Tag)+" <target> <reason>'.+untrueTagWarning",
       )
       continue
     }
@@ -618,7 +618,7 @@ func evaluateEvidenceGraph(
       }
       problems = append(
         problems,
-        "Unresolved evidence target '"+declaration.Target+"' at "+declaration.location()+" for "+context+": no configured source materializes that evidence unit. Correct the target, or make one of the named references select the source unit this claim actually uses.",
+        "Unresolved evidence target '"+declaration.Target+"' at "+declaration.location()+" for "+context+": no configured source materializes that evidence unit. Correct the target, make one of the named references select the source unit this claim actually uses, or remove the tag when this host does not answer for that target."+untrueTagWarning,
       )
     case 1:
       for unitID := range candidates {
@@ -743,7 +743,7 @@ func evaluateEvidenceGraph(
         if declaration.Tag == tagExclude && reference.Spec.Policy.NoExclude {
           problems = append(
             problems,
-            "Forbidden @evidenceExclude for '"+scopesByID[scopeID].Target+"' at "+declaration.location()+" in "+claimLabel(state.Spec)+" "+referenceLabel(reference.Spec)+": noEvidenceExclude requires positive @evidence for this reference. Remove the exclusion and cite the target from a selected "+string(state.Spec.Type)+" host.",
+            "Forbidden @evidenceExclude for '"+scopesByID[scopeID].Target+"' at "+declaration.location()+" in "+claimLabel(state.Spec)+" "+referenceLabel(reference.Spec)+": noEvidenceExclude requires positive @evidence for this reference. Remove the exclusion and cite the target from a selected "+string(state.Spec.Type)+" host that answers for it."+untrueTagWarning,
           )
           continue
         }
@@ -849,7 +849,7 @@ func evaluateEvidenceGraph(
           }
           problems = append(
             problems,
-            "Conflicting acknowledgements for '"+conflictingUnit.Target+"' in "+claimLabel(state.Spec)+" "+referenceLabel(reference.Spec)+": @evidence at "+evidence.location()+" overlaps @evidenceExclude at "+exclusion.location()+".",
+            "Conflicting acknowledgements for '"+conflictingUnit.Target+"' in "+claimLabel(state.Spec)+" "+referenceLabel(reference.Spec)+": @evidence at "+evidence.location()+" overlaps @evidenceExclude at "+exclusion.location()+". Delete whichever is untrue of this host."+untrueTagWarning,
           )
         }
         if duplicateExclusionUnit != nil {
@@ -870,15 +870,18 @@ func evaluateEvidenceGraph(
           }
           problems = append(
             problems,
-            "Evidence host "+host.Readable+" at "+host.location()+" in "+claimLabel(state.Spec)+" "+referenceLabel(reference.Spec)+" cites "+decimal(count)+" distinct selected evidence unit(s); singleEvidencePerSymbol requires exactly 1. Keep positive @evidence citations on this semantic host to exactly one distinct unit.",
+            "Evidence host "+host.Readable+" at "+host.location()+" in "+claimLabel(state.Spec)+" "+referenceLabel(reference.Spec)+" cites "+decimal(count)+" distinct selected evidence unit(s); singleEvidencePerSymbol requires exactly 1. Split this host so each unit has one that owns it, or keep positive @evidence citations on this semantic host to exactly one distinct unit.",
           )
         }
       }
       for _, unit := range reference.Units {
         if !acknowledged[unit.ID] {
-          repair := "Use @evidence on a selected " + string(state.Spec.Type) + " host or @evidenceExclude on an eligible carrier."
+          // Building the host is named first because the other two hide it. A
+          // repair offering only the two tags frames the whole problem as which
+          // tag to write, and an unbuilt unit then leaves as an exclusion.
+          repair := "Cite the artifact that answers for this unit with @evidence on a selected " + string(state.Spec.Type) + " host, building that artifact first when none does, or write @evidenceExclude on an eligible carrier when nothing here owes it." + untrueTagWarning
           if reference.Spec.Policy.NoExclude {
-            repair = "Use @evidence on a selected " + string(state.Spec.Type) + " host; this reference forbids @evidenceExclude."
+            repair = "Cite the artifact that answers for this unit with @evidence on a selected " + string(state.Spec.Type) + " host, building that artifact first when none does; this reference forbids @evidenceExclude." + untrueTagWarning
           }
           problems = append(
             problems,
@@ -905,7 +908,7 @@ func evaluateEvidenceGraph(
     if obligations := outsideCarrier[id]; len(obligations) != 0 {
       problems = append(
         problems,
-        "Misplaced @evidenceExclude at "+declaration.location()+" for "+strings.Join(obligations, "; ")+", target '"+displayTarget(declaration.Target)+"': evidenceExcludeCarriers confines this claim's exclusions to "+outsideCarrierGlobs[id]+". Move the tag there, or delete it and implement the target this claim owes.",
+        "Misplaced @evidenceExclude at "+declaration.location()+" for "+strings.Join(obligations, "; ")+", target '"+displayTarget(declaration.Target)+"': evidenceExcludeCarriers confines this claim's exclusions to "+outsideCarrierGlobs[id]+". Move the tag there, or delete it and build what the target requires of this claim."+untrueTagWarning,
       )
       continue
     }
@@ -923,7 +926,7 @@ func evaluateEvidenceGraph(
       }
       problems = append(
         problems,
-        "Out-of-scope @"+string(declaration.Tag)+" host at "+declaration.location()+" for "+strings.Join(obligations, "; ")+", target '"+displayTarget(declaration.Target)+"': host kind '"+host+"' is not selected ("+outOfScopeSelections[id].names()+") by any of these claim obligations. Move the declaration to a selected host, or widen only the claim symbol selector that genuinely owns this target.",
+        "Out-of-scope @"+string(declaration.Tag)+" host at "+declaration.location()+" for "+strings.Join(obligations, "; ")+", target '"+displayTarget(declaration.Target)+"': host kind '"+host+"' is not selected ("+outOfScopeSelections[id].names()+") by any of these claim obligations. Move the declaration to a selected host, or widen the claim symbol selector only when it genuinely owns this target."+untrueTagWarning,
       )
       continue
     }
@@ -935,7 +938,7 @@ func evaluateEvidenceGraph(
     }
     problems = append(
       problems,
-      "Non-participating @"+string(declaration.Tag)+" target '"+displayTarget(declaration.Target)+"' at "+declaration.location()+" for "+context+": the target resolves, but none of this declaration's configured references selects it. Correct the target or reference, or move the tag to an eligible host or exclusion carrier in the claim that owes it; a resolving tag must discharge at least one obligation.",
+      "Non-participating @"+string(declaration.Tag)+" target '"+displayTarget(declaration.Target)+"' at "+declaration.location()+" for "+context+": the target resolves, but none of this declaration's configured references selects it. Correct the target or reference, or move the tag to an eligible host or exclusion carrier in the claim that owes it; a resolving tag must discharge at least one obligation."+untrueTagWarning,
     )
   }
   return problems
@@ -996,21 +999,21 @@ func reviewProblems(
     return []string{
       "Unreviewed @" + string(declaration.Tag) + " for '" + displayTarget(declaration.Target) + "'" + where +
         ": requireReview asks what was verified, which the reason does not answer. Add '" + marker + " " +
-        displayTarget(declaration.Target) + " #" + expected + " <what you checked>' to the same documentation block.",
+        displayTarget(declaration.Target) + " #" + expected + " <what you checked>' to the same documentation block, or correct this host when what you checked did not hold. " + reviewExample(declaration.Tag) + untrueReviewWarning,
     }
   }
   if review.Fingerprint == "" {
     return []string{
       "Unfingerprinted " + marker + " for '" + displayTarget(declaration.Target) + "'" + where +
-        ": the review states what was checked and nothing binds it to what it checked, so it can never expire. Write '" +
-        marker + " " + displayTarget(declaration.Target) + " #" + expected + " " + firstReviewWords(review.Description) + "'.",
+        ": the review states what was checked and does not name the fingerprint of what it checked, so it can never expire. Write '" +
+        marker + " " + displayTarget(declaration.Target) + " #" + expected + " " + firstReviewWords(review.Description) + "'." + untrueReviewWarning,
     }
   }
   if review.Fingerprint != expected {
     return []string{
       "Stale " + marker + " for '" + displayTarget(declaration.Target) + "'" + where +
         ": the review names '#" + review.Fingerprint + "' and that scope now digests to '#" + expected +
-        "'. The cited content changed after this review was written. Read it again and replace the review, including the new fingerprint.",
+        "'. The cited content changed after this review was written. Read it again and replace the review, including the new fingerprint, or correct this host when the change means it no longer answers for that target." + untrueReviewWarning,
     }
   }
   return nil
@@ -1133,7 +1136,7 @@ func hiddenTargetProblem(
   hidden *evidenceUnit,
   context string,
 ) string {
-  return "Hidden evidence target '" + displayTarget(declaration.Target) + "' at " + declaration.location() + " for " + context + ": " + hidden.Readable + " at " + hidden.location() + " carries '" + hidden.Hidden + "' in its documentation comment, which withdraws it from the evidence population along with everything nested inside it. Remove the tag if the declaration is public contract, or drop this citation if it is not."
+  return "Hidden evidence target '" + displayTarget(declaration.Target) + "' at " + declaration.location() + " for " + context + ": " + hidden.Readable + " at " + hidden.location() + " carries '" + hidden.Hidden + "' in its documentation comment, which removes it from the evidence population along with everything nested inside it. Remove the tag if the declaration is public contract, or drop this citation if it is not. Do not remove '@hidden' from the target to make this citation legal."+untrueTagWarning
 }
 
 func declarationResolutionUncertain(owners []claimState) bool {
@@ -1270,7 +1273,7 @@ func materializeLocalTypeScriptReference(
   }
   if len(state.Units) == 0 && !selectedInventoryProblem {
     return state, []string{
-      claimLabel(claim) + " " + referenceLabel(reference) + " matched " + decimal(len(paths)) + " file(s) but materialized no selected evidence units (" + reference.Symbols.names() + "). Select symbol kinds present in those files or correct the reference globs.",
+      claimLabel(claim) + " " + referenceLabel(reference) + " matched " + decimal(len(paths)) + " file(s) but found no selected evidence units (" + reference.Symbols.names() + "). Select symbol kinds present in those files or correct the reference globs.",
     }
   }
   return state, nil
@@ -1326,7 +1329,7 @@ func materializePackageGlobReference(
       return state, problems
     }
     return state, []string{
-      claimLabel(claim) + " " + referenceLabel(reference) + " matched no files inside package '" + reference.Package + "' for " + describePatterns(reference.Files) + ". The globs resolve against the package root, not the project root. Check that the installed package actually contains those paths before changing the reference: an empty population demands nothing, so a claim that reaches this state reports full coverage while checking nothing.",
+      claimLabel(claim) + " " + referenceLabel(reference) + " matched no files inside package '" + reference.Package + "' for " + describePatterns(reference.Files) + ". The globs resolve against the package root, not the project root. Check that the installed package actually contains those paths before changing the reference: an empty population contains no units, so this claim reports full coverage without checking anything.",
     }
   }
   // The glob decides membership, the entry decides addresses. A matched module
@@ -1355,7 +1358,7 @@ func materializePackageGlobReference(
   }
   if len(state.Units) == 0 {
     return state, []string{
-      claimLabel(claim) + " " + referenceLabel(reference) + " matched " + decimal(len(state.Paths)) + " file(s) inside package '" + reference.Package + "' but materialized no selected evidence units (" + reference.Symbols.names() + ") reachable from the package entry. Select symbol kinds present in those files, correct the globs, or narrow to modules the entry publishes.",
+      claimLabel(claim) + " " + referenceLabel(reference) + " matched " + decimal(len(state.Paths)) + " file(s) inside package '" + reference.Package + "' but found no selected evidence units (" + reference.Symbols.names() + ") reachable from the package entry. Select symbol kinds present in those files, correct the globs, or narrow to modules the entry publishes.",
     }
   }
   return state, nil
