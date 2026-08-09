@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - "*"
+# v0.25.0 was re-tagged in the same push that carried v0.26.0, so two publish
+# jobs ran at the same moment against one npm account and one samchon.ttsc
+# Marketplace extension. One call came back 401 and the other hung until vsce's
+# three-minute request timeout; neither version published. Releases serialize.
+#
+# Never cancel the one in flight: it publishes to two registries in sequence and
+# neither accepts an unpublish, so a run killed between them strands a version
+# that is half-released and cannot be withdrawn.
+concurrency:
+  group: release
+  cancel-in-progress: false
 permissions:
   id-token: write
   contents: write
@@ -12,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     # One full build-plus-publish cycle takes ~35 minutes end to end.
     timeout-minutes: 60
+    outputs:
+      marketplace: ${{ steps.marketplace.outcome }}
     steps:
       # `pnpm run build` cross-compiles every platform package in one job: seven
       # GOOS/GOARCH pairs, each producing a tsgo-sized ttsc and ttscserver, each
@@ -80,11 +93,20 @@ jobs:
           ! printf '%s\n%s\n' "$ttsc_out" "$server_out" | grep -q '0.0.0-dev'
           ! printf '%s\n%s\n' "$ttsc_out" "$server_out" | grep -q 'commit dev'
       - name: Publish VS Code Marketplace extension
+        id: marketplace
         # Fail fast on a stalled Marketplace call: the healthy step takes
         # under a minute (11-28 s observed), and the default 360-minute job
         # timeout would otherwise hold the npm publish hostage for hours
         # while looking like a slow build (#1008).
         timeout-minutes: 10
+        # The Marketplace is one distribution channel for the editor extension;
+        # npm carries the compiler, the runtime, the plugin host, and every
+        # platform binary. When this step answered 401 for v0.26.0 it withheld
+        # all of that, which is the failure e6380e717 already removed once for
+        # Marketplace *indexing* and which returned through the publish call
+        # itself. Publish here first so the extension still leads the release,
+        # let a rejection through, and let marketplace-gate turn the run red.
+        continue-on-error: true
         run: SKIP_BUILD=1 bash scripts/publish-vscode-marketplace.sh
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -94,6 +116,37 @@ jobs:
         # stalled publish silently for hours (#1008).
         timeout-minutes: 20
         run: pnpm run package:latest:publish
+  # A Marketplace rejection is reported, never fatal. Both failures on record
+  # were the gallery's, not the tag's: a 401 and a three-minute request timeout
+  # on two runs that had already produced every artifact. Failing the release
+  # over them would re-block the npm half this change exists to free, so this
+  # job only annotates the run and writes the recovery into the summary, where
+  # it is visible without reading a thirty-thousand-line log.
+  #
+  # The job-level `if` skips it outright on success, and a skipped job cannot
+  # colour the run.
+  marketplace-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: publish
+    if: needs.publish.outputs.marketplace != 'success'
+    steps:
+      - name: Report that the Marketplace publish did not succeed
+        run: |
+          {
+            echo "### VS Code Marketplace publish did not succeed"
+            echo
+            echo "Outcome: \`${{ needs.publish.outputs.marketplace }}\`"
+            echo
+            echo "npm published \`${GITHUB_REF_NAME}\`; \`samchon.ttsc\` did not."
+            echo "A 401 means \`VSCE_PAT\` is expired or revoked; rotate the secret."
+            echo "Then republish the extension on its own:"
+            echo
+            echo '```sh'
+            echo "VSCE_PAT=... bash scripts/publish-vscode-marketplace.sh"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=Marketplace publish did not succeed::npm published ${GITHUB_REF_NAME}; samchon.ttsc did not. Rotate VSCE_PAT if this was a 401, then run scripts/publish-vscode-marketplace.sh."
   wasm-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
