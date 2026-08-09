@@ -417,7 +417,7 @@ const renderModel = (
 };
 
 const compareRuns = (left: IDashboardRun, right: IDashboardRun): number => {
-  const subjects: readonly string[] = ["todo", "reddit", "shopping", "erp"];
+  const subjects: readonly string[] = ["todo", "reddit", "shopping"];
   const leftSubject: number = subjects.indexOf(left.file.cell.subject);
   const rightSubject: number = subjects.indexOf(right.file.cell.subject);
   return (
