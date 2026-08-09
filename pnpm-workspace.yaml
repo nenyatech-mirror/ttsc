@@ -4,6 +4,11 @@ packages:
   - "packages/*"
   - "tests/*"
   - "website"
+# A peer dependency is the consumer's to supply, and pnpm installs one here only
+# because its default changed in v8. `packages/metro` declares its three Metro
+# and Expo transformers as optional peers, which is what they are, and pnpm
+# installs them anyway; `peerDependenciesMeta.optional` does not exempt them.
+autoInstallPeers: false
 catalogs:
   typescript:
     typescript: ^7.0.2
