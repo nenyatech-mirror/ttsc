@@ -1888,6 +1888,17 @@ export namespace EvidenceBenchmarkRunner {
         throw new Error("Retained benchmark base instruction plan changed.");
       let supplementCount = 0;
       for (const scope of ["backend", "frontend", "overall"] as const) {
+        // The arms do not share a scope list. Evidence has two review scopes
+        // and no third, so its plan carries `overall-final` with no
+        // `overall-review` before it, and demanding one here would refuse the
+        // arm's own base plan. The expectation comes from the base plan rather
+        // than from the retained entries, so a plan that dropped a review its
+        // arm does have is still refused.
+        if (!base.some((entry) => entry.name === `${scope}-review`)) {
+          if (entries.some((entry) => entry.reviewScope === scope))
+            throw new Error("Retained review supplementation plan is invalid.");
+          continue;
+        }
         const review: number = entries.findIndex(
           (entry) => entry.kind === "base" && entry.name === `${scope}-review`,
         );
