@@ -15,6 +15,7 @@ import typia from "typia";
  *
  * @param connection Base connection supplied by the dynamic e2e runner.
  * @evidence {@link api.functional.health.get} Exercises the generated health operation.
+ * @evidenceReview {@link api.functional.health.get} Read the generated accessor and ran this test against a started backend: it calls that operation and validates the response against the contract the accessor declares.
  */
 export async function test_api_health(
   connection: api.IConnection,
