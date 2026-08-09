@@ -53,12 +53,20 @@ const worstCaseWorkspaceLength = (repository: string): number => {
  * against this suite's own path, because a case that measured where it happened
  * to run would pass here while every cell failed.
  *
- * 1. Read the store the prepared workspace installed into.
- * 2. Require it to be absolute and outside the workspace.
- * 3. Require every program in it to start from the deepest run directory.
+ * The limit is Windows', and so is the defense: `MAX_PATH` bounds
+ * `CreateProcess` alone, no other platform bounds a path it can start, and
+ * `EvidenceBenchmarkWorkspace` moves the store on `win32` only. Asserting the
+ * relocation elsewhere would demand a store no other platform's preparation
+ * writes — and would demand it on a `.exe` walk that finds nothing there.
+ *
+ * 1. Skip where the limit this defends against does not exist.
+ * 2. Read the store the prepared workspace installed into.
+ * 3. Require it to be absolute and outside the workspace.
+ * 4. Require every program in it to start from the deepest run directory.
  */
 export const test_benchmark_workspace_keeps_its_programs_startable =
   async (): Promise<void> => {
+    if (process.platform !== "win32") return;
     const workspace: IBenchmarkWorkspace =
       await acquireBenchmarkWorkspace("evidence");
     const configuration: string = path.join(workspace.workspace, ".npmrc");
