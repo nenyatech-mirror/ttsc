@@ -48,10 +48,11 @@ Keep the cell's original `benchmarkRevision` frozen. When recovery requires a co
 
 Before continuing, the runner revalidates the stored cell, instruction bytes, workspace, artifact digest, CLI, session, Goal, and token boundary. Codex may resume an exact retained Goal checkpoint.
 
-Two retained statuses refuse resume outright:
+One retained status refuses resume outright:
 
-- `quality-failed` — the run exhausted its supplementation attempts and is finished.
 - `checkpointed` — the run was stopped deliberately after `backend-start` and continues only as a derived run.
+
+`quality-failed` does not. It belongs to the earlier behaviour, where exhausting a scope's supplementations ended the cell; a run retained under it resumes and continues from the boundary its plan already points past. Failing the last permitted supplementation now dispatches that scope's Final, so the status a current run reaches is `completed` whether its scope converged or not. [measurement/plain-review.md](../measurement/plain-review.md) owns what the verdicts then have to say.
 
 If the resume itself fails, preserve that attempt, diagnose the new failure, and recover again from the last exact checkpoint. Never abandon a cell, and never loop without evidence.
 
