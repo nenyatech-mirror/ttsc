@@ -25,6 +25,16 @@ type moduleExport struct {
   // Namespace marks `export * as ns from`, which nests the target's whole
   // surface one segment deeper instead of flattening it.
   Namespace bool
+  // TypeOnly marks an export that carries only the type side of what it names,
+  // written either as `export type { X }` or as `export { type X }`.
+  //
+  // A local export list already reaches the collector's own projection guard,
+  // so this field exists for the half that cannot: a re-export naming another
+  // module. Without it the mark stopped at the module boundary, and a barrel
+  // saying `export type { Sale } from "./sale.js"` published every class member
+  // the declaring file holds, which is the opposite of both what the author
+  // wrote and what the same intent written locally does.
+  TypeOnly bool
 }
 
 // collectModuleExports reads a file's public surface as importers see it.
@@ -94,7 +104,12 @@ func exportDeclarationEntries(
     return nil
   }
   if declaration.ExportClause == nil {
-    return []moduleExport{{Specifier: specifier}}
+    // `export * from` and `export type * from`. The star form has no clause to
+    // carry a per-name mark, so the declaration's own is the whole answer.
+    return []moduleExport{{
+      Specifier: specifier,
+      TypeOnly:  declaration.IsTypeOnly,
+    }}
   }
   switch declaration.ExportClause.Kind {
   case shimast.KindNamespaceExport:
@@ -106,6 +121,7 @@ func exportDeclarationEntries(
       Public:    name,
       Specifier: specifier,
       Namespace: true,
+      TypeOnly:  declaration.IsTypeOnly,
     }}
   case shimast.KindNamedExports:
     named := declaration.ExportClause.AsNamedExports()
@@ -133,6 +149,10 @@ func exportDeclarationEntries(
         Public:    public,
         Specifier: specifier,
         Imported:  imported,
+        // Either spelling marks it. The declaration carries the mark for
+        // `export type { A, B } from`, the specifier for
+        // `export { type A, B } from`, and the second is per name.
+        TypeOnly: declaration.IsTypeOnly || exportSpecifier.IsTypeOnly,
       })
     }
     return entries
@@ -192,6 +212,11 @@ type reachedSymbol struct {
   // the name it exposes rather than the binding it wrote. `export { a as b }`
   // declares one unit called `b`, so matching on `a` would find nothing.
   Local string
+  // TypeOnly is true when some edge on the path from the entry to this symbol
+  // carried only its type side. It travels rather than being read at the end,
+  // because a barrel re-exported type-only withholds value-space from
+  // everything below it however many hops away that is.
+  TypeOnly bool
 }
 
 // traverseEntryExports walks a module's export graph and reports every public
@@ -206,6 +231,7 @@ func traverseEntryExports(
   entry string,
   prefix []string,
   visited map[string]bool,
+  typeOnly bool,
 ) []reachedSymbol {
   if visited[entry] {
     return nil
@@ -228,12 +254,31 @@ func traverseEntryExports(
       return surface
     }
     surface := map[string]reachedSymbol{}
-    for _, nested := range traverseEntryExports(loader, target, nil, visited) {
+    for _, nested := range traverseEntryExports(loader, target, nil, visited, false) {
       if len(nested.Address) != 1 {
         continue
       }
-      if _, taken := surface[nested.Address[0]]; !taken {
+      existing, taken := surface[nested.Address[0]]
+      // First wins, because two paths to one declaration name the same unit and
+      // the entry has to keep describing a path that exists.
+      //
+      // The type-only mark is unioned, and only between paths to the same
+      // declaration. It differs per path while the population is the union of
+      // what the paths reach, so a value path has to clear a type-only one
+      // rather than lose to declaration order. Doing that unconditionally is
+      // two different mistakes: replacing the entry swaps `Path` and `Local`,
+      // and clearing the mark alone leaves `Path` from one entry with the mark
+      // from another, which is a combination no path produced. Two entries
+      // under one name are not always one declaration, since an explicit named
+      // re-export shadows a star, and either mistake publishes the value
+      // members of a declaration this module reaches type-only.
+      switch {
+      case !taken:
         surface[nested.Address[0]] = nested
+      case existing.TypeOnly && !nested.TypeOnly &&
+        existing.Path == nested.Path && existing.Local == nested.Local:
+        existing.TypeOnly = false
+        surface[nested.Address[0]] = existing
       }
     }
     surfaces[target] = surface
@@ -245,9 +290,10 @@ func traverseEntryExports(
       // exposes it as. `export { local as renamed }` is one unit named
       // `renamed`, so the local binding never identifies it.
       reached = append(reached, reachedSymbol{
-        Address: append(append([]string{}, prefix...), export.Public),
-        Path:    entry,
-        Local:   export.Public,
+        Address:  append(append([]string{}, prefix...), export.Public),
+        Path:     entry,
+        Local:    export.Public,
+        TypeOnly: typeOnly,
       })
       continue
     }
@@ -262,6 +308,7 @@ func traverseEntryExports(
         target,
         append(append([]string{}, prefix...), export.Public),
         visited,
+        typeOnly || export.TypeOnly,
       )...)
     case export.Imported == "":
       reached = append(reached, traverseEntryExports(
@@ -269,6 +316,7 @@ func traverseEntryExports(
         target,
         prefix,
         visited,
+        typeOnly || export.TypeOnly,
       )...)
     default:
       nested, found := surfaceOf(target)[export.Imported]
@@ -279,6 +327,9 @@ func traverseEntryExports(
         Address: append(append([]string{}, prefix...), export.Public),
         Path:    nested.Path,
         Local:   nested.Local,
+        // The edge into this module and every edge the target itself walked
+        // both count, so a type-only hop anywhere on the path withholds.
+        TypeOnly: typeOnly || export.TypeOnly || nested.TypeOnly,
       })
     }
   }
@@ -312,13 +363,19 @@ func materializeEntryUnits(
   published := []publishedAddress{}
   candidates := newOwnedUnitIndex(loader)
   for _, entry := range entries {
-    for _, symbol := range traverseEntryExports(loader, entry, nil, map[string]bool{}) {
+    for _, symbol := range traverseEntryExports(loader, entry, nil, map[string]bool{}, false) {
       if symbol.Local == "" {
         continue
       }
       for _, unit := range candidates.of(symbol.Path, symbol.Local) {
         suffix, owned := identitySuffix(unit.Identity, symbol.Local)
         if !owned {
+          continue
+        }
+        // A type-only edge exposes no value, so nothing reached only through
+        // one comes with it. The name itself still arrives, because a type is
+        // exactly what such an export carries.
+        if symbol.TypeOnly && unit.ValueSpace && !unit.TypeSpace {
           continue
         }
         address := append(append([]string{}, symbol.Address...), suffix...)

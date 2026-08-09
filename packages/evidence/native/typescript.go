@@ -201,15 +201,20 @@ func scanTypeScriptInventoryAt(
 // rather than `const` because a partial withdrawal needs a second declaration
 // of one identity, which for `const` is `TS2451`.
 //
-// What this does not reach is a host node no unit records. A variable
-// declarator is registered as a host and is not among its unit's nodes, so a
-// withdrawn variable identity keeps that one position. A second symptom travels
-// with it and has its own cause worth stating separately, or half of #1126 gets
-// closed and called done: an inner declarator's own `@internal` is never read
-// at all, because withdrawal for a variable statement is taken from the
-// statement wrapper. Recording the declarator closes the first and leaves the
-// second exactly where it was. Both predate this reconciliation and are tracked
-// in #1126, because closing them moves every variable unit's digest.
+// What this cannot reach is a host node no unit records, so a form that
+// registers a position owes that position to its unit. The variable declarator
+// was the one that did not, and a withdrawn variable identity kept it until
+// `collectTypeScriptVariables` began recording it. `documentedHosts` filters on
+// the same association and was measured to answer identically either way, since
+// it takes the first of a unit's *host* nodes and a declarator is a host only
+// when its statement is one for the same symbol; the invariant is what was
+// broken there rather than an observable answer.
+//
+// A second fault travelled
+// with that one and has its own cause, which is why they are stated apart: a
+// withdrawal tag read from a container is not the tag of the declarations
+// inside it, so an inner declarator owes its own read, and recording the node
+// would have left that exactly where it was.
 //
 // `documentedHosts` needs no equivalent: it skips a withdrawn unit before it
 // ever consults the host set.
@@ -349,6 +354,9 @@ func collectTypeScriptStatements(
           supportedHosts,
           unitsByID,
           memberHidden,
+          // Only the class merge makes these value-space. An interface's own
+          // members are type-space and a type-only export publishes them.
+          mergedWithClass,
         )
       }
     case shimast.KindTypeAliasDeclaration:
@@ -392,6 +400,7 @@ func collectTypeScriptStatements(
             supportedHosts,
             unitsByID,
             memberHidden,
+            false,
           )
         }
       }
@@ -426,7 +435,7 @@ func collectTypeScriptStatements(
           qualifyTypeScriptName(prefix, name),
           parentID,
           memberHidden,
-        )
+        ).markSpace(true)
       }
     case shimast.KindVariableStatement:
       if typeOnlyProjection {
@@ -434,6 +443,7 @@ func collectTypeScriptStatements(
       }
       memberHidden := typeScriptHidingTag(file, statement, hidden)
       for symbol := range collectTypeScriptVariables(
+        file,
         statement,
         prefix,
         parentID,
@@ -461,12 +471,14 @@ func collectTypeScriptStatements(
       // `C.prototype.field` and `C.staticField` are paths through the class
       // *value*, and a type-only alias exposes no value to walk them from.
       //
-      // Among type-only exports the criterion is the module specifier rather
-      // than the spelling. `target.TypeOnly` sees an export list in this file,
-      // `export type { C }` and `export { type C }` alike, while a re-export
-      // naming another module records no mark at all, so the withholding
-      // simply does not happen there. The interface branch mirrors this guard
-      // for a class-merged interface and points here for the reason.
+      // This guard answers an export written in this file, where the
+      // declaration kind is in hand: `target.TypeOnly` sees `export type { C }`
+      // and `export { type C }` alike, and `typeOnlyProjection` sees a
+      // type-only alias of an enclosing namespace. A re-export naming another
+      // module has no such context and is answered at traversal time instead,
+      // from `evidenceUnit.ValueSpace`, which is why these members are marked
+      // there. The interface branch mirrors this guard for a class-merged
+      // interface and points here for the reason.
       targets := publicTypeScriptExports(
         statement,
         name,
@@ -647,7 +659,30 @@ func collectClassDeclarationNames(
 // pattern rather than to any leaf, `let` and `var` are excluded whatever they
 // hold, and the initializer is read syntactically because these rules run with
 // no type checker.
+// A declarator is both a host position and a unit node, and it has to be both.
+// It was only the first: `supportedHosts` held it while no unit recorded it, so
+// nothing that walks from a unit to its declarations could see it. Two answers
+// were wrong and both were silent. `withdrawHiddenHosts` could not take the
+// position away from a withdrawn identity, so a declaration the author had
+// removed from the API went on discharging coverage and carrying exclusions.
+// And a citation written on it resolved to no semantic host, so
+// `singleEvidencePerSymbol` counted the statement's identities as citing zero
+// units while the same run reported the obligation satisfied.
+//
+// A third consumer reads the same association and was measured to answer
+// identically either way. `hostNodesOf` keeps a unit's host nodes and takes the
+// first, and a declarator is a host only when its statement is one for the same
+// symbol, so `evidence/documented` always had the wrapper to look at. The
+// invariant was broken there rather than the answer, which is reason enough:
+// the next declaration form to register a position will not be so lucky.
+//
+// Its own withdrawal tag is read here for a separate fault rather than the same
+// one: the statement wrapper's tag was taken for every declarator it holds, so
+// `@internal` written on an inner declarator withdrew nothing. Recording the
+// node closes the first two and leaves this one standing, which is why #1126
+// states them apart.
 func collectTypeScriptVariables(
+  file *shimast.SourceFile,
   statement *shimast.Node,
   prefix []string,
   parentID string,
@@ -678,6 +713,7 @@ func collectTypeScriptVariables(
       isFunctionValue(value.Initializer) {
       symbol = "function"
     }
+    declaratorHidden := typeScriptHidingTag(file, declaration, hidden)
     for _, binding := range bindingIdentifierNodes(declaration.Name()) {
       name := declarationName(binding)
       targets := publicTypeScriptNames(
@@ -690,7 +726,7 @@ func collectTypeScriptVariables(
       if len(targets) == 0 {
         continue
       }
-      if hidden == "" {
+      if declaratorHidden == "" {
         addTypeScriptHost(supportedHosts, declaration, symbol)
       }
       for _, name := range targets {
@@ -701,12 +737,16 @@ func collectTypeScriptVariables(
           symbol,
           qualifyTypeScriptName(prefix, name),
           parentID,
-          hidden,
+          declaratorHidden,
         )
         // The binding names the unit, but TypeScript attaches a
         // variable's leading JSDoc to the statement wrapper, so that
-        // is where a citation for this unit actually lives.
+        // is where a citation for this unit actually lives. The
+        // declarator is recorded too, because it is a host position and
+        // every consumer that walks a unit's nodes has to reach it.
+        unit.markSpace(true)
         inventory.recordUnitNode(unit.ID, statement)
+        inventory.recordUnitNode(unit.ID, declaration)
       }
       found[symbol] = true
     }
@@ -986,7 +1026,7 @@ func addClassMemberUnit(
     identity,
     classID,
     memberHidden,
-  )
+  ).markSpace(true)
   if memberHidden == "" {
     addTypeScriptHost(supportedHosts, node, symbol)
   }
@@ -1083,6 +1123,13 @@ func collectTypeScriptModule(
     if name != "" {
       identity := qualifyTypeScriptName(qualified, name)
       innerHidden := typeScriptHidingTag(file, module.Body, hidden)
+      // No citation reaches this position today. TypeScript attaches a leading
+      // block to the outer declaration of a dotted namespace, so the tag on
+      // `export namespace Outer.Inner {}` resolves through the outer host and
+      // the inner one is written and never read. It is registered anyway,
+      // because the host set is derived from the unit set and a position a unit
+      // records must be in it; the day a form does attach a block here, the
+      // guard is the thing that was already right.
       if innerHidden == "" {
         addTypeScriptHost(supportedHosts, module.Body, "type")
       }
@@ -1144,6 +1191,7 @@ func collectPropertyMembers(
   supportedHosts map[*shimast.Node]symbolSet,
   unitsByID map[string]*evidenceUnit,
   hidden string,
+  valueSpace bool,
 ) {
   if members == nil {
     return
@@ -1175,7 +1223,7 @@ func collectPropertyMembers(
       identity,
       parentID,
       memberHidden,
-    )
+    ).markSpace(valueSpace)
     if memberHidden == "" {
       addTypeScriptHost(supportedHosts, member, symbol)
     }

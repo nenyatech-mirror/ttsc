@@ -193,6 +193,29 @@ type evidenceUnit struct {
   // never selected and never hosts a declaration; it is retained only so a
   // citation of it can be told why the target it names is not there.
   Hidden string
+  // ValueSpace marks a unit reached only through a value: a function, a
+  // variable, a class member, or a member of an interface merged with a class.
+  //
+  // A type-only export exposes no value, so it exposes none of these either.
+  // The collector answers that for an export written in the declaring file,
+  // where it knows the declaration kind in hand. A re-export naming another
+  // module arrives at traversal time with no such context, which is what this
+  // field supplies: the same question, asked once at materialization and
+  // answered wherever reachability arrives through a type-only edge.
+  //
+  // It is read together with TypeSpace rather than alone, because a merged
+  // identity is written by more than one collector and a plain assignment would
+  // let source order decide.
+  ValueSpace bool
+  // TypeSpace marks a unit some declaration of which is reached without a
+  // value, and it wins over ValueSpace.
+  //
+  // One identity can be spelled by two collectors: `interface Order { member }`
+  // beside `namespace Order { export const member }` is one `property` unit
+  // written once by the member collector and once by the variable one. A
+  // type-only export exposes the interface half, so the unit survives, and the
+  // answer must not depend on which half the author wrote first.
+  TypeSpace bool
   // Digest is this unit's content, hashed after normalization and with every
   // position a tag can live in removed.
   //
@@ -369,4 +392,25 @@ func decimal(value int) string {
     return "-" + string(digits)
   }
   return string(digits)
+}
+
+// markSpace records which space this declaration of the unit is reached
+// through, letting type-space win.
+//
+// A plain assignment made the answer depend on which half of a merged identity
+// the author wrote first, in the one shape where two collectors write one unit:
+// an interface member beside a namespace member of the same name. The
+// suppression it feeds is a silent one, so the divergence was a build going
+// green or red on declaration order with no message either way.
+//
+// Every site goes through here, including the ones that can only ever be value
+// space. A site that assigns the field directly is correct until the day its
+// address collides with a type-space one, and that is exactly the day nobody is
+// looking at it.
+func (unit *evidenceUnit) markSpace(valueSpace bool) {
+  if valueSpace {
+    unit.ValueSpace = true
+    return
+  }
+  unit.TypeSpace = true
 }
