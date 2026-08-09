@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
 
+import { canonicalDigest } from "./canonicalDigest";
 import { normalizeSwaggerDocument } from "./normalizeSwaggerDocument";
 
 const MAX_DOCUMENT_BYTES: number = 16 * 1024 * 1024;
@@ -35,6 +36,15 @@ interface ISwaggerDocumentProblem {
 interface ISwaggerOperation {
   method: string;
   path: string;
+  /**
+   * The operation's own content, digested where it is understood.
+   *
+   * The native side receives identities and cannot recompute this: it never
+   * sees the normalized document. Nothing inside an OpenAPI operation hosts an
+   * evidence tag, so nothing is excluded, and the operation is the unit, so
+   * there is no subtree to compose.
+   */
+  digest: string;
 }
 
 /**
@@ -55,7 +65,9 @@ interface IReadSource {
  *
  * The native contributor is Go, while the version converter is JavaScript. This
  * function is the narrow process boundary between them: it accepts only source
- * locations and returns only operation identities.
+ * locations and returns operation identities, each carrying a digest of the
+ * operation's content taken here because this is the only side that sees the
+ * document.
  *
  * @internal
  */
@@ -164,14 +176,22 @@ const decodeUtf8 = (content: Uint8Array): string =>
 
 const operationsOf = (document: OpenApi.IDocument): ISwaggerOperation[] => {
   const operations: ISwaggerOperation[] = [];
+  const components: Record<string, unknown> = (document.components ??
+    {}) as Record<string, unknown>;
   for (const [operationPath, item] of Object.entries(document.paths ?? {})) {
     for (const method of METHODS) {
       const operation: OpenApi.IOperation | undefined = item[method];
       if (operation !== undefined)
-        operations.push(operationOf(method, operationPath));
+        operations.push(
+          operationOf(method, operationPath, operation, components),
+        );
     }
-    for (const method of Object.keys(item.additionalOperations ?? {}))
-      operations.push(operationOf(method, operationPath));
+    for (const [method, operation] of Object.entries(
+      item.additionalOperations ?? {},
+    ))
+      operations.push(
+        operationOf(method, operationPath, operation, components),
+      );
   }
   operations.sort((left, right) => {
     const leftTarget: string = `${left.method}:${left.path}`;
@@ -195,6 +215,8 @@ const operationsOf = (document: OpenApi.IDocument): ISwaggerOperation[] => {
 const operationOf = (
   method: string,
   operationPath: string,
+  operation: OpenApi.IOperation,
+  components: Record<string, unknown>,
 ): ISwaggerOperation => {
   if (!operationPath.startsWith("/"))
     throw new Error(
@@ -210,7 +232,110 @@ const operationOf = (
   return {
     method: method.toUpperCase(),
     path: operationPath,
+    digest: canonicalDigest(withResolvedReferences(operation, components)),
   };
+};
+
+/**
+ * Replaces every local `$ref` into `components` with what it names.
+ *
+ * The converter preserves references rather than inlining them, so an operation
+ * is often no more than `{"$ref": "#/components/schemas/IMember"}` where its
+ * request and response bodies should be. A digest over the operation as written
+ * therefore covers the name of a contract and not the contract, and changing
+ * every property of a DTO expires no review of the endpoint that carries it.
+ * That is the failure this feature exists to remove, on the artifact kind whose
+ * whole content lives behind a reference.
+ *
+ * Any pointer under `#/components/` is followed, not only one into `schemas`,
+ * because a request body, a response, a parameter, and a header are all
+ * declarable there and each is part of the operation a reviewer read. A pointer
+ * anywhere else is left as written: `#/paths/...` would fold one operation's
+ * content into another's and reintroduce the cross-expiry this replaces.
+ *
+ * Siblings of a `$ref` are kept and override what it resolves to, which is what
+ * OpenAPI 3.1 says they do. A reference already open on the path above is left
+ * as written, so a recursive schema terminates while two operations reaching
+ * one cycle by different routes still differ. An undeclared reference is left
+ * as written too: a broken document is not a digest question, and inventing an
+ * empty schema for it would make two different broken documents agree.
+ */
+const withResolvedReferences = (
+  value: unknown,
+  components: Record<string, unknown>,
+  open: Set<string> = new Set<string>(),
+): unknown => {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value))
+    return value.map((element) =>
+      withResolvedReferences(element, components, open),
+    );
+  const entries: Array<[string, unknown]> = Object.entries(
+    value as Record<string, unknown>,
+  );
+  const reference: unknown = (value as Record<string, unknown>)["$ref"];
+  if (typeof reference !== "string" || open.has(reference))
+    return Object.fromEntries(
+      entries.map(([key, element]) => [
+        key,
+        withResolvedReferences(element, components, open),
+      ]),
+    );
+  const target: unknown = componentAt(components, reference);
+  if (target === undefined)
+    return Object.fromEntries(
+      entries.map(([key, element]) => [
+        key,
+        withResolvedReferences(element, components, open),
+      ]),
+    );
+  open.add(reference);
+  try {
+    const resolved: unknown = withResolvedReferences(target, components, open);
+    const siblings: Array<[string, unknown]> = entries
+      .filter(([key]) => key !== "$ref")
+      .map(([key, element]) => [
+        key,
+        withResolvedReferences(element, components, open),
+      ]);
+    if (siblings.length === 0) return resolved;
+    if (resolved === null || typeof resolved !== "object")
+      return Object.fromEntries(siblings);
+    return {
+      ...(resolved as Record<string, unknown>),
+      ...Object.fromEntries(siblings),
+    };
+  } finally {
+    open.delete(reference);
+  }
+};
+
+const COMPONENT_REFERENCE_PREFIX = "#/components/";
+
+/** Reads one `#/components/<section>/<name>` pointer, or nothing. */
+const componentAt = (
+  components: Record<string, unknown>,
+  reference: string,
+): unknown => {
+  if (!reference.startsWith(COMPONENT_REFERENCE_PREFIX)) return undefined;
+  const segments: string[] = reference
+    .slice(COMPONENT_REFERENCE_PREFIX.length)
+    .split("/")
+    .map((segment) =>
+      decodeURIComponent(segment).replaceAll("~1", "/").replaceAll("~0", "~"),
+    );
+  let current: unknown = components;
+  for (const segment of segments) {
+    if (
+      current === null ||
+      typeof current !== "object" ||
+      Array.isArray(current)
+    )
+      return undefined;
+    if (!(segment in (current as Record<string, unknown>))) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
 };
 
 const isInventory = (

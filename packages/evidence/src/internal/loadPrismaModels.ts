@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import { canonicalDigest, withoutKeys } from "./canonicalDigest";
+
 const MAX_SCHEMA_BYTES: number = 16 * 1024 * 1024;
 const ANSI_PATTERN: RegExp = /\x1b\[[0-9;]*m/gu;
 
@@ -37,6 +39,15 @@ interface IPrismaSchemaProblem {
 interface IPrismaModel {
   name: string;
   documentation: string;
+  /**
+   * The model's own declaration, digested where it is understood.
+   *
+   * Its fields are not folded in. A field is a unit of its own, and the scope a
+   * review of the model covers is composed from those units on the native side,
+   * so folding them here would make one field's edit expire a review of every
+   * sibling as well as of the model.
+   */
+  digest: string;
   fields: IPrismaField[];
 }
 
@@ -45,13 +56,22 @@ interface IPrismaModel {
  *
  * Prisma spells the distinction as `kind: "scalar" | "object"`, and translating
  * it here rather than natively is what keeps Prisma's vocabulary out of the Go
- * side entirely — the process boundary carries unit identities, exactly as the
- * Swagger bridge carries operation identities.
+ * side entirely. The process boundary carries unit identities and a digest of
+ * each declaration's content, exactly as the Swagger bridge does.
  */
 interface IPrismaField {
   name: string;
   symbol: "column" | "relation";
   documentation: string;
+  /**
+   * The field's own declaration, digested where it is understood.
+   *
+   * The parser is the only side that sees a field's type, its attributes, and
+   * their arguments. Reading them from the parsed value rather than from text
+   * is the same subordination the position scan already obeys: the parser
+   * answers what exists, and nothing else is allowed to.
+   */
+  digest: string;
 }
 
 /** The bytes one schema file set was read as, with the identity of those bytes. */
@@ -65,8 +85,9 @@ interface IReadSet {
  *
  * The native contributor is Go and Prisma's parser is a WebAssembly module with
  * a JavaScript entry point. This function is the narrow process boundary
- * between them: it accepts only file locations and returns only model, column,
- * and relation identities with their doc comments.
+ * between them: it accepts only file locations and returns model, column, and
+ * relation identities with their doc comments and a digest of each
+ * declaration's content.
  *
  * One **set** is one request. A Prisma schema folder is several files that form
  * a single namespace — a model in one file may point at a model in another — so
@@ -229,6 +250,10 @@ const modelsOf = (
       name: model.name,
       documentation:
         typeof model.documentation === "string" ? model.documentation : "",
+      // The model's own declaration is everything the parser reports about it
+      // except its fields, which are units in their own right, and except its
+      // documentation, which is where a review of it is written.
+      digest: canonicalDigest(withoutKeys(model, "documentation", "fields")),
       fields: (model.fields ?? [])
         .filter(
           (
@@ -248,6 +273,7 @@ const modelsOf = (
           symbol: field.kind === "object" ? "relation" : "column",
           documentation:
             typeof field.documentation === "string" ? field.documentation : "",
+          digest: canonicalDigest(withoutKeys(field, "documentation")),
         })),
     });
   }

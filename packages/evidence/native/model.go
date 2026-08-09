@@ -193,6 +193,29 @@ type evidenceUnit struct {
   // never selected and never hosts a declaration; it is retained only so a
   // citation of it can be told why the target it names is not there.
   Hidden string
+  // ValueSpace marks a unit reached only through a value: a function, a
+  // variable, a class member, or a member of an interface merged with a class.
+  //
+  // A type-only export exposes no value, so it exposes none of these either.
+  // The collector answers that for an export written in the declaring file,
+  // where it knows the declaration kind in hand. A re-export naming another
+  // module arrives at traversal time with no such context, which is what this
+  // field supplies: the same question, asked once at materialization and
+  // answered wherever reachability arrives through a type-only edge.
+  //
+  // It is read together with TypeSpace rather than alone, because a merged
+  // identity is written by more than one collector and a plain assignment would
+  // let source order decide.
+  ValueSpace bool
+  // TypeSpace marks a unit some declaration of which is reached without a
+  // value, and it wins over ValueSpace.
+  //
+  // One identity can be spelled by two collectors: `interface Order { member }`
+  // beside `namespace Order { export const member }` is one `property` unit
+  // written once by the member collector and once by the variable one. A
+  // type-only export exposes the interface half, so the unit survives, and the
+  // answer must not depend on which half the author wrote first.
+  TypeSpace bool
   // Digest is this unit's content, hashed after normalization and with every
   // position a tag can live in removed.
   //
@@ -201,7 +224,8 @@ type evidenceUnit struct {
   // between it and the next heading, so a subsection's body belongs to the
   // subsection. A TypeScript unit owns its whole declaration text, which
   // **contains** every nested member's text, because that is what a declaration
-  // is: there is no reading of `interface ISale` that excludes its properties.
+  // is: there is no reading of `interface ISale` that excludes the members it
+  // declares, callables included.
   //
   // So a nested change moves both its own unit's digest and every enclosing
   // unit's. `scopeIndex` composes ancestors and descendants anyway, so detection
@@ -213,9 +237,11 @@ type evidenceUnit struct {
   // itself cited would otherwise change the digest that the review's own
   // fingerprint is checked against, and the repair would never terminate.
   //
-  // Empty when the loader for this artifact kind cannot see the unit's
-  // content. A reference over such a population refuses `requireReview` at
-  // decode rather than comparing against nothing.
+  // Empty when the bridge that read this artifact reported no content for the
+  // unit, which is a loader gap rather than a configuration one: every
+  // reference kind may require a review, and every bridge digests what it
+  // parsed. A consumer of an empty digest reports nothing rather than
+  // comparing against nothing.
   Digest string
 }
 
@@ -273,6 +299,14 @@ type artifactInventory struct {
   // from Declarations so no consumer counting acknowledgements can reach one.
   Reviews  []*evidenceReview
   Problems []inventoryProblem
+  // Unreadable lists the tags this artifact carries in a position nothing can
+  // read, already worded as diagnostics.
+  //
+  // They are kept apart from Problems because they are not a health question.
+  // The file loaded and its units are complete, so treating one as a failed
+  // population would suppress the obligations the author still owes while
+  // telling them only about a comment.
+  Unreadable []string
   // LoadFailed distinguishes an unreadable or rejected artifact from a
   // healthy artifact that legitimately materializes no selected units.
   // Coverage is a completeness claim, so a failed inventory cannot be used
@@ -300,6 +334,18 @@ type artifactInventory struct {
   // physical JSDoc declaration to semantic claim-host identities, then releases
   // it; callers with no such use leave it nil.
   UnitNodes map[string][]*shimast.Node
+  // UnitContent maps a unit ID to the nodes whose text is that identity's
+  // content, and is a subset of UnitNodes.
+  //
+  // Belonging to an identity and being its content are different questions,
+  // and a variable is where they part. TypeScript attaches a variable's
+  // leading documentation to the statement wrapper, so the wrapper is a
+  // position this identity owns — but the wrapper is also where its siblings
+  // are declared, and their text is not this identity's content. Answering the
+  // second question with the first makes one declarator's edit move another
+  // declarator's fingerprint. Each declaration site states which of its nodes
+  // is which; nothing here is derived from spans.
+  UnitContent map[string][]*shimast.Node
 }
 
 func (inventory *artifactInventory) recordUnitNode(id string, node *shimast.Node) {
@@ -307,6 +353,23 @@ func (inventory *artifactInventory) recordUnitNode(id string, node *shimast.Node
     return
   }
   inventory.UnitNodes[id] = append(inventory.UnitNodes[id], node)
+}
+
+// recordUnitContent records a node as this identity's content, and as a
+// position it owns.
+//
+// Content is recorded through the position index rather than beside it, so the
+// subset the field documents holds by construction instead of by two callers
+// agreeing.
+func (inventory *artifactInventory) recordUnitContent(id string, node *shimast.Node) {
+  if inventory == nil || node == nil {
+    return
+  }
+  inventory.recordUnitNode(id, node)
+  if inventory.UnitNodes == nil || inventory.UnitContent == nil {
+    return
+  }
+  inventory.UnitContent[id] = append(inventory.UnitContent[id], node)
 }
 
 type inventoryProblem struct {
@@ -368,4 +431,25 @@ func decimal(value int) string {
     return "-" + string(digits)
   }
   return string(digits)
+}
+
+// markSpace records which space this declaration of the unit is reached
+// through, letting type-space win.
+//
+// A plain assignment made the answer depend on which half of a merged identity
+// the author wrote first, in the one shape where two collectors write one unit:
+// an interface member beside a namespace member of the same name. The
+// suppression it feeds is a silent one, so the divergence was a build going
+// green or red on declaration order with no message either way.
+//
+// Every site goes through here, including the ones that can only ever be value
+// space. A site that assigns the field directly is correct until the day its
+// address collides with a type-space one, and that is exactly the day nobody is
+// looking at it.
+func (unit *evidenceUnit) markSpace(valueSpace bool) {
+  if valueSpace {
+    unit.ValueSpace = true
+    return
+  }
+  unit.TypeSpace = true
 }
