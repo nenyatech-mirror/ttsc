@@ -8,16 +8,17 @@ Start `pnpm dev` from `packages/frontend` before implementation while every fron
 
 Unlock each claim when its layer completes and before the next begins, in the hook, screen, journey order `.agents/skills/evidence/frontend.md` prescribes. Neither earlier nor later. The claims live in `packages/frontend/lint.config.ts`.
 
-Write every `@evidence` and `@evidenceExclude` truthfully; never add a tag only to remove a compiler diagnostic.
+Write every `@evidence` and `@evidenceExclude` truthfully; never add a tag only to remove a compiler diagnostic. Reviews are not written here: `evidence/review` stays `"off"` until the Review that performs the checks turns it on.
 
 ## Final Checklist
 
 - [ ] Every required domain hook, screen, state, interaction, and journey implemented.
-- [ ] Every frontend claim is enabled; no other claim configuration changed.
+- [ ] Every frontend claim is enabled, with `evidence/graph` at `error`.
+- [ ] Nothing else in the configuration changed.
 - [ ] Each layer's claims were unlocked when that layer completed and before the next began: hooks first, then screens, then journeys; no claim was carried past its own layer.
-- [ ] Every accessor is called by a hook and every hook used by a screen; every screen is walked or excluded with a reviewed reason.
+- [ ] Every accessor is called by a hook, every hook used by a screen, and every screen walked by a journey or excluded.
 - [ ] Every `@evidence` names what its host actually calls, delivers, uses, proves, or walks.
-- [ ] Every `@evidenceExclude` sits in its claim's exclusion carrier, names its owner or alternative and invalidating condition, and none stands in for work this layer owes or exists only to remove a diagnostic.
+- [ ] Every `@evidenceExclude` is true of its claim, and none stands in for work this layer owes.
 - [ ] The persistent frontend `pnpm dev` process reloaded without diagnostics after the latest change and remains running.
 - [ ] `pnpm plan` reports every requirement section delivered by a screen entry or decided by an omission.
 - [ ] Every screen driven in the interactive browser, with `packages/frontend/wiki/interactive-review.md` recording the screens, widths, observations, and defects found.

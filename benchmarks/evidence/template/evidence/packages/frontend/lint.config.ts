@@ -121,12 +121,10 @@ export default {
   },
   rules: {
     "evidence/graph": ["error", graph],
-    // One verification statement beside every acknowledgement. The graph
-    // counts whether a target is cited; it cannot count whether the citing
-    // host does what the target asks, so a citation that is wrong and one
-    // that is right are the same bytes to it. Writing what was actually
-    // checked is what makes the difference visible, and it is what turns a
-    // symbol carrying several unrelated citations into several symbols.
-    "evidence/review": "error",
+    // A review states what was checked, which the reason does not. It ships
+    // "off" because a review is a record of a check, and the checks happen in
+    // the Review for this layer. Set this to "error" there, and every
+    // acknowledgement gains its review as that Review inspects it.
+    "evidence/review": "off",
   },
 } satisfies ITtscLintConfig;

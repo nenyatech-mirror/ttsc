@@ -38,6 +38,17 @@ Name the artifact you read and the behavior you confirmed, in the form you actua
  */
 ```
 
+Write the review where the check happens. `evidence/review` ships `"off"` and the Review for each layer turns it on, so reviews are written while that Review inspects each acknowledgement, not while the artifact is still being built. A review written away from its check is written from memory.
+
+An exclusion's review answers a different question, and no reading of the declaration it sits on can answer it. A citation is checked by reading the target and exercising this host against it. An exclusion is checked by finding what does own the unit.
+
+```ts
+/**
+ * @evidenceExclude docs/analysis/03-functional-requirements.md#req-order-refund the refund path is owned by ShoppingOrderProvider; reject this exclusion if a DTO publishes a refund field
+ * @evidenceExcludeReview docs/analysis/03-functional-requirements.md#req-order-refund read the section, found ShoppingOrderProvider.refund implements it, and confirmed no structures type carries a refund property
+ */
+```
+
 A symbol accumulating citations is the signal this rule exists to raise. Writing one honest review per target forces each to be defended separately, and citations that cannot share a single defensible check were never one responsibility. Split the symbol along the line the reviews expose rather than writing a review broad enough to cover both.
 
 Every tag must truthfully describe the current host's relation to the target. Never write, move, consolidate, or invent an acknowledgement to pass the compiler: a diagnostic identifies an obligation, not the truthful acknowledgement for it, and a clean gate proves structure, not truth.
@@ -88,6 +99,8 @@ TypeScript targets are cited as `{@link ...}` inline links resolved through the 
 A claim that declares no carrier accepts no exclusion at all. Write the missing work instead.
 
 Use the narrowest truthful target. "Not applicable", "internal", "future work", and "not implemented" are conclusions, not reasons; name the actual owner or observable alternative and a concrete invalidating condition.
+
+Every exclusion carries an `@evidenceExcludeReview` naming what you checked, the same as a citation does. The Reviews section owns its shape.
 
 An exclusion states that this claim does not cover the target, never that the target is unfinished. If the layer owes the target and has not built it, the honest record is a build failure, so implement it rather than excluding it. An exclusion written to clear a diagnostic converts missing work into a green build, which is the one outcome this graph exists to prevent.
 

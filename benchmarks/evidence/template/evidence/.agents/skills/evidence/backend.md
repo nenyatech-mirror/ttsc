@@ -16,7 +16,7 @@ Every other backend rule lives in the test configuration because `test/tsconfig.
 
 ## File Rules
 
-`packages/backend/test/lint.config.ts` also declares `evidence/singular` at `error` and `evidence/todo` staged at `"off"`. Both apply to the whole test Program — `packages/backend/src/**` and `packages/backend/test/**` — and to nothing else. `src/prisma/**` is ignored as generated output, and the configuration file itself is ignored. `packages/api` and `packages/frontend` are other Programs and carry neither rule.
+`packages/backend/test/lint.config.ts` also declares `evidence/review` and `evidence/singular` at `error`, and `evidence/todo` staged at `"off"`. Both apply to the whole test Program — `packages/backend/src/**` and `packages/backend/test/**` — and to nothing else. `src/prisma/**` is ignored as generated output, and the configuration file itself is ignored. `packages/api` and `packages/frontend` are other Programs and carry neither rule.
 
 **`evidence/singular` — one public identity per file, named after the file.** Declaration merging counts as one identity: the scaffold's own `src/MyGlobal.ts` exports a class and a namespace of that name and passes. A second unrelated export does not.
 
@@ -58,6 +58,8 @@ Each claim declares its carrier through `evidenceExcludeCarriers`, so an exclusi
 ///
 /// @evidence docs/analysis/02-domain-model.md#sale Stores the required sale
 ///           identity, lifecycle, and seller ownership.
+/// @evidenceReview docs/analysis/02-domain-model.md#sale Read the section and
+///                 checked each named field against this model's columns.
 model shopping_sales {
 }
 ```
@@ -68,13 +70,19 @@ model shopping_sales {
  *
  * @evidence docs/analysis/02-domain-model.md#sale-summary Exposes the summary
  *           fields customers use while browsing.
+ * @evidenceReview docs/analysis/02-domain-model.md#sale-summary Read the section
+ *                 and matched every browsing field it names to a property here.
  * @evidence prisma:shopping_sales Represents the persisted sale.
+ * @evidenceReview prisma:shopping_sales Compared this type's properties against
+ *                 the model's columns.
  */
 export interface IShoppingSale {
   /**
    * Current title.
    *
    * @evidence prisma:shopping_sales.title Carries the stored title.
+   * @evidenceReview prisma:shopping_sales.title Checked the column's type and
+   *                 nullability against this property.
    */
   title: string;
 }
@@ -86,6 +94,9 @@ export interface IShoppingSale {
  *
  * @evidence docs/analysis/03-functional-requirements.md#browse-sales Provides
  *           the seller's visibility-filtered browsing operation.
+ * @evidenceReview docs/analysis/03-functional-requirements.md#browse-sales Read
+ *                 the section and ran the browse test: visibility filter,
+ *                 pagination bounds, and the other seller's rows absent.
  * @evidence prisma:shopping_sales Exposes persisted sales.
  */
 public async index(): Promise<IPage<IShoppingSale.ISummary>> {
@@ -99,6 +110,9 @@ import * as api from "{{apiPackageName}}";
 /**
  * @evidence docs/analysis/03-functional-requirements.md#place-order Proves the
  *           order placement the requirement promises.
+ * @evidenceReview docs/analysis/03-functional-requirements.md#place-order Read
+ *                 the section and ran this test: order created, stock reserved,
+ *                 and the empty-cart refusal.
  * @evidence {@link api.functional.shopping.order.create} Proves the published
  *           order creation operation.
  */
@@ -116,6 +130,9 @@ export async function test_api_order_create(
  * @evidenceExclude docs/analysis/05-user-experience.md#empty-state-copy
  *                  CatalogPage owns this presentation-only wording; this
  *                  exclusion becomes false if the API must return it.
+ * @evidenceExcludeReview docs/analysis/05-user-experience.md#empty-state-copy
+ *                        Read the section, found CatalogPage renders the copy,
+ *                        and confirmed no operation returns it.
  */
 export const CONTROLLER_EVIDENCE_EXCLUDE = true;
 ```
