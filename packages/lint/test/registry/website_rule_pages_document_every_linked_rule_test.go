@@ -195,9 +195,12 @@ func websiteRuleDocsDir(t *testing.T) string {
     if rest, found := strings.CutPrefix(entry, "use"); found {
       entry = strings.TrimSpace(rest)
     }
-    // Only an absolute entry is a usable anchor. The scratch module itself is
-    // written as "." (Go's workspace membership check rejects the absolute temp
-    // path on Windows), and it is in the temp dir anyway.
+    // Only an absolute entry is a usable anchor. test-go-lint.cjs writes the
+    // scratch module itself as "." (Go's workspace membership check rejects the
+    // absolute temp path on Windows); test-go-coverage.cjs writes it
+    // absolutely, and that entry simply walks up without finding the tree
+    // unless its scratch dir is inside the repository, in which case it finds
+    // the same one.
     candidate := filepath.FromSlash(strings.Trim(entry, `"`))
     if !filepath.IsAbs(candidate) {
       continue

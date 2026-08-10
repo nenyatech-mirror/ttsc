@@ -14,7 +14,7 @@ Three passes do write canonical spacing, but only inside a region they rebuild f
 - Declaration-header reflow rebuilds a class or interface header between the name and the `{`, so its type parameters and `extends` / `implements` clauses come out canonically separated. The individual types are copied verbatim.
 - Parameter-property breaking rebuilds a constructor's parameter list when it force-breaks. Each parameter's own text is copied verbatim.
 
-A file already formatted by Prettier is therefore left byte-identical, and a file that is not is normalized on every axis the key table below lists and on no other.
+A file already formatted by Prettier is therefore left alone, the fixed point the repository's own format corpus measures, and a file that is not is normalized on every axis the key table below lists and on no other.
 
 ### Partial normalization
 
