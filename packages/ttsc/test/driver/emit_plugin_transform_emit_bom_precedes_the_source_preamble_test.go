@@ -1,6 +1,8 @@
 package driver_test
 
 import (
+  "encoding/base64"
+  "encoding/json"
   "path/filepath"
   "strings"
   "testing"
@@ -85,10 +87,42 @@ func TestEmitPluginTransformEmitBOMPrecedesTheSourcePreamble(t *testing.T) {
     if !strings.HasPrefix(js[len(utf8BOM):], preambleHashbangLine) {
       t.Fatalf("the byte order mark is not immediately followed by the shebang:\n%q", js)
     }
-    if !strings.Contains(js, "//# sourceMappingURL=data:application/json;base64,") {
+    if !strings.Contains(js, inlineSourceMapTrailer) {
       t.Fatalf("the inline source map trailer is missing, so this case does not exercise the correction it names:\n%q", js)
     }
+    assertInlineSourceMapDecodes(t, js)
   })
+}
+
+// inlineSourceMapTrailer is the comment plus data-URL prefix an
+// `inlineSourceMap` build writes before the base64 map.
+const inlineSourceMapTrailer = "//# sourceMappingURL=data:application/json;base64,"
+
+// assertInlineSourceMapDecodes checks that the base64 payload after the inline
+// trailer is still a decodable source map. The preamble correction splices a
+// re-encoded payload into text the byte order mark already prefixes, and a
+// splice computed against the wrong offsets would leave a payload that decodes
+// to garbage rather than one that is merely shifted.
+func assertInlineSourceMapDecodes(t *testing.T, js string) {
+  t.Helper()
+  start := strings.LastIndex(js, inlineSourceMapTrailer) + len(inlineSourceMapTrailer)
+  end := start
+  for end < len(js) && js[end] != '\n' && js[end] != '\r' {
+    end++
+  }
+  raw, err := base64.StdEncoding.DecodeString(js[start:end])
+  if err != nil {
+    t.Fatalf("the inline source map payload is not decodable base64: %v\n%q", err, js[start:end])
+  }
+  var parsed struct {
+    Mappings string `json:"mappings"`
+  }
+  if err := json.Unmarshal(raw, &parsed); err != nil {
+    t.Fatalf("the inline source map payload is not valid JSON: %v\n%s", err, raw)
+  }
+  if parsed.Mappings == "" {
+    t.Fatalf("the inline source map carries no mappings:\n%s", raw)
+  }
 }
 
 // emitHashbangWithPreamble compiles the hashbang fixture with a linked
