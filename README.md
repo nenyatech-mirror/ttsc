@@ -38,7 +38,7 @@ That covers the CLI. The integrations each have a short guide:
 
 ## Lint
 
-Lint and format inside the type-check you already run. 720+ rules across 21 families, plus a formatter that reproduces Prettier's output.
+Lint and format inside the type-check you already run. 720+ rules across 21 families, plus a formatter whose rules are ported from Prettier 3.8.3 — see the [format guide](https://ttsc.dev/docs/lint/format) for the shapes it covers and the ones it leaves alone.
 
 ```ts
 // src/index.ts
