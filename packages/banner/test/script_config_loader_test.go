@@ -23,7 +23,7 @@ func TestScriptConfigLoader(t *testing.T) {
   writeFile(t, cjs, `module.exports = async () => ({ text: "from cjs" });`)
   writeFile(t, mjs, `export default { text: "from mjs" };`)
 
-  raw, err := bannerLoadBannerConfigFile(cjs)
+  raw, err := bannerLoadBannerConfigFile(cjs, root)
   if err != nil {
     t.Fatal(err)
   }
@@ -39,7 +39,7 @@ func TestScriptConfigLoader(t *testing.T) {
   if !ok || object["text"] != "from mjs" {
     t.Fatalf("mjs config mismatch: %#v", raw)
   }
-  if _, err := bannerLoadBannerConfigFile(filepath.Join(root, "other.cjs")); err == nil || !strings.Contains(err.Error(), "config file must be named") {
+  if _, err := bannerLoadBannerConfigFile(filepath.Join(root, "other.cjs"), root); err == nil || !strings.Contains(err.Error(), "config file must be named") {
     t.Fatalf("expected invalid name error, got %v", err)
   }
 

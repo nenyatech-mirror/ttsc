@@ -28,7 +28,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   nodeLauncher := writeExecutable(t, filepath.Join(root, "fake-ttsx.mjs"), `process.stdout.write(JSON.stringify({ text: "from ts" }));`+"\n")
   t.Setenv("TTSC_TTSX_BINARY", nodeLauncher)
   t.Setenv("TTSC_TSGO_BINARY", filepath.Join(root, "tsgo"))
-  raw, err := bannerLoadBannerTypeScriptConfigFile(config)
+  raw, err := bannerLoadBannerTypeScriptConfigFile(config, root)
   if err != nil {
     t.Fatal(err)
   }
@@ -36,7 +36,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   if !ok || object["text"] != "from ts" {
     t.Fatalf("node-routed ts config mismatch: %#v", raw)
   }
-  raw, err = bannerLoadBannerConfigFile(config)
+  raw, err = bannerLoadBannerConfigFile(config, root)
   if err != nil {
     t.Fatal(err)
   }
@@ -47,7 +47,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
 
   directLauncher := writeDirectLauncher(t, filepath.Join(root, "fake-ttsx"), `{"text":"from direct"}`, "", 0)
   t.Setenv("TTSC_TTSX_BINARY", directLauncher)
-  raw, err = bannerLoadBannerTypeScriptConfigFile(filepath.Join(root, "banner.config.mts"))
+  raw, err = bannerLoadBannerTypeScriptConfigFile(filepath.Join(root, "banner.config.mts"), root)
   if err != nil {
     t.Fatal(err)
   }
@@ -60,17 +60,17 @@ func TestTypeScriptConfigLoader(t *testing.T) {
     t.Fatal("ttsx launcher extension classification mismatch")
   }
   t.Setenv("TTSC_TTSX_BINARY", nodeLauncher)
-  cmd := bannerTtsxCommand("--project", "tsconfig.json")
+  cmd := bannerTtsxCommand(nil, "--project", "tsconfig.json")
   if len(cmd.Args) < 3 || cmd.Args[1] != nodeLauncher || cmd.Args[2] != "--project" {
     t.Fatalf("node-routed ttsx command mismatch: %#v", cmd.Args)
   }
   t.Setenv("TTSC_TTSX_BINARY", directLauncher)
-  cmd = bannerTtsxCommand("--project", "tsconfig.json")
+  cmd = bannerTtsxCommand(nil, "--project", "tsconfig.json")
   if len(cmd.Args) < 2 || cmd.Args[0] != directLauncher || cmd.Args[1] != "--project" {
     t.Fatalf("direct ttsx command mismatch: %#v", cmd.Args)
   }
   t.Setenv("TTSC_TTSX_BINARY", "")
-  cmd = bannerTtsxCommand("--project", "tsconfig.json")
+  cmd = bannerTtsxCommand(nil, "--project", "tsconfig.json")
   if len(cmd.Args) < 2 || cmd.Args[0] != "ttsx" || cmd.Args[1] != "--project" {
     t.Fatalf("default ttsx command mismatch: %#v", cmd.Args)
   }
@@ -97,7 +97,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   if _, err := bannerRelativeImportSpecifier("", filepath.Join(root, "banner.config.ts")); err == nil {
     t.Fatal("expected invalid relative import base to fail")
   }
-  if _, err := bannerLoadBannerTypeScriptConfigFile("banner.config.ts"); err == nil || !strings.Contains(err.Error(), "resolve relative config import") {
+  if _, err := bannerLoadBannerTypeScriptConfigFile("banner.config.ts", root); err == nil || !strings.Contains(err.Error(), "resolve relative config import") {
     t.Fatalf("expected relative import error, got %v", err)
   }
 
@@ -106,7 +106,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   bannerLinkConfigNodeModules = func(string, string) error {
     return errors.New("link failed")
   }
-  if _, err := bannerLoadBannerTypeScriptConfigFile(config); err == nil || !strings.Contains(err.Error(), "link failed") {
+  if _, err := bannerLoadBannerTypeScriptConfigFile(config, root); err == nil || !strings.Contains(err.Error(), "link failed") {
     t.Fatalf("expected link error, got %v", err)
   }
   bannerLinkConfigNodeModules = originalLink
@@ -116,7 +116,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   bannerWriteConfigLoaderFile = func(string, []byte, os.FileMode) error {
     return errors.New("loader write failed")
   }
-  if _, err := bannerLoadBannerTypeScriptConfigFile(config); err == nil || !strings.Contains(err.Error(), "write config loader") {
+  if _, err := bannerLoadBannerTypeScriptConfigFile(config, root); err == nil || !strings.Contains(err.Error(), "write config loader") {
     t.Fatalf("expected loader write error, got %v", err)
   }
   calls := 0
@@ -127,14 +127,14 @@ func TestTypeScriptConfigLoader(t *testing.T) {
     }
     return os.WriteFile(name, data, mode)
   }
-  if _, err := bannerLoadBannerTypeScriptConfigFile(config); err == nil || !strings.Contains(err.Error(), "write config loader tsconfig") {
+  if _, err := bannerLoadBannerTypeScriptConfigFile(config, root); err == nil || !strings.Contains(err.Error(), "write config loader tsconfig") {
     t.Fatalf("expected tsconfig write error, got %v", err)
   }
   bannerWriteConfigLoaderFile = originalWrite
 
   invalidJSONLauncher := writeDirectLauncher(t, filepath.Join(root, "fake-ttsx-invalid"), "not-json", "", 0)
   t.Setenv("TTSC_TTSX_BINARY", invalidJSONLauncher)
-  if _, err := bannerLoadBannerTypeScriptConfigFile(config); err == nil || !strings.Contains(err.Error(), "parse TypeScript config file") {
+  if _, err := bannerLoadBannerTypeScriptConfigFile(config, root); err == nil || !strings.Contains(err.Error(), "parse TypeScript config file") {
     t.Fatalf("expected invalid stdout error, got %v", err)
   }
   // A loader that writes to stderr sends that text straight to this process's
@@ -144,7 +144,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   stderrLauncher := writeDirectLauncher(t, filepath.Join(root, "fake-ttsx-stderr"), "", "ts failed", 8)
   t.Setenv("TTSC_TTSX_BINARY", stderrLauncher)
   err = nil
-  if _, err = bannerLoadBannerTypeScriptConfigFile(config); err == nil ||
+  if _, err = bannerLoadBannerTypeScriptConfigFile(config, root); err == nil ||
     !strings.Contains(err.Error(), "load TypeScript config file") ||
     !strings.Contains(err.Error(), config) ||
     !strings.Contains(err.Error(), "exit status 8") {
@@ -155,7 +155,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   }
   silentLauncher := writeDirectLauncher(t, filepath.Join(root, "fake-ttsx-silent"), "", "", 8)
   t.Setenv("TTSC_TTSX_BINARY", silentLauncher)
-  if _, err := bannerLoadBannerTypeScriptConfigFile(config); err == nil || !strings.Contains(err.Error(), "exit status") {
+  if _, err := bannerLoadBannerTypeScriptConfigFile(config, root); err == nil || !strings.Contains(err.Error(), "exit status") {
     t.Fatalf("expected silent exit error, got %v", err)
   }
   badTmp := filepath.Join(root, "not-a-directory")
@@ -167,7 +167,7 @@ func TestTypeScriptConfigLoader(t *testing.T) {
   } else {
     t.Setenv("TMPDIR", badTmp)
   }
-  if _, err := bannerLoadBannerTypeScriptConfigFile(config); err == nil || !strings.Contains(err.Error(), "create config loader tempdir") {
+  if _, err := bannerLoadBannerTypeScriptConfigFile(config, root); err == nil || !strings.Contains(err.Error(), "create config loader tempdir") {
     t.Fatalf("expected tempdir error, got %v", err)
   }
 }

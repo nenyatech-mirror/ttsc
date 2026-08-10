@@ -94,6 +94,112 @@ func seedProject(t *testing.T, files map[string]string) string {
   return root
 }
 
+// writeFile writes a fixture file, creating parent directories first.
+func writeFile(t *testing.T, file string, contents string) {
+  t.Helper()
+  if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+    t.Fatal(err)
+  }
+  if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
+    t.Fatal(err)
+  }
+}
+
+// shedConfigToolEnvironment removes the compiler and launcher variables from
+// the test's environment for the duration of one case.
+//
+// scripts/test-go-utility-plugins.cjs hands `go test` the whole ambient
+// environment, and scripts/test-go-coverage.cjs and `ttsx` itself both export
+// TTSC_TSGO_BINARY and TTSC_TTSX_BINARY, which is exactly what hid the config
+// evaluator resolving both tools from the environment alone. A case that means
+// to exercise the project-anchored resolution has to shed them first, or it
+// proves only that something upstream set them.
+func shedConfigToolEnvironment(t *testing.T) {
+  t.Helper()
+  t.Setenv("TTSC_TSGO_BINARY", "")
+  t.Setenv("TTSC_TTSX_BINARY", "")
+}
+
+// requireNoAmbientInstall skips the case when a real install of pkg answers
+// above the fixture.
+//
+// The negative resolutions assert that a project answers with nothing, and the
+// walk they exercise climbs to the filesystem root by design, exactly as Node's
+// does. A stray install above the system temp directory would answer for the
+// project the case deliberately left empty, and the failure would read as a
+// defect in the resolution rather than as pollution outside the tree. The probe
+// anchors one level above `root`, so it inspects the ambient ancestry only and
+// never the fixture.
+func requireNoAmbientInstall(t *testing.T, root, pkg string) {
+  t.Helper()
+  probe := filepath.Join(filepath.Dir(root), "ambient-probe-anchor")
+  if found := stripNodePackageManifestFrom(probe, pkg); found != "" {
+    t.Skipf("an ambient %s install at %s answers above the fixture", pkg, found)
+  }
+}
+
+// seedProjectTypeScript materializes the `typescript` install a project-anchored
+// compiler resolution walks to, under `root`'s node_modules, and returns the
+// platform executable path it should produce.
+//
+// The layout mirrors an npm install: the `typescript` manifest, and the
+// `@typescript/typescript-<platform>-<arch>` platform package beside it holding
+// `lib/tsc` (`lib/tsc.exe` on Windows). The platform name comes from
+// stripNodePlatformPair so the fixture tracks the host it runs on;
+// TestNodePlatformPairMatchesTheNpmPlatformVocabulary pins that mapping
+// independently, so a wrong mapping fails there rather than passing here.
+func seedProjectTypeScript(t *testing.T, root string) string {
+  t.Helper()
+  binary := seedProjectTypeScriptWithoutCompiler(t, root)
+  writeFile(t, binary, "")
+  return binary
+}
+
+// seedProjectTypeScriptWithoutCompiler is seedProjectTypeScript stopping one
+// file short: both manifests exist and the platform executable does not. It is
+// the shape an install left behind by a failed or partial unpack, and the
+// resolution must decline it rather than hand the child a path it cannot spawn.
+func seedProjectTypeScriptWithoutCompiler(t *testing.T, root string) string {
+  t.Helper()
+  platform, arch := stripNodePlatformPair()
+  modules := filepath.Join(root, "node_modules")
+  writeFile(t, filepath.Join(modules, "typescript", "package.json"), `{"name":"typescript"}`)
+  name := "tsc"
+  if runtime.GOOS == "windows" {
+    name = "tsc.exe"
+  }
+  binary := filepath.Join(
+    modules,
+    "@typescript",
+    "typescript-"+platform+"-"+arch,
+    "lib",
+    name,
+  )
+  writeFile(t, filepath.Join(filepath.Dir(filepath.Dir(binary)), "package.json"), `{"name":"platform"}`)
+  return binary
+}
+
+// seedProjectTtsc materializes the `ttsc` install a project-anchored launcher
+// resolution walks to, under `root`'s node_modules, and returns the launcher
+// path it should produce. Only the manifest and `lib/launcher/ttsx.js` matter;
+// nothing spawns the file, so its contents are irrelevant.
+func seedProjectTtsc(t *testing.T, root string) string {
+  t.Helper()
+  launcher := seedProjectTtscWithoutLauncher(t, root)
+  writeFile(t, launcher, "")
+  return launcher
+}
+
+// seedProjectTtscWithoutLauncher installs the `ttsc` manifest and no launcher
+// file, the shape a resolution must decline rather than name a path that is not
+// there.
+func seedProjectTtscWithoutLauncher(t *testing.T, root string) string {
+  t.Helper()
+  installDir := filepath.Join(root, "node_modules", "ttsc")
+  writeFile(t, filepath.Join(installDir, "package.json"), `{"name":"ttsc"}`)
+  return filepath.Join(installDir, "lib", "launcher", "ttsx.js")
+}
+
 // mustJSON serializes the native plugin manifest shape expected by the sidecar.
 func mustJSON(t *testing.T, value any) string {
   t.Helper()
