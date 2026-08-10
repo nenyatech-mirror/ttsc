@@ -18,18 +18,18 @@ func TestFormatSemiIdempotentOnTerminatedMembers(t *testing.T) {
   assertRuleSkipsSource(
     t,
     "format/semi",
-    "interface Shape {\n" +
-      "  value: string;\n" +
-      "  method(): void;\n" +
-      "  [key: string]: string;\n" +
-      "  (): void;\n" +
-      "  new (): Shape;\n" +
-      "}\n" +
-      "type Alias = {\n" +
-      "  name: string;\n" +
-      "};\n" +
-      "class Value {\n" +
-      "  [key: string]: string;\n" +
+    "interface Shape {\n"+
+      "  value: string;\n"+
+      "  method(): void;\n"+
+      "  [key: string]: string;\n"+
+      "  (): void;\n"+
+      "  new (): Shape;\n"+
+      "}\n"+
+      "type Alias = {\n"+
+      "  name: string;\n"+
+      "};\n"+
+      "class Value {\n"+
+      "  [key: string]: string;\n"+
       "}\n",
   )
 }

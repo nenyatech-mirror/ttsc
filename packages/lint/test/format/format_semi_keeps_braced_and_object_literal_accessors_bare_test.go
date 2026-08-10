@@ -21,15 +21,15 @@ func TestFormatSemiKeepsBracedAndObjectLiteralAccessorsBare(t *testing.T) {
   assertRuleSkipsSource(
     t,
     "format/semi",
-    "class Value {\n" +
-      "  get first(): string {\n" +
-      "    return \"first\";\n" +
-      "  }\n" +
-      "}\n" +
-      "const holder = {\n" +
-      "  get first(): string {\n" +
-      "    return \"first\";\n" +
-      "  },\n" +
+    "class Value {\n"+
+      "  get first(): string {\n"+
+      "    return \"first\";\n"+
+      "  }\n"+
+      "}\n"+
+      "const holder = {\n"+
+      "  get first(): string {\n"+
+      "    return \"first\";\n"+
+      "  },\n"+
       "};\n",
   )
 }

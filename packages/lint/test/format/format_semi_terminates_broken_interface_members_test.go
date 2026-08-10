@@ -19,23 +19,23 @@ func TestFormatSemiTerminatesBrokenInterfaceMembers(t *testing.T) {
   assertFixSnapshot(
     t,
     "format/semi",
-    "interface Shape {\n" +
-      "  value: string\n" +
-      "  method(): void\n" +
-      "  [key: string]: string\n" +
-      "  (): void\n" +
-      "  new (): Shape\n" +
-      "  get first(): string\n" +
-      "  set first(next: string)\n" +
+    "interface Shape {\n"+
+      "  value: string\n"+
+      "  method(): void\n"+
+      "  [key: string]: string\n"+
+      "  (): void\n"+
+      "  new (): Shape\n"+
+      "  get first(): string\n"+
+      "  set first(next: string)\n"+
       "}\n",
-    "interface Shape {\n" +
-      "  value: string;\n" +
-      "  method(): void;\n" +
-      "  [key: string]: string;\n" +
-      "  (): void;\n" +
-      "  new (): Shape;\n" +
-      "  get first(): string;\n" +
-      "  set first(next: string);\n" +
+    "interface Shape {\n"+
+      "  value: string;\n"+
+      "  method(): void;\n"+
+      "  [key: string]: string;\n"+
+      "  (): void;\n"+
+      "  new (): Shape;\n"+
+      "  get first(): string;\n"+
+      "  set first(next: string);\n"+
       "}\n",
   )
 }

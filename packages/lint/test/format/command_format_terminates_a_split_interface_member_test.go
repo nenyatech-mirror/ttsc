@@ -20,14 +20,14 @@ import "testing"
 func TestCommandFormatTerminatesASplitInterfaceMember(t *testing.T) {
   assertFormatResult(
     t,
-    "export interface Alpha { alpha: number }\n" +
+    "export interface Alpha { alpha: number }\n"+
       "export interface Bravo { alpha: number; bravo: string }\n",
-    "export interface Alpha {\n" +
-      "  alpha: number;\n" +
-      "}\n" +
-      "export interface Bravo {\n" +
-      "  alpha: number;\n" +
-      "  bravo: string;\n" +
+    "export interface Alpha {\n"+
+      "  alpha: number;\n"+
+      "}\n"+
+      "export interface Bravo {\n"+
+      "  alpha: number;\n"+
+      "  bravo: string;\n"+
       "}\n",
   )
 }
