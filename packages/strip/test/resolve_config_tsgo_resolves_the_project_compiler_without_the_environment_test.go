@@ -13,9 +13,10 @@ import (
 // only by inheritance from a `ttsx`-launched host: the shipped `ttscserver`
 // binary invoked with `--tsgo <path>` exports nothing, and evaluation aborted
 // with `ttsc: typescript is required` before a line of the config was read.
-// The case sheds both variables first, because the Go runners hand `go test`
-// an environment that already carries them and that is exactly what masked the
-// defect.
+// The case sheds both variables first: every existing loader case pins
+// TTSC_TTSX_BINARY at a fake launcher, and both Go runners forward the ambient
+// environment a `ttsx`-launched suite already carries, so a case that kept them
+// could prove only that something upstream set them.
 //
 //  1. Seed a project holding `typescript` and its platform package.
 //  2. Shed TTSC_TSGO_BINARY and TTSC_TTSX_BINARY.
