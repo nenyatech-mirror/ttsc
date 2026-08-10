@@ -72,7 +72,7 @@ test("the release rehearsal plans every publishable package it does not exclude"
   assert.deepEqual(
     audit.stale,
     [],
-    "experimental/tarballs full mode plans a package that no longer publishes",
+    "experimental/tarballs full mode names a package that does not publish",
   );
   assert.deepEqual(
     audit.contradictory,
@@ -103,6 +103,14 @@ test("the release rehearsal plans every publishable package it does not exclude"
     }).unrehearsed,
     [future.name],
     "a blank exclusion reason must not excuse a published package",
+  );
+  assert.deepEqual(
+    auditPackPlan([...publishable, future], {
+      packages: plan.full.packages,
+      exclusions: { ...plan.full.exclusions, [future.name]: null },
+    }).unrehearsed,
+    [future.name],
+    "an exclusion with no written reason must not excuse a published package",
   );
   assert.deepEqual(
     auditPackPlan([...publishable, future], {
@@ -332,7 +340,10 @@ function auditPackPlan(publishable, plan) {
   const exclusions = new Map(Object.entries(plan.exclusions ?? {}));
   const directories = new Set(publishable.map((entry) => entry.directory));
   const names = new Set(publishable.map((entry) => entry.name));
-  const excused = (entry) => (exclusions.get(entry.name) ?? "").trim() !== "";
+  const excused = (entry) => {
+    const reason = exclusions.get(entry.name);
+    return typeof reason === "string" && reason.trim() !== "";
+  };
   return {
     unrehearsed: publishable
       .filter((entry) => !packed.has(entry.directory) && !excused(entry))
