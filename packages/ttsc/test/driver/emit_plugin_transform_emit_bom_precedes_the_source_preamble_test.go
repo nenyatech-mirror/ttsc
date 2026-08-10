@@ -41,6 +41,8 @@ const preambleHashbangLine = "#!/usr/bin/env node"
 //     immediately follows it, with the injected preamble still in the output.
 //  3. Without it, assert the same file starts with the shebang and carries no
 //     mark anywhere (the negative twin).
+//  4. Repeat the positive case with `inlineSourceMap`, where the preamble-shift
+//     correction rewrites the emitted text after the mark was applied.
 func TestEmitPluginTransformEmitBOMPrecedesTheSourcePreamble(t *testing.T) {
   t.Run("emit_bom_marks_the_file_ahead_of_the_shebang", func(t *testing.T) {
     js := emitHashbangWithPreamble(t, `"emitBOM": true`)
@@ -68,6 +70,23 @@ func TestEmitPluginTransformEmitBOMPrecedesTheSourcePreamble(t *testing.T) {
     }
     if !strings.Contains(js, "preamble 1") {
       t.Fatalf("the injected source preamble is missing, so this case does not exercise the interaction it names:\n%q", js)
+    }
+  })
+
+  t.Run("emit_bom_survives_the_inline_map_preamble_correction", func(t *testing.T) {
+    // With a preamble AND an inline map, EmitWithPluginTransformers rewrites the
+    // emitted text after PrintFileWithSourceMap returned it, re-encoding the
+    // base64 trailer to undo the preamble's line shift. The mark is already at
+    // the front by then, and splicing the trailer must leave it there.
+    js := emitHashbangWithPreamble(t, `"emitBOM": true, "inlineSourceMap": true`)
+    if !strings.HasPrefix(js, utf8BOM) {
+      t.Fatalf("emitted JavaScript does not begin with the byte order mark after the inline map was corrected:\n%q", js)
+    }
+    if !strings.HasPrefix(js[len(utf8BOM):], preambleHashbangLine) {
+      t.Fatalf("the byte order mark is not immediately followed by the shebang:\n%q", js)
+    }
+    if !strings.Contains(js, "//# sourceMappingURL=data:application/json;base64,") {
+      t.Fatalf("the inline source map trailer is missing, so this case does not exercise the correction it names:\n%q", js)
     }
   })
 }
