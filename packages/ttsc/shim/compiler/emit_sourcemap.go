@@ -5,12 +5,21 @@
 // tsgo's Program.Emit has no hook to inject a custom transformer, so ttsc's
 // driver assembles the per-file emit pipeline by hand (see GetSourceFilesToEmit
 // / GetScriptTransformers / GetOutputPathsFor). That hand-assembly must also
-// reproduce the source-map step the emitter would otherwise run: a bare
-// printer.Write with a nil generator drops the `.js.map` entirely. This file
-// ports internal/compiler/emitter.go's `printSourceFile` source-map branch so a
-// `sourceMap` / `inlineSourceMap` build that goes through a plugin transform
-// produces the same map (and `//# sourceMappingURL=` trailer) a plain build
-// does. Keep it in sync with that emitter source when the pin is bumped.
+// reproduce the two steps the emitter would otherwise run: building the
+// printer's options from the compiler options, and the source-map branch a bare
+// printer.Write with a nil generator drops entirely. This file ports
+// internal/compiler/emitter.go's `emitJSFile` PrinterOptions construction and
+// its `printSourceFile` source-map branch so a build that goes through a plugin
+// transform honors the same compiler options — and produces the same map (and
+// `//# sourceMappingURL=` trailer) — a plain build does.
+//
+// Keep it in sync with that emitter source when the pin is bumped. Anything
+// `emitJSFile` sets and this file omits takes the Go zero value, which silently
+// turns the option off for every project that emits through a plugin transform.
+// `printer_options_field_set_matches_pinned_emitter_test.go` fails when the pin
+// changes the PrinterOptions field set, and
+// `emit_plugin_transform_matches_plain_emit_for_printer_options_test.go` fails
+// when a forwarded option stops matching the plain emit.
 package compiler
 
 import (
@@ -36,13 +45,15 @@ type PrintedFile struct {
 
 // PrintFileWithSourceMap renders sourceFile through a printer built from options
 // and emitContext, optionally generating a source map, mirroring
-// emitter.printSourceFile for the single-file plugin-transform path. When
+// emitter.emitJSFile and emitter.printSourceFile for the single-file
+// plugin-transform path. The PrinterOptions below are emitJSFile's, field for
+// field: `removeComments`, `newLine`, `noEmitHelpers`, `sourceMap`,
+// `inlineSourceMap`, `inlineSources`, and `target`. When
 // `sourceMap`/`inlineSourceMap` is enabled (and the file is not JSON) it builds a
 // sourcemap.Generator, feeds it to the printer so positions are recorded,
 // appends the sourceMappingURL trailer, and returns the external map text/path
 // (or encodes the map inline). host supplies the same directory/casing context
-// tsgo's emitter reads. With source maps off it is byte-for-byte the prior
-// bare-printer behavior.
+// tsgo's emitter reads.
 func PrintFileWithSourceMap(
   emitContext *innerprinter.EmitContext,
   node *innerast.Node,
@@ -53,10 +64,13 @@ func PrintFileWithSourceMap(
   sourceMapFilePath string,
 ) PrintedFile {
   printer := innerprinter.NewPrinter(innerprinter.PrinterOptions{
+    RemoveComments:  options.RemoveComments.IsTrue(),
     NewLine:         options.NewLine,
+    NoEmitHelpers:   options.NoEmitHelpers.IsTrue(),
     SourceMap:       options.SourceMap.IsTrue(),
     InlineSourceMap: options.InlineSourceMap.IsTrue(),
     InlineSources:   options.InlineSources.IsTrue(),
+    Target:          options.Target,
   }, innerprinter.PrintHandlers{}, emitContext)
   writer := innerprinter.NewTextWriter(options.NewLine.GetNewLineCharacter(), 0)
 
