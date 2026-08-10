@@ -1,6 +1,39 @@
 # Format rules
 
-The format rule set in `@ttsc/lint`, semicolons, quotes, trailing commas, import ordering, JSDoc normalization, and column-aware print-width reflow. This is what replaces Prettier in a `ttsc` project.
+The format rule set in `@ttsc/lint`, semicolons, quotes, trailing commas, import ordering, JSDoc normalization, and column-aware print-width reflow. It covers most of Prettier's configuration surface in a `ttsc` project, with one deliberate hole. Read [Scope](#scope) before adopting it as your only formatter.
+
+## Scope
+
+The format set is a collection of targeted passes, not a pretty-printer. Each pass owns one decision (a quote style, a trailing comma, a statement's indentation, whether a list still fits `printWidth`) and rewrites only the bytes that decision governs. Everything else passes through byte-identical.
+
+The consequence worth knowing before you adopt it: **no pass has the whitespace between two tokens as its subject.** `a=1` stays `a=1`, `if(x){` stays `if(x){`, `1+2` stays `1+2`, `1===1` stays `1===1`, `const i : number` keeps both of its spaces, `run (1)` keeps the gap before its parenthesis, and `(x: number)=>x*2` keeps the arrow glued on both sides. Prettier normalizes every one of those. `ttsc format` rewrites none of them, and `ttsc check` reports nothing for them at any `format.severity`, so CI cannot catch what `ttsc format` will not fix.
+
+Three passes do write canonical spacing, but only inside a region they rebuild from the syntax tree:
+
+- The `printWidth` reflow re-prints a node that does not fit its budget. A node whose flat form already fits is never re-printed, so its interior spacing survives exactly as written.
+- Declaration-header reflow rebuilds a class or interface header between the name and the `{`, so its type parameters and `extends` / `implements` clauses come out canonically separated. The individual types are copied verbatim.
+- Parameter-property breaking rebuilds a constructor's parameter list when it force-breaks. Each parameter's own text is copied verbatim.
+
+A file already formatted by Prettier is therefore left alone, the fixed point the repository's own format corpus measures, and a file that is not is normalized on every axis the key table below lists and on no other.
+
+### Partial normalization
+
+`bracketSpacing` governs the padding immediately inside a brace pair and nothing between the tokens that pair wraps. On an interior that is itself unspaced, the result is a shape neither the author wrote nor Prettier emits:
+
+```ts
+// input
+export type J = {alpha:number;bravo:string};
+
+// prettier 3.8.3
+export type J = { alpha: number; bravo: string };
+
+// ttsc format
+export type J = { alpha:number;bravo:string };
+```
+
+This is a deliberate decision, not an oversight. Abstaining here would mean recognizing that the interior is not in Prettier's shape, which is the token-spacing analysis that does not exist, and it would cost the `{alpha: 1}` to `{ alpha: 1 }` fix that agrees with Prettier today. The padding is applied and the interior is left to its author.
+
+Token spacing is a candidate for a future pass, not a promise. Until it lands, `ttsc format` is a complete formatter for code already written in Prettier's token shape and a partial one for code that is not, so keep Prettier in the loop when migrating a codebase that has never been through it.
 
 ## The `format` block (canonical)
 
@@ -82,7 +115,7 @@ Parentheses around a single arrow-function parameter. `"always"` (default) keeps
 
 ### `bracketSpacing`
 
-Inner spaces in single-line braces. `true` (default) keeps the space inside object literals, destructuring patterns, named imports/exports, type literals, mapped types, and import attributes (`{ a }`); `false` removes it (`{a}`). Block, class, interface, and enum braces are unaffected. Driven by `format.bracketSpacing`.
+Inner spaces in single-line braces. `true` (default) keeps the space inside object literals, destructuring patterns, named imports/exports, type literals, mapped types, and import attributes (`{ a }`); `false` removes it (`{a}`). Block, class, interface, and enum braces are unaffected. The padding is all this key governs, so an interior that is not already in Prettier's shape keeps its own spacing, see [Partial normalization](#partial-normalization). Driven by `format.bracketSpacing`.
 
 ### `quoteProps`
 
@@ -189,6 +222,8 @@ A ternary (conditional expression) is reflowed too: Prettier's indented staircas
 Width is measured in **display columns** (Prettier's `getStringWidth`), not UTF-8 bytes: a wide East Asian or emoji code point counts as two columns, so a Hangul or CJK identifier is charged its true width.
 
 #### What it does NOT touch (yet)
+
+This list is the reflow's own, scoped to node shapes. The boundary that applies to the whole format set is [Scope](#scope).
 
 - JSX elements and fragments.
 - Binary expressions.

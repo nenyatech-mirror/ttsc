@@ -3,9 +3,10 @@ package graph
 import "github.com/samchon/ttsc/packages/ttsc/driver"
 
 // FileDiagnostics returns the resident program's compiler diagnostics for the
-// source file at path, in the same code and location tsgo reports. Because the
-// graph rides the already-open Program, this is one Program.Diagnostics() call
-// over the warm checker, not a second compile.
+// source file at path, with the code tsgo reports and the location the driver
+// resolves (see Diagnostic: authored-relative under a source preamble). Because
+// the graph rides the already-open Program, this is one Program.Diagnostics()
+// call over the warm checker, not a second compile.
 //
 // This is the compiler-only slice: it carries the TypeScript semantic
 // diagnostics, not @ttsc/lint or transform-plugin findings.

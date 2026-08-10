@@ -275,6 +275,16 @@ test("CI support files select their actual executors", () => {
   assert.deepEqual(ids(["experimental/test-unplugin/src/index.ts"]), [
     "typecheck",
   ]);
+  // The rehearsal's package list is gated by factory-package.test.cjs, which
+  // only `package-defenses` runs. Selecting it for the guarded file is what
+  // stops a deleted pack entry from merging with its gate never running.
+  assert.deepEqual(ids(["experimental/tarballs/index.ts"]), [
+    "typecheck",
+    "package-defenses",
+  ]);
+  // The clause is scoped to the rehearsal: every other experimental harness
+  // keeps the lightweight contract it had.
+  assert.deepEqual(ids(["experimental/install/src/index.ts"]), ["typecheck"]);
 });
 
 test("every E2E directory has exactly one normal topology owner", () => {
