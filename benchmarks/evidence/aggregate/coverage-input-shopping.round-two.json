@@ -1,0 +1,54 @@
+{
+  "cohort": "round two, campaign/evidence-luna-0.26.0",
+  "subject": "shopping",
+  "arm": "plain",
+  "runId": "d8a3e4a6-f559-4148-8199-749581292fd0",
+  "state": "partial",
+  "method": {
+    "read": "The completed Plain workspace, read-only. No requirement identifier appears anywhere in it, so every reach is decided by one artifact naming another.",
+    "counted": "The same edges counted for todo and reddit, by the same scripts.",
+    "uncounted": "The six requirement-rooted edges, and `modelToDto`, whose two derivations disagree."
+  },
+  "populations": {
+    "accessors": 114,
+    "hooks": 39,
+    "screens": 25,
+    "models": 29,
+    "scalarColumns": 231,
+    "backendTestFunctions": 12,
+    "journeyCases": 7
+  },
+  "cells": [
+    {
+      "model": "gpt-5.6-luna",
+      "subject": "shopping",
+      "edges": {
+        "requirementToModel": null,
+        "requirementToOperation": null,
+        "requirementToDto": null,
+        "requirementToTest": null,
+        "requirementToScreen": null,
+        "requirementToJourney": null,
+        "modelToOperation": { "eligible": 29, "reached": 29 },
+        "modelToDto": null,
+        "accessorToTest": { "eligible": 114, "reached": 113 },
+        "accessorToHook": { "eligible": 114, "reached": 114 },
+        "hookToScreen": { "eligible": 39, "reached": 25 },
+        "screenToJourney": { "eligible": 25, "reached": 13 },
+        "columnToProperty": { "eligible": 231, "reached": 67 }
+      }
+    }
+  ],
+  "readWithTheEdge": {
+    "accessorToTest": "113 of 114 accessors are named inside a test, and the whole suite is twelve exported test functions across four files. The edge asks whether an accessor is reached, and it is; what twelve functions can prove about a hundred and fourteen operations is the question its review verdicts answer, and all fifteen of them failed.",
+    "screenToJourney": "Thirteen of twenty-five screens are walked by one of the seven journey cases. This is the widest screen population in the cohort and the smallest fraction of it driven.",
+    "columnToProperty": "Sixty-seven of two hundred and thirty-one scalar columns reach a published property."
+  },
+  "disagreements": {
+    "modelToDto": {
+      "reading": null,
+      "nameStem": { "eligible": 29, "reached": 17 },
+      "why": "The name-stem rule reports twelve models unreached, and the reading that would settle each of them has not been done for this subject. For todo and reddit the same rule undercounted, because a workspace publishes a session as an authorization and a recovery proof as a recovery request. One derivation alone is not a measurement here, so nothing is published for this edge yet."
+    }
+  }
+}

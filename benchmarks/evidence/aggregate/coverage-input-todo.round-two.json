@@ -31,18 +31,38 @@
         "requirementToTest": null,
         "requirementToScreen": null,
         "requirementToJourney": null,
-        "modelToOperation": { "eligible": 7, "reached": 7 },
-        "modelToDto": { "eligible": 7, "reached": 6 },
-        "accessorToTest": { "eligible": 24, "reached": 24 },
-        "accessorToHook": { "eligible": 24, "reached": 24 },
-        "hookToScreen": { "eligible": 24, "reached": 22 },
-        "screenToJourney": { "eligible": 4, "reached": 4 },
-        "columnToProperty": { "eligible": 50, "reached": 28 }
+        "modelToOperation": {
+          "eligible": 7,
+          "reached": 7
+        },
+        "modelToDto": null,
+        "accessorToTest": {
+          "eligible": 24,
+          "reached": 24
+        },
+        "accessorToHook": {
+          "eligible": 24,
+          "reached": 24
+        },
+        "hookToScreen": {
+          "eligible": 24,
+          "reached": 22
+        },
+        "screenToJourney": {
+          "eligible": 4,
+          "reached": 4
+        },
+        "columnToProperty": {
+          "eligible": 50,
+          "reached": 28
+        }
       }
     }
   ],
   "unreached": {
-    "modelToDto": ["todo_delivery_effects, which no published type represents"],
+    "modelToDto": [
+      "todo_delivery_effects, which no published type represents"
+    ],
     "hookToScreen": [
       "two of the twenty-four hooks are called by no screen component"
     ],
@@ -53,5 +73,18 @@
       "history change flags: title_changed, description_changed, start_date_changed, due_date_changed",
       "delivery effect internals: recipient, kind, payload"
     ]
+  },
+  "disagreements": {
+    "modelToDto": {
+      "reading": {
+        "eligible": 7,
+        "reached": 6
+      },
+      "nameStem": {
+        "eligible": 7,
+        "reached": 5
+      },
+      "why": "A reading counts a model reached when its information arrives on the published surface under any name; a name-stem rule counts it reached only when a published type is named after it. They disagree on the models a workspace publishes under another shape — a session as an authorization, a recovery proof as a recovery request. Neither figure is published until the disagreement is settled by reading the candidates."
+    }
   }
 }

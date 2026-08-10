@@ -29,13 +29,31 @@
         "requirementToTest": null,
         "requirementToScreen": null,
         "requirementToJourney": null,
-        "modelToOperation": { "eligible": 14, "reached": 14 },
-        "modelToDto": { "eligible": 14, "reached": 13 },
-        "accessorToTest": { "eligible": 43, "reached": 43 },
-        "accessorToHook": { "eligible": 43, "reached": 43 },
-        "hookToScreen": { "eligible": 19, "reached": 18 },
-        "screenToJourney": { "eligible": 7, "reached": 6 },
-        "columnToProperty": { "eligible": 103, "reached": 68 }
+        "modelToOperation": {
+          "eligible": 14,
+          "reached": 14
+        },
+        "modelToDto": null,
+        "accessorToTest": {
+          "eligible": 43,
+          "reached": 43
+        },
+        "accessorToHook": {
+          "eligible": 43,
+          "reached": 43
+        },
+        "hookToScreen": {
+          "eligible": 19,
+          "reached": 18
+        },
+        "screenToJourney": {
+          "eligible": 7,
+          "reached": 6
+        },
+        "columnToProperty": {
+          "eligible": 103,
+          "reached": 68
+        }
       }
     }
   ],
@@ -43,12 +61,27 @@
     "modelToDto": [
       "moderators, whose id, user_id, community_id, and created_at reach no published shape; a moderator surfaces only as a username inside a moderation history entry"
     ],
-    "hookToScreen": ["one of the nineteen hooks is called by no screen"],
+    "hookToScreen": [
+      "one of the nineteen hooks is called by no screen"
+    ],
     "screenToJourney": [
       "one of the seven screens is walked by none of the four journey cases"
     ],
     "columnToProperty": [
       "thirty-five of the hundred and three scalar columns reach no published property, the same families as todo: foreign keys, credential hashes, internal lifecycle timestamps, and moderation bookkeeping"
     ]
+  },
+  "disagreements": {
+    "modelToDto": {
+      "reading": {
+        "eligible": 14,
+        "reached": 13
+      },
+      "nameStem": {
+        "eligible": 14,
+        "reached": 11
+      },
+      "why": "A reading counts a model reached when its information arrives on the published surface under any name; a name-stem rule counts it reached only when a published type is named after it. They disagree on the models a workspace publishes under another shape — a session as an authorization, a recovery proof as a recovery request. Neither figure is published until the disagreement is settled by reading the candidates."
+    }
   }
 }
