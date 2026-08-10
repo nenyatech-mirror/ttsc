@@ -4,19 +4,19 @@
       "model": "gpt-5.6-luna",
       "subject": "reddit",
       "edges": {
-        "requirementToModel":     { "eligible": 162, "reached": 162 },
+        "requirementToModel": { "eligible": 162, "reached": 162 },
         "requirementToOperation": { "eligible": 173, "reached": 173 },
-        "requirementToDto":       { "eligible": 131, "reached": 129 },
-        "requirementToTest":      { "eligible": 173, "reached": 151 },
-        "requirementToScreen":    { "eligible": 193, "reached": 191 },
-        "requirementToJourney":   { "eligible": 193, "reached": 75 },
-        "modelToOperation":       { "eligible": 18, "reached": 18 },
-        "modelToDto":             { "eligible": 18, "reached": 17 },
-        "accessorToTest":         { "eligible": 45, "reached": 45 },
-        "accessorToHook":         { "eligible": 45, "reached": 45 },
-        "hookToScreen":           { "eligible": 45, "reached": 43 },
-        "screenToJourney":        { "eligible": 15, "reached": 14 },
-        "columnToProperty":       { "eligible": 121, "reached": 63 }
+        "requirementToDto": { "eligible": 131, "reached": 129 },
+        "requirementToTest": { "eligible": 173, "reached": 151 },
+        "requirementToScreen": { "eligible": 193, "reached": 191 },
+        "requirementToJourney": { "eligible": 193, "reached": 75 },
+        "modelToOperation": { "eligible": 18, "reached": 18 },
+        "modelToDto": { "eligible": 18, "reached": 17 },
+        "accessorToTest": { "eligible": 45, "reached": 45 },
+        "accessorToHook": { "eligible": 45, "reached": 45 },
+        "hookToScreen": { "eligible": 45, "reached": 43 },
+        "screenToJourney": { "eligible": 15, "reached": 14 },
+        "columnToProperty": { "eligible": 121, "reached": 63 }
       }
     }
   ]

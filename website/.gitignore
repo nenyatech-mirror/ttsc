@@ -11,6 +11,10 @@ public/benchmark/png/
 # build/evidence-benchmark-data.cjs. One measurement, one source.
 public/benchmark/evidence.json
 public/benchmark/evidence-coverage.json
+# Drawn from that same aggregate by `pnpm --filter @ttsc/benchmark-evidence
+# charts`, for the same reason: a committed chart is a second copy of a
+# measurement, and it is the copy nobody redraws when the first one changes.
+public/benchmark/evidence/
 public/compiler/index.js
 public/compiler/*.map
 public/compiler/playground.wasm

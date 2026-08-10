@@ -82,6 +82,11 @@ const SCOPES = {
     "@ttsc/evidence",
     PLATFORM,
   ],
+  // The website redraws the evidence benchmark charts from the tracked
+  // aggregate at deploy time, and that renderer runs under `ttsx`. Nothing on
+  // that path compiles a plugin, so the launcher and the compiler it drives are
+  // the whole requirement.
+  "website-charts": ["ttsc", PLATFORM],
   // The persistence harness only builds and runs source plugins through ttsc.
   // Building every unrelated workspace package six times obscured the cache
   // invariant behind roughly forty runner-minutes of setup.
@@ -106,6 +111,7 @@ const PLATFORM_TARGETS = {
   "test-packages": "ttsc",
   "test-metro": "ttsc",
   "plugin-cache": "ttsc",
+  "website-charts": "ttsc",
   experimental: "ttsc",
   "test-graph": "ttsc,ttscgraph",
   "test-evidence": "ttsc",

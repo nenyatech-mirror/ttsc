@@ -84,6 +84,8 @@ The suspension audit compares each latest run with Windows Kernel-Power disconne
 
 The command writes `benchmarks/evidence/aggregate/summary.json` and stable per-cell JSON under `benchmarks/evidence/aggregate/cells/<model>/<subject>/<arm>.json`, then draws `summary.svg` and one `<model>-<subject>.svg` per subject into `website/public/benchmark/evidence/`, where the site serves them. Every artifact renders or copies values from the same retained aggregate without recalculating them. An empty collection is refused rather than published, so a checkout without run records cannot replace the tracked measurement with nothing.
 
+Those SVGs are generated and ignored. The aggregate is the tracked artifact, and the website workflow redraws them from it before every deploy, so a chart is never committed beside the measurement it draws.
+
 The charts redraw from the tracked aggregate alone, with no run records present:
 
 ```bash

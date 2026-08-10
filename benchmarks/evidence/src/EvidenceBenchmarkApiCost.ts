@@ -103,6 +103,7 @@ export const collectEvidenceBenchmarkApiCost = (
   let requests: number = 0;
   let shortContextRequests: number = 0;
   let longContextRequests: number = 0;
+  let replayedUpdates: number = 0;
   let invalid: string | undefined;
   let reachedExpected: boolean = sameUsage(observed, props.expected);
   forEachLine(stageLogs, (line) => {
@@ -118,8 +119,14 @@ export const collectEvidenceBenchmarkApiCost = (
       observed,
     );
     if (usage === null || !sameUsage(usage, update.last)) {
-      invalid =
-        "a cumulative token update does not match its per-request usage";
+      // Two drivers on one thread write two cumulative counters into one
+      // stream, so a line can report a total this walk has already passed or
+      // one whose step does not match the request it carries. Such a line
+      // states no request of its own, and abandoning the run over it discards
+      // a measurement the surviving sequence still holds. Drop it and count
+      // the drop; the reconciliation below is what decides whether what
+      // survived is the whole run.
+      replayedUpdates += 1;
       return;
     }
     const validation: string | undefined = validateUsage(usage);
@@ -153,6 +160,7 @@ export const collectEvidenceBenchmarkApiCost = (
     shortContextRequests,
     longContextRequests,
     longContextThresholdTokens: LONG_CONTEXT_THRESHOLD_TOKENS,
+    replayedUpdates,
   };
 };
 

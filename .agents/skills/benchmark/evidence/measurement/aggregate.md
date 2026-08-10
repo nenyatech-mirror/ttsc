@@ -26,9 +26,9 @@ pnpm --filter @ttsc/benchmark-evidence charts
 
 That reads `summary.json` and `coverage.json` and rewrites only the SVGs, sweeping any a cohort no longer carries. Use it after a chart change; use `report` after a run. The website build rasterizes each one to a 2x PNG under `public/benchmark/png/`.
 
-Raw run records and measured workspaces stay under the ignored `benchmarks/evidence/output/`. Only the aggregate is tracked.
+Raw run records and measured workspaces stay under the ignored `benchmarks/evidence/output/`, and so are the charts under `website/public/benchmark/evidence/`. Only the aggregate is tracked, and the website workflow redraws the charts from it at deploy time. Commit the aggregate; a chart never needs committing.
 
-USD cost is reconstructed from each native request's token categories and context tier, and published only when those requests exactly match the retained total.
+USD cost is reconstructed from each native request's token categories and context tier, and published only when those requests exactly match the retained total. A stage log that two drivers wrote carries one writer's replayed counters beside the other's, and those lines are dropped rather than failing the run: the amount still has to reconcile to the retained total exactly, so it stays whole, while `replayedUpdates` records how many lines went and marks the request counts a lower bound.
 
 Pass repeated `--run-id <run-id>` arguments to both commands to publish an explicit historical cohort.
 
