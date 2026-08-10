@@ -25,10 +25,6 @@ type printerOptionCase struct {
   denyFiles []string
 }
 
-// utf8BOM is the byte order mark `emitBOM` prepends, the same three bytes
-// tsgo's stringutil.AddUTF8ByteOrderMark writes.
-const utf8BOM = "\ufeff"
-
 const (
   printerOptionComment   = "// TTSC_PRINTER_OPTIONS_COMMENT\nexport const a = 0;\n"
   printerOptionSeparator = "export const million = 1_000_000;\n"
@@ -268,12 +264,12 @@ func TestEmitPluginTransformMatchesPlainEmitForPrinterOptions(t *testing.T) {
       }
       for _, want := range testCase.want {
         if !strings.Contains(text, want) {
-          t.Fatalf("plugin lane %s is missing %q; the compiler option did not reach the emitted text:\n%s", testCase.file, want, text)
+          t.Fatalf("plugin lane %s is missing %q; the compiler option did not reach the emitted text:\n%q", testCase.file, want, text)
         }
       }
       for _, deny := range testCase.deny {
         if strings.Contains(text, deny) {
-          t.Fatalf("plugin lane %s still contains %q; the compiler option did not reach the emitted text:\n%s", testCase.file, deny, text)
+          t.Fatalf("plugin lane %s still contains %q; the compiler option did not reach the emitted text:\n%q", testCase.file, deny, text)
         }
       }
       for _, denied := range testCase.denyFiles {

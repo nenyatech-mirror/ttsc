@@ -36,6 +36,11 @@ func writeProjectFile(t *testing.T, root, name, contents string) {
   }
 }
 
+// utf8BOM is the byte order mark `emitBOM` prepends, the same three bytes
+// tsgo's stringutil.AddUTF8ByteOrderMark writes. Shared: the emit lanes'
+// parity, WriteFileData, and source-preamble cases all witness it.
+const utf8BOM = "\ufeff"
+
 // emittedArtifact is one WriteFile callback invocation: the artifact's text and
 // the WriteFileData the emit lane handed the callback alongside it, copied so a
 // later write cannot mutate what an earlier one reported. data is nil when the
