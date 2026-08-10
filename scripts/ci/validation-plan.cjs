@@ -621,6 +621,15 @@ function planForPaths(files) {
     if (file.startsWith("experimental/test-unplugin/")) {
       continue;
     }
+    // The tarball rehearsal's package list is a hand-written set that has to
+    // track the published one, and `scripts/ci/factory-package.test.cjs` is what
+    // holds it there. That gate runs in `package-defenses`, so without this
+    // clause the generic `experimental/` skip below would let a deleted pack
+    // entry merge with the gate that guards it never having run.
+    if (file.startsWith("experimental/tarballs/")) {
+      add(["package-defenses"], file);
+      continue;
+    }
     // The evidence benchmark is claimed above; the two ttsc harnesses under
     // `benchmarks/` have their own workflow and no lane in this plan.
     if (file.startsWith("benchmarks/")) {
