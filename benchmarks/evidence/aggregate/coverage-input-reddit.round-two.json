@@ -1,0 +1,54 @@
+{
+  "cohort": "round two, campaign/evidence-luna-0.26.0",
+  "subject": "reddit",
+  "arm": "plain",
+  "runId": "8e9cc1b8-0d4c-408d-8baf-905d8acd4fe4",
+  "state": "partial",
+  "method": {
+    "read": "The completed Plain workspace, read-only. No requirement identifier appears anywhere in it, so every reach below is decided by one artifact naming another, never by a tag.",
+    "counted": "The same seven edges counted for todo, by the same two scripts, so the two subjects are comparable.",
+    "uncounted": "The six requirement-rooted edges, for the same reason they are uncounted for todo: their eligibility is a judgement over the requirement corpus and the delivered code names none of it."
+  },
+  "populations": {
+    "accessors": 43,
+    "hooks": 19,
+    "screens": 7,
+    "models": 14,
+    "scalarColumns": 103,
+    "backendTests": 79,
+    "journeyCases": 4
+  },
+  "cells": [
+    {
+      "model": "gpt-5.6-luna",
+      "subject": "reddit",
+      "edges": {
+        "requirementToModel": null,
+        "requirementToOperation": null,
+        "requirementToDto": null,
+        "requirementToTest": null,
+        "requirementToScreen": null,
+        "requirementToJourney": null,
+        "modelToOperation": { "eligible": 14, "reached": 14 },
+        "modelToDto": { "eligible": 14, "reached": 13 },
+        "accessorToTest": { "eligible": 43, "reached": 43 },
+        "accessorToHook": { "eligible": 43, "reached": 43 },
+        "hookToScreen": { "eligible": 19, "reached": 18 },
+        "screenToJourney": { "eligible": 7, "reached": 6 },
+        "columnToProperty": { "eligible": 103, "reached": 68 }
+      }
+    }
+  ],
+  "unreached": {
+    "modelToDto": [
+      "moderators, whose id, user_id, community_id, and created_at reach no published shape; a moderator surfaces only as a username inside a moderation history entry"
+    ],
+    "hookToScreen": ["one of the nineteen hooks is called by no screen"],
+    "screenToJourney": [
+      "one of the seven screens is walked by none of the four journey cases"
+    ],
+    "columnToProperty": [
+      "thirty-five of the hundred and three scalar columns reach no published property, the same families as todo: foreign keys, credential hashes, internal lifecycle timestamps, and moderation bookkeeping"
+    ]
+  }
+}
