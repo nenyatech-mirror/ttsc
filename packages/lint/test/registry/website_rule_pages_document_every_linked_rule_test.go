@@ -111,7 +111,7 @@ func auditWebsiteRuleAnchors(
         Rule:   name,
         Family: family,
         Anchor: anchor,
-        Reason: "that page carries no level-3 heading with this anchor; add `### " + name + "`",
+        Reason: "that page carries no level-3 heading with this anchor; add \"### `" + name + "`\" to it",
       })
     }
   }

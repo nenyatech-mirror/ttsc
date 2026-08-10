@@ -19,6 +19,18 @@ import (
 //  2. Assert it reported no gap.
 //  3. Assert it requested no page at all.
 func TestWebsiteRuleAnchorAuditIgnoresUpstreamAndFormatRules(t *testing.T) {
+  // An unregistered fixture rule would also derive no ttsc.dev link, and would
+  // let this pass for the wrong reason. `format/semi` is the one that must
+  // derive nothing at all; the other three must derive a real upstream page.
+  if got := ruleDocumentationURL("format/semi"); got != "" {
+    t.Fatalf("format/semi now derives %q; the format boundary moved", got)
+  }
+  for _, name := range []string{"unicorn/no-null", "typescript/no-explicit-any", "no-alert"} {
+    if got := ruleDocumentationURL(name); got == "" {
+      t.Fatalf("rule %q derives no documentation URL; pick another fixture rule", name)
+    }
+  }
+
   requested := []string{}
   gaps, checked := auditWebsiteRuleAnchors(
     []string{"format/semi", "unicorn/no-null", "typescript/no-explicit-any", "no-alert"},

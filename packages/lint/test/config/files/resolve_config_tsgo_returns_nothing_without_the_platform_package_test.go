@@ -20,6 +20,8 @@ import (
 func TestResolveConfigTsgoReturnsNothingWithoutThePlatformPackage(t *testing.T) {
   shedConfigToolEnvironment(t)
   root := realpathIfPossible(t.TempDir())
+  platform, arch := nodePlatformPair()
+  requireNoAmbientInstall(t, root, "@typescript/typescript-"+platform+"-"+arch)
   writeFile(
     t,
     filepath.Join(root, "node_modules", "typescript", "package.json"),

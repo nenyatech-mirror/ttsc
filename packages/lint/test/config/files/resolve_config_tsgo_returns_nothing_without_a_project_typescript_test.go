@@ -19,6 +19,7 @@ import (
 func TestResolveConfigTsgoReturnsNothingWithoutAProjectTypeScript(t *testing.T) {
   shedConfigToolEnvironment(t)
   root := realpathIfPossible(t.TempDir())
+  requireNoAmbientInstall(t, root, "typescript")
   config := filepath.Join(root, "project", "lint.config.ts")
   writeFile(t, config, "export default {};\n")
 

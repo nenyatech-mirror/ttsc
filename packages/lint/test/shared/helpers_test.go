@@ -395,6 +395,24 @@ func shedConfigToolEnvironment(t *testing.T) {
   t.Setenv("TTSC_TTSX_BINARY", "")
 }
 
+// requireNoAmbientInstall skips the case when a `node_modules` above the
+// fixture already installs `pkg`.
+//
+// The negative resolutions assert that a project answers with nothing, and the
+// walk they exercise climbs to the filesystem root by design, exactly as Node's
+// does. A stray install above the system temp directory would answer for the
+// project the case deliberately left empty, and the failure would read as a
+// defect in the resolution rather than as pollution outside the tree. The probe
+// anchors one level above `root`, so it inspects the ambient ancestry only and
+// never the fixture.
+func requireNoAmbientInstall(t *testing.T, root, pkg string) {
+  t.Helper()
+  probe := filepath.Join(filepath.Dir(root), "ambient-probe-anchor")
+  if found := nodePackageManifestFrom(probe, pkg); found != "" {
+    t.Skipf("an ambient %s install at %s answers above the fixture", pkg, found)
+  }
+}
+
 // seedProjectTypeScript materializes the `typescript` install a project-anchored
 // compiler resolution walks to, under `root`'s node_modules, and returns the
 // platform executable path it should produce.

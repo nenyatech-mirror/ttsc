@@ -47,7 +47,7 @@ func TestWebsiteRuleAnchorAuditNamesAnUndocumentedRule(t *testing.T) {
   if want := websiteRuleAnchor(missing); gaps[0].Anchor != want {
     t.Fatalf("audit reported anchor %q, want %q", gaps[0].Anchor, want)
   }
-  if !strings.Contains(gaps[0].Reason, "### "+missing) {
+  if !strings.Contains(gaps[0].Reason, "### `"+missing+"`") {
     t.Fatalf("audit reason %q does not say which heading to add", gaps[0].Reason)
   }
 }

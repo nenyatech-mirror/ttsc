@@ -20,6 +20,7 @@ import (
 func TestResolveTtsxLauncherFallsBackToTheBareCommand(t *testing.T) {
   shedConfigToolEnvironment(t)
   root := realpathIfPossible(t.TempDir())
+  requireNoAmbientInstall(t, root, "ttsc")
   config := filepath.Join(root, "project", "lint.config.ts")
   writeFile(t, config, "export default {};\n")
 

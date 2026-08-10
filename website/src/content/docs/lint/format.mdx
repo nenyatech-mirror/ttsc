@@ -115,7 +115,7 @@ Parentheses around a single arrow-function parameter. `"always"` (default) keeps
 
 ### `bracketSpacing`
 
-Inner spaces in single-line braces. `true` (default) keeps the space inside object literals, destructuring patterns, named imports/exports, type literals, mapped types, and import attributes (`{ a }`); `false` removes it (`{a}`). Block, class, interface, and enum braces are unaffected. Driven by `format.bracketSpacing`.
+Inner spaces in single-line braces. `true` (default) keeps the space inside object literals, destructuring patterns, named imports/exports, type literals, mapped types, and import attributes (`{ a }`); `false` removes it (`{a}`). Block, class, interface, and enum braces are unaffected. The padding is all this key governs, so an interior that is not already in Prettier's shape keeps its own spacing, see [Partial normalization](#partial-normalization). Driven by `format.bracketSpacing`.
 
 ### `quoteProps`
 

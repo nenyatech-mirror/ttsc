@@ -4432,6 +4432,11 @@ func resolveDirLink(dir string) string {
 // against; the resolution root answers for a config that lives outside the
 // project tree (an `extends` target, or a `configFile` pointed at a shared
 // package).
+//
+// The JS evaluator carries a third anchor, the loaded descriptor's own
+// directory. It has no counterpart here: this host is a compiled binary rather
+// than a module some `node_modules` copy of `@ttsc/lint` was loaded from, so
+// there is no third installation to ask.
 func configToolAnchors(configPath, resolutionRoot string) []string {
   anchors := make([]string, 0, 2)
   if strings.TrimSpace(configPath) != "" {
@@ -4552,9 +4557,16 @@ func ttsxLauncherFrom(anchor string) string {
 // A directory already named `node_modules` contributes no candidate of its own,
 // matching Module._nodeModulePaths, so nothing ever resolves through
 // `node_modules/node_modules`.
+//
+// A relative anchor is resolved against the process directory before the walk,
+// again matching Node. Walking a relative path instead would terminate at "."
+// after one step and silently answer nothing for a config named relatively.
 func nodePackageManifestFrom(anchor, pkg string) string {
   if strings.TrimSpace(anchor) == "" || pkg == "" {
     return ""
+  }
+  if absolute, err := filepath.Abs(anchor); err == nil {
+    anchor = absolute
   }
   dir := filepath.Dir(filepath.Clean(anchor))
   for {
