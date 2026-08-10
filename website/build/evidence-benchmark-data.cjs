@@ -10,6 +10,10 @@
 // renderer and writes them straight into `public/benchmark/evidence`, so this
 // step only rasterizes what is already there. Drawing a second set here would
 // be a second thing to keep in agreement with the aggregate.
+//
+// That directory is generated and ignored, like the graph benchmark's own. The
+// aggregate it is drawn from is the tracked artifact, and committing the charts
+// beside it would put the same measurement in the repository twice.
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -24,7 +28,7 @@ const AGGREGATE = path.resolve(
   "aggregate",
 );
 const OUT_DIR = path.join(ROOT, "public", "benchmark");
-/** Written by `pnpm --filter @ttsc/benchmark-evidence charts`, and tracked. */
+/** Written by `pnpm --filter @ttsc/benchmark-evidence charts`. */
 const SVG_DIR = path.join(OUT_DIR, "evidence");
 const PNG_DIR = path.join(OUT_DIR, "png");
 
@@ -73,7 +77,7 @@ function publishCharts(png) {
     : [];
   if (charts.length === 0)
     throw new Error(
-      `No charts under ${SVG_DIR}. They are tracked; redraw them with \`pnpm --filter @ttsc/benchmark-evidence charts\`.`,
+      `No charts under ${SVG_DIR}. Draw them from the tracked aggregate with \`pnpm --filter @ttsc/benchmark-evidence charts\`.`,
     );
   if (png === false) return;
   fs.mkdirSync(PNG_DIR, { recursive: true });

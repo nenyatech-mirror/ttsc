@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-10T04:44:08.608Z",
+  "generatedAt": "2026-08-10T05:15:33.709Z",
   "origin": "samchon/ttsc",
   "cells": [
     {
@@ -35,7 +35,18 @@
         },
         "elapsedMs": 7109807.140899999
       },
-      "apiCost": null,
+      "apiCost": {
+        "provider": "openrouter",
+        "pricingAsOf": "2026-08-01",
+        "priceSource": "https://openrouter.ai/api/v1/models",
+        "currency": "USD",
+        "amountUsd": 14.50437646,
+        "requests": 8843,
+        "shortContextRequests": 8843,
+        "longContextRequests": 0,
+        "longContextThresholdTokens": 272000,
+        "replayedUpdates": 11
+      },
       "suspendedMs": 0,
       "suspensions": [],
       "workElapsedMs": 117338947.2323,
@@ -456,7 +467,8 @@
         "requests": 1339,
         "shortContextRequests": 1339,
         "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
+        "longContextThresholdTokens": 272000,
+        "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],
@@ -568,7 +580,8 @@
         "requests": 7085,
         "shortContextRequests": 7085,
         "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
+        "longContextThresholdTokens": 272000,
+        "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],
@@ -990,7 +1003,8 @@
         "requests": 2273,
         "shortContextRequests": 2273,
         "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
+        "longContextThresholdTokens": 272000,
+        "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],
@@ -1102,7 +1116,8 @@
         "requests": 16279,
         "shortContextRequests": 16279,
         "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
+        "longContextThresholdTokens": 272000,
+        "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],
@@ -1502,7 +1517,8 @@
         "requests": 2332,
         "shortContextRequests": 2332,
         "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
+        "longContextThresholdTokens": 272000,
+        "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],

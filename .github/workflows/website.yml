@@ -83,6 +83,18 @@ jobs:
       - name: Build @ttsc/playground
         run: pnpm --filter @ttsc/playground build
 
+      # The evidence benchmark charts are drawn from the tracked aggregate
+      # rather than committed beside it, so one measurement has one source. The
+      # renderer runs under `ttsx`, which needs the launcher and the native
+      # compiler; `website-charts` builds those two and nothing else.
+      - name: Build ttsc For The Chart Renderer
+        run: node scripts/build-current.cjs
+        env:
+          TTSC_BUILD_SCOPE: website-charts
+
+      - name: Draw Evidence Benchmark Charts
+        run: pnpm --filter @ttsc/benchmark-evidence charts
+
       - name: Build Website
         working-directory: website
         run: pnpm run build

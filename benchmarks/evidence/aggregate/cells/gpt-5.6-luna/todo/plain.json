@@ -31,7 +31,18 @@
     },
     "elapsedMs": 7109807.140899999
   },
-  "apiCost": null,
+  "apiCost": {
+    "provider": "openrouter",
+    "pricingAsOf": "2026-08-01",
+    "priceSource": "https://openrouter.ai/api/v1/models",
+    "currency": "USD",
+    "amountUsd": 14.50437646,
+    "requests": 8843,
+    "shortContextRequests": 8843,
+    "longContextRequests": 0,
+    "longContextThresholdTokens": 272000,
+    "replayedUpdates": 11
+  },
   "suspendedMs": 0,
   "suspensions": [],
   "workElapsedMs": 117338947.2323,
