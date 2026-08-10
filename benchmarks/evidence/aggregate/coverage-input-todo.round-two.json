@@ -1,0 +1,57 @@
+{
+  "cohort": "round two, campaign/evidence-luna-0.26.0",
+  "subject": "todo",
+  "arm": "plain",
+  "runId": "48d1c3b9-e64f-4096-a169-7d5794b262e9",
+  "state": "partial",
+  "method": {
+    "read": "The completed Plain workspace, read-only. No requirement identifier appears anywhere in it, because a Plain codebase carries no citations; every reach below is decided by one artifact naming another, never by a tag.",
+    "counted": "Seven edges whose populations and reaches are decidable from the artifacts themselves.",
+    "uncounted": "The six requirement-rooted edges. Their eligibility is a judgement over 73 requirement anchors, and the delivered code names none of them, so each one has to be read and decided. Counting them from section titles would be an estimate wearing a measurement's clothes, and this file records what was measured rather than what could be guessed.",
+    "corrections": "Two first-pass errors are already folded in. `modelToDto` first read zero because the schema writes `todo_users` where the published types write `IUser`. `columnToProperty` first counted 62 columns because relation fields were counted as columns; a relation names another model and carries no value a type could publish, so the population is the 50 scalar columns."
+  },
+  "populations": {
+    "accessors": 24,
+    "hooks": 24,
+    "screens": 4,
+    "models": 7,
+    "scalarColumns": 50,
+    "backendTests": 48,
+    "journeyCases": 13,
+    "requirementAnchors": 73
+  },
+  "cells": [
+    {
+      "model": "gpt-5.6-luna",
+      "subject": "todo",
+      "edges": {
+        "requirementToModel": null,
+        "requirementToOperation": null,
+        "requirementToDto": null,
+        "requirementToTest": null,
+        "requirementToScreen": null,
+        "requirementToJourney": null,
+        "modelToOperation": { "eligible": 7, "reached": 7 },
+        "modelToDto": { "eligible": 7, "reached": 6 },
+        "accessorToTest": { "eligible": 24, "reached": 24 },
+        "accessorToHook": { "eligible": 24, "reached": 24 },
+        "hookToScreen": { "eligible": 24, "reached": 22 },
+        "screenToJourney": { "eligible": 4, "reached": 4 },
+        "columnToProperty": { "eligible": 50, "reached": 28 }
+      }
+    }
+  ],
+  "unreached": {
+    "modelToDto": ["todo_delivery_effects, which no published type represents"],
+    "hookToScreen": [
+      "two of the twenty-four hooks are called by no screen component"
+    ],
+    "columnToProperty": [
+      "foreign keys: todo_profiles.todo_user_id, todo_sessions.todo_user_id, todo_todos.todo_user_id, todo_todo_histories.todo_todo_id, todo_recovery_requests.todo_user_id, todo_delivery_effects.todo_user_id",
+      "secrets: todo_users.password_hash, todo_sessions.refresh_hash, todo_recovery_requests.proof_hash",
+      "internal lifecycle: todo_sessions.expires_at, todo_sessions.revoked_at, todo_todos.updated_at, todo_todos.content_version, todo_recovery_requests.expires_at, todo_recovery_requests.consumed_at",
+      "history change flags: title_changed, description_changed, start_date_changed, due_date_changed",
+      "delivery effect internals: recipient, kind, payload"
+    ]
+  }
+}
