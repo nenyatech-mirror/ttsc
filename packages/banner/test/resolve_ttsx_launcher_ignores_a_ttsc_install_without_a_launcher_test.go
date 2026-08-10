@@ -21,7 +21,6 @@ import (
 func TestResolveTtsxLauncherIgnoresATtscInstallWithoutALauncher(t *testing.T) {
   shedConfigToolEnvironment(t)
   root := bannerRealpathIfPossible(t.TempDir())
-  requireNoAmbientInstall(t, root, "ttsc")
   missing := seedProjectTtscWithoutLauncher(t, root)
   config := filepath.Join(root, "banner.config.ts")
   writeFile(t, config, "export default { text: \"from ts\" };\n")

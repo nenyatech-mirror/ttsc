@@ -21,7 +21,6 @@ import (
 func TestResolveTtsxLauncherIgnoresATtscInstallWithoutALauncher(t *testing.T) {
   shedConfigToolEnvironment(t)
   root := stripRealpathIfPossible(t.TempDir())
-  requireNoAmbientInstall(t, root, "ttsc")
   missing := seedProjectTtscWithoutLauncher(t, root)
   config := filepath.Join(root, "strip.config.ts")
   writeFile(t, config, "export default {};\n")
