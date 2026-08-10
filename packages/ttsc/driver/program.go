@@ -638,7 +638,11 @@ func (p *Program) diagnostics(files []*ast.SourceFile) []Diagnostic {
     }
   }
   raw = filterDiagnostics(raw)
-  return append(out, convertDiagnostics(shimcompiler.SortAndDeduplicateDiagnostics(raw))...)
+  // filterDiagnostics runs first because it resolves a node from the position
+  // tsgo recorded, which only makes sense against the tree tsgo parsed. The
+  // preamble correction happens inside convertProgramDiagnostics, once the
+  // positions are no longer used to look anything up.
+  return append(out, p.convertProgramDiagnostics(shimcompiler.SortAndDeduplicateDiagnostics(raw))...)
 }
 
 // filterDiagnostics removes diagnostics that are false positives in ttsc's
@@ -684,25 +688,34 @@ func isUnusedOverloadSignatureTypeParameterDiagnostic(d *ast.Diagnostic) bool {
 // convertDiagnostics translates shim-specific diagnostics into the plain
 // Diagnostic struct with line/column populated via tsgo's ECMALineMap (the
 // same helper tsc uses for its "file:line:col: message" banner).
+//
+// Diagnostics produced by a Program go through convertProgramDiagnostics
+// instead, which undoes a source preamble's position shift first.
 func convertDiagnostics(in []*ast.Diagnostic) []Diagnostic {
   out := make([]Diagnostic, 0, len(in))
   for _, d := range in {
     if d == nil {
       continue
     }
-    diag := Diagnostic{Code: d.Code(), Message: d.String(), raw: d}
-    if file := d.File(); file != nil {
-      diag.File = file.FileName()
-      if pos := d.Pos(); pos >= 0 {
-        length := d.Len()
-        diag.Start = &pos
-        diag.Length = &length
-        line, col := shimscanner.GetECMALineAndByteOffsetOfPosition(file, pos)
-        diag.Line = line + 1
-        diag.Column = col + 1
-      }
-    }
-    out = append(out, diag)
+    out = append(out, convertDiagnostic(d))
   }
   return out
+}
+
+// convertDiagnostic translates one shim diagnostic, taking its file, line, and
+// column from whatever source file the diagnostic is anchored to.
+func convertDiagnostic(d *ast.Diagnostic) Diagnostic {
+  diag := Diagnostic{Code: d.Code(), Message: d.String(), raw: d}
+  if file := d.File(); file != nil {
+    diag.File = file.FileName()
+    if pos := d.Pos(); pos >= 0 {
+      length := d.Len()
+      diag.Start = &pos
+      diag.Length = &length
+      line, col := shimscanner.GetECMALineAndByteOffsetOfPosition(file, pos)
+      diag.Line = line + 1
+      diag.Column = col + 1
+    }
+  }
+  return diag
 }

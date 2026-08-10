@@ -235,7 +235,7 @@ func (p *Program) EmitWithPluginTransformers(transforms []PluginTransform, write
     },
   })
   if result != nil && len(result.Diagnostics) != 0 {
-    return convertDiagnostics(result.Diagnostics), nil
+    return p.convertProgramDiagnostics(result.Diagnostics), nil
   }
   return nil, nil
 }

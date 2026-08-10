@@ -132,7 +132,7 @@ func (p *Program) EmitAllRaw(writeFile shimcompiler.WriteFile) (*shimcompiler.Em
   result := p.TSProgram.Emit(context.Background(), shimcompiler.EmitOptions{
     WriteFile: wf,
   })
-  return result, convertDiagnostics(result.Diagnostics), nil
+  return result, p.convertProgramDiagnostics(result.Diagnostics), nil
 }
 
 // EmitFile runs tsgo's emitter for one source file, applying the same rewrite
@@ -201,7 +201,7 @@ func (p *Program) emit(rs *RewriteSet, target *ast.SourceFile, writeFile shimcom
     TargetSourceFile: target,
     WriteFile:        wf,
   })
-  return result, convertDiagnostics(result.Diagnostics), nil
+  return result, p.convertProgramDiagnostics(result.Diagnostics), nil
 }
 
 // DefaultWriteFile is the default disk writer used when EmitAll's caller does not
