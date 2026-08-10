@@ -133,13 +133,16 @@ func restoreOriginalDeclarationSymbols(ec *shimprinter.EmitContext, node *shimas
 // EmitTransformPlugins are chained after the caller's transforms in
 // registration order.
 //
-// Because the JavaScript side bypasses tsgo's own emitter, it reproduces the
-// emitter's source-map step via PrintFileWithSourceMap: a `sourceMap` /
-// `inlineSourceMap` build emits a `.js.map` (and `//# sourceMappingURL=`
-// trailer) just like a plain build, even when a transform expanded one source
-// line into many. All non-JavaScript outputs stay delegated to tsgo's normal
-// dts-only emitter so declaration files, declaration maps, and any future
-// declaration-lane outputs are not silently lost by the hand-assembled JS path.
+// Because the JavaScript side bypasses tsgo's own emitter, it reproduces that
+// emitter's whole printSourceFile step via PrintFileWithSourceMap: a
+// `sourceMap` / `inlineSourceMap` build emits a `.js.map` (and
+// `//# sourceMappingURL=` trailer) just like a plain build, even when a
+// transform expanded one source line into many; an `emitBOM` build still starts
+// with the byte order mark; and the caller's WriteFile still receives the
+// WriteFileData the emitter would hand it. All non-JavaScript outputs stay
+// delegated to tsgo's normal dts-only emitter so declaration files, declaration
+// maps, and any future declaration-lane outputs are not silently lost by the
+// hand-assembled JS path.
 func (p *Program) EmitWithPluginTransformers(transforms []PluginTransform, writeFile shimcompiler.WriteFile) ([]Diagnostic, error) {
   if p == nil || p.TSProgram == nil {
     return nil, errors.New("driver: nil program")
@@ -183,10 +186,10 @@ func (p *Program) EmitWithPluginTransformers(transforms []PluginTransform, write
       }
       // Print through the source-map-aware helper so a `sourceMap` /
       // `inlineSourceMap` build still gets its `.js.map` and sourceMappingURL
-      // trailer: the hand-assembled emit pipeline does not run tsgo's emitter,
-      // so the source-map step printSourceFile would otherwise perform has to
-      // happen here. With maps off this is the same bare-printer output as
-      // before.
+      // trailer, and an `emitBOM` build its leading mark: the hand-assembled
+      // emit pipeline does not run tsgo's emitter, so everything printSourceFile
+      // would otherwise do around the printer has to happen here. With maps and
+      // emitBOM off this is the same bare-printer output as before.
       printed := shimcompiler.PrintFileWithSourceMap(ec, out.AsNode(), out, options, host, paths.JsFilePath(), paths.SourceMapFilePath())
       // A source-level preamble (e.g. @ttsc/banner linked into a typia host)
       // shifts the map's source coordinates; correct them here too, so the
@@ -204,10 +207,17 @@ func (p *Program) EmitWithPluginTransformers(transforms []PluginTransform, write
           }
         }
       }
-      if err := p.writePluginEmitOutput(paths.JsFilePath(), printed.JS, writeFile); err != nil {
+      // The emitter hands its writeFile callback a WriteFileData for the
+      // JavaScript and a nil one for the map (printSourceFile:
+      // `writeText(sourceMapFilePath, sourceMap, nil)`), so this lane does the
+      // same. See writePluginEmitOutput for what the struct carries here and
+      // why the remaining fields stay zero.
+      if err := p.writePluginEmitOutput(paths.JsFilePath(), printed.JS, &shimcompiler.WriteFileData{
+        SourceMapUrlPos: printed.SourceMapUrlPos,
+      }, writeFile); err != nil {
         return nil, err
       }
-      if err := p.writePluginEmitOutput(printed.MapPath, printed.MapText, writeFile); err != nil {
+      if err := p.writePluginEmitOutput(printed.MapPath, printed.MapText, nil, writeFile); err != nil {
         return nil, err
       }
     }
@@ -240,12 +250,37 @@ func (p *Program) EmitWithPluginTransformers(transforms []PluginTransform, write
   return nil, nil
 }
 
-func (p *Program) writePluginEmitOutput(fileName, text string, writeFile shimcompiler.WriteFile) error {
+// writePluginEmitOutput writes one artifact of the hand-assembled emit, passing
+// the caller's WriteFile the same WriteFileData tsgo's emitter would.
+//
+// What this lane can populate, and what it deliberately cannot:
+//
+//   - SourceMapUrlPos: the offset of the `//# sourceMappingURL=` trailer, or -1
+//     when none was written. PrintFileWithSourceMap records it exactly where
+//     printSourceFile does, so a consumer that relocates or rewrites the trailer
+//     works the same on both lanes. This is why a nil data was a real loss and
+//     not merely a cosmetic one.
+//   - Diagnostics: always empty. The emitter's field carries its accumulated
+//     emitterDiagnostics, which on the JavaScript lane are its own write
+//     failures; here a write failure is returned as an `error` from
+//     EmitWithPluginTransformers instead, and the declaration lane's diagnostics
+//     reach the caller through tsgo's own EmitOnlyDts pass and its own
+//     WriteFileData. Empty therefore means "nothing to report", not "never
+//     populated".
+//   - BuildInfo: always nil. It is the `.tsbuildinfo` payload, and this lane
+//     emits only JavaScript and its map.
+//   - SkippedDtsWrite: an out-parameter for the callee, left zero. Each write
+//     gets its own struct so one file's callback cannot observe another's.
+//
+// Nothing on this lane reads the struct back afterwards: unlike tsgo's emitter,
+// EmitWithPluginTransformers builds no EmitResult, so there is no EmittedFiles
+// list for a callee-set SkippedDtsWrite to keep a file out of.
+func (p *Program) writePluginEmitOutput(fileName, text string, data *shimcompiler.WriteFileData, writeFile shimcompiler.WriteFile) error {
   if fileName == "" || p.outputEscapesOutDir(fileName) {
     return nil
   }
   if writeFile != nil {
-    return writeFile(fileName, text, nil)
+    return writeFile(fileName, text, data)
   }
   return DefaultWriteFile(fileName, text)
 }
