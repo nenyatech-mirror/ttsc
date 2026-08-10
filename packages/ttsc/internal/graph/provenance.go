@@ -179,7 +179,16 @@ type SourceDigest struct {
 }
 
 // Diagnostic is one compiler diagnostic riding the snapshot that produced the
-// facts. Positions are 1-based, matching what tsgo reports.
+// facts. Positions are 1-based and authored-relative: where a SourcePreamble
+// plugin injected text ahead of a file, the driver maps the position back onto
+// the bytes a consumer can read for itself (the file this dump publishes a Disk
+// digest of), rather than onto the augmented text the checker saw. Node spans in
+// this dump stay checker-relative by declaration — see SourceDigest — because
+// they describe the facts, while a diagnostic is an instruction to go look at a
+// line.
+//
+// A diagnostic that points inside the injected preamble itself has no authored
+// counterpart, so it arrives with Line and Column zero and its message intact.
 type Diagnostic struct {
   // File uses the dump's path vocabulary.
   File string `json:"file"`

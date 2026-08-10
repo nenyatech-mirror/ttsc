@@ -238,6 +238,13 @@ func (m *preambleMapper) remapRelated(in []*ast.Diagnostic) ([]*ast.Diagnostic, 
 // diagnostic renders through the anchor-less `path: message` form ttsc already
 // uses for diagnostics that have no source range. It counts as an error exactly
 // as it did before, so the exit code is unchanged.
+//
+// One consequence to know: the JS launcher recovers structured diagnostics by
+// parsing rendered text, and the anchor-less form carries no `line:col` for that
+// parser to match — so a preamble-region diagnostic reaches stderr and the exit
+// code but not `IFailure.diagnostics`. That is the same deal every anchor-less
+// driver diagnostic has always had (`driver: linked plugins failed to apply`),
+// and it is preferable to publishing a structured position that is not real.
 func unanchoredPreambleDiagnostic(d *ast.Diagnostic) Diagnostic {
   out := Diagnostic{
     Code:     d.Code(),
