@@ -12,6 +12,7 @@ import (
   "os"
   "path/filepath"
   "regexp"
+  "runtime"
   "sort"
   "strings"
   "testing"
@@ -378,6 +379,64 @@ func writeFile(t *testing.T, location, text string) {
   if err := os.WriteFile(location, []byte(text), 0o644); err != nil {
     t.Fatalf("WriteFile: %v", err)
   }
+}
+
+// shedConfigToolEnvironment removes the compiler and launcher variables from
+// the test's environment for the duration of one case.
+//
+// scripts/test-go-lint.cjs exports TTSC_TSGO_BINARY and TTSC_TTSX_BINARY into
+// the `go test` child, which is exactly what hid the config evaluator resolving
+// both tools from the environment alone. A case that means to exercise the
+// project-anchored resolution has to shed them first, or it proves only that
+// the runner set them.
+func shedConfigToolEnvironment(t *testing.T) {
+  t.Helper()
+  t.Setenv("TTSC_TSGO_BINARY", "")
+  t.Setenv("TTSC_TTSX_BINARY", "")
+}
+
+// seedProjectTypeScript materializes the `typescript` install a project-anchored
+// compiler resolution walks to, under `root`'s node_modules, and returns the
+// platform executable path it should produce.
+//
+// The layout mirrors an npm install: the `typescript` manifest, and the
+// `@typescript/typescript-<platform>-<arch>` platform package beside it holding
+// `lib/tsc` (`lib/tsc.exe` on Windows). The platform name comes from
+// nodePlatformPair so the fixture tracks the host it runs on;
+// TestNodePlatformPairMatchesTheNpmPlatformVocabulary pins that mapping
+// independently, so a wrong mapping fails there rather than passing here.
+func seedProjectTypeScript(t *testing.T, root string) string {
+  t.Helper()
+  platform, arch := nodePlatformPair()
+  modules := filepath.Join(root, "node_modules")
+  writeFile(t, filepath.Join(modules, "typescript", "package.json"), `{"name":"typescript"}`)
+  name := "tsc"
+  if runtime.GOOS == "windows" {
+    name = "tsc.exe"
+  }
+  binary := filepath.Join(
+    modules,
+    "@typescript",
+    "typescript-"+platform+"-"+arch,
+    "lib",
+    name,
+  )
+  writeFile(t, filepath.Join(filepath.Dir(filepath.Dir(binary)), "package.json"), `{"name":"platform"}`)
+  writeFile(t, binary, "")
+  return binary
+}
+
+// seedProjectTtsc materializes the `ttsc` install a project-anchored launcher
+// resolution walks to, under `root`'s node_modules, and returns the launcher
+// path it should produce. Only the manifest and `lib/launcher/ttsx.js` matter;
+// nothing spawns the file, so its contents are irrelevant.
+func seedProjectTtsc(t *testing.T, root string) string {
+  t.Helper()
+  packageRoot := filepath.Join(root, "node_modules", "ttsc")
+  writeFile(t, filepath.Join(packageRoot, "package.json"), `{"name":"ttsc"}`)
+  launcher := filepath.Join(packageRoot, "lib", "launcher", "ttsx.js")
+  writeFile(t, launcher, "")
+  return launcher
 }
 
 // captureCommandOutput records stdout and stderr for command-frontdoor tests.

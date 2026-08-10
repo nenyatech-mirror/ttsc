@@ -3028,14 +3028,15 @@ func loadTypeScriptConfigEvaluationWithin(
     // ttsx build hermetic.
     "--no-plugins",
   }
-  if tsgo := os.Getenv("TTSC_TSGO_BINARY"); tsgo != "" {
+  anchors := configToolAnchors(location, resolutionRoot)
+  if tsgo := resolveConfigTsgo(anchors); tsgo != "" {
     args = append(args, "--binary", tsgo)
   }
   args = append(args, loader)
 
   ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
-  cmd := ttsxCommandContext(ctx, args...)
+  cmd := ttsxCommandContext(ctx, anchors, args...)
   cmd.Env = nodeConfigLoaderEnv(location)
   return runConfigLoaderCommand(cmd, location, "TypeScript config file", outputPath)
 }
@@ -4406,21 +4407,219 @@ func resolveDirLink(dir string) string {
   return dir
 }
 
+// Both tools the TypeScript config evaluator needs — the `ttsx` launcher it
+// spawns and the native compiler it hands that launcher — are resolved from the
+// project being linted, with an explicit environment variable winning and a
+// last resort that invents no path. This is the Go twin of `resolveConfigTsgo`
+// and `resolveTtsxLauncher` in packages/lint/src/index.ts; the two evaluators
+// must keep one policy, because it was a divergence between them that made a
+// TypeScript lint config unevaluable outside a `ttsx`-launched host.
+//
+// The environment alone is the wrong place to ask. `ttsx` exports
+// TTSC_TSGO_BINARY and TTSC_TTSX_BINARY to its own descendants, so a host
+// launched under `ttsx` inherited both and a host launched any other way
+// inherited neither. The shipped `ttscserver` binary invoked with its
+// documented `--tsgo <path>` flag keeps that path in a local and exports
+// nothing, and an embedder of the driver package exports nothing either. For
+// those the evaluator spawned a bare `ttsx` that only a global install puts on
+// PATH, and, past that, a compiler-less child that aborted with
+// `ttsc: typescript is required` before a line of the config was read.
+//
+// configToolAnchors lists the file paths those resolutions walk upward from,
+// in order: the config file being evaluated, then the resolution root's
+// manifest. The config comes first because it is the file whose own
+// installation decides which toolchain the config's imports were written
+// against; the resolution root answers for a config that lives outside the
+// project tree (an `extends` target, or a `configFile` pointed at a shared
+// package).
+func configToolAnchors(configPath, resolutionRoot string) []string {
+  anchors := make([]string, 0, 2)
+  if strings.TrimSpace(configPath) != "" {
+    anchors = append(anchors, configPath)
+  }
+  if strings.TrimSpace(resolutionRoot) != "" {
+    anchors = append(anchors, filepath.Join(resolutionRoot, "package.json"))
+  }
+  return anchors
+}
+
+// resolveConfigTsgo returns the native TypeScript compiler the evaluator hands
+// its ttsx child through `--binary`, or "" to leave the child resolving for
+// itself.
+//
+// The child runs with `--cwd <ephemeral loader dir>`, so it cannot discover
+// `typescript` the way an ordinary invocation does: linkNearestNodeModules is
+// the only thing that puts the project's modules within its reach, and it links
+// nothing when the config's ancestry carries no node_modules. An explicit
+// TTSC_TSGO_BINARY still wins, so an embedder that pins a compiler keeps
+// pinning it. "" is the unchanged last resort: a project that cannot answer
+// here could not answer inside the child either, and the child's own diagnostic
+// is the one that names the missing package.
+func resolveConfigTsgo(anchors []string) string {
+  if explicit := strings.TrimSpace(os.Getenv("TTSC_TSGO_BINARY")); explicit != "" {
+    return explicit
+  }
+  for _, anchor := range anchors {
+    if binary := tsgoBinaryFrom(anchor); binary != "" {
+      return binary
+    }
+  }
+  return ""
+}
+
+// tsgoBinaryFrom returns the platform compiler executable of the `typescript`
+// install `anchor` can see, or "" when this anchor reaches neither the package
+// nor its platform dependency.
+//
+// Mirrors resolveTsgo.ts so the Go host and the JS launcher name one file: the
+// `typescript` manifest, then `@typescript/typescript-<platform>-<arch>`
+// resolved from that manifest, then `lib/tsc` inside it.
+//
+// The install is chased to its real directory before the second hop, because
+// Node resolves a module's own dependencies from its real location. pnpm keeps
+// the real `typescript` directory in its content-addressed store with the
+// platform package beside it and leaves a link in the project's node_modules,
+// so a walk that started at the link would climb straight past the platform
+// package. NTFS junctions defeat filepath.EvalSymlinks, so the link component
+// is chased by hand first, the same order loaderTempBase uses.
+func tsgoBinaryFrom(anchor string) string {
+  manifest := nodePackageManifestFrom(anchor, "typescript")
+  if manifest == "" {
+    return ""
+  }
+  packageDir := realpathIfPossible(resolveDirLink(filepath.Dir(manifest)))
+  platform, arch := nodePlatformPair()
+  platformManifest := nodePackageManifestFrom(
+    filepath.Join(packageDir, "package.json"),
+    "@typescript/typescript-"+platform+"-"+arch,
+  )
+  if platformManifest == "" {
+    return ""
+  }
+  name := "tsc"
+  if runtime.GOOS == "windows" {
+    name = "tsc.exe"
+  }
+  binary := filepath.Join(filepath.Dir(platformManifest), "lib", name)
+  if stat, err := os.Stat(binary); err != nil || stat.IsDir() {
+    return ""
+  }
+  return binary
+}
+
+// resolveTtsxLauncher returns the launcher ttsxCommandContext spawns.
+//
+// An explicit TTSC_TTSX_BINARY wins. Otherwise the launcher is derived from the
+// `ttsc` installation one of the anchors can see, because a bare command name
+// only works when a bin link happens to be on PATH — which it is for a global
+// install and is not for the ordinary project-local one. The bare `"ttsx"` name
+// remains the unchanged last resort for an installation no anchor reaches.
+func resolveTtsxLauncher(anchors []string) string {
+  if explicit := strings.TrimSpace(os.Getenv("TTSC_TTSX_BINARY")); explicit != "" {
+    return explicit
+  }
+  for _, anchor := range anchors {
+    if launcher := ttsxLauncherFrom(anchor); launcher != "" {
+      return launcher
+    }
+  }
+  return "ttsx"
+}
+
+// ttsxLauncherFrom returns `lib/launcher/ttsx.js` of the `ttsc` install
+// `anchor` can see, or "" when this anchor reaches no such install. Only the
+// manifest is an exported subpath, so the launcher is derived from where the
+// manifest resolved rather than requested as a subpath of its own.
+func ttsxLauncherFrom(anchor string) string {
+  manifest := nodePackageManifestFrom(anchor, "ttsc")
+  if manifest == "" {
+    return ""
+  }
+  launcher := filepath.Join(filepath.Dir(manifest), "lib", "launcher", "ttsx.js")
+  if stat, err := os.Stat(launcher); err != nil || stat.IsDir() {
+    return ""
+  }
+  return launcher
+}
+
+// nodePackageManifestFrom resolves `<pkg>/package.json` the way Node's
+// require.resolve does from the FILE `anchor`: walk upward from the anchor's
+// directory and return the first `<dir>/node_modules/<pkg>/package.json` that
+// exists. The anchor is treated as a file path, so its own directory is the
+// first candidate's parent, and it need not exist — Node derives the search
+// paths from the string alone.
+//
+// A directory already named `node_modules` contributes no candidate of its own,
+// matching Module._nodeModulePaths, so nothing ever resolves through
+// `node_modules/node_modules`.
+func nodePackageManifestFrom(anchor, pkg string) string {
+  if strings.TrimSpace(anchor) == "" || pkg == "" {
+    return ""
+  }
+  dir := filepath.Dir(filepath.Clean(anchor))
+  for {
+    if filepath.Base(dir) != "node_modules" {
+      candidate := filepath.Join(dir, "node_modules", filepath.FromSlash(pkg), "package.json")
+      if stat, err := os.Stat(candidate); err == nil && !stat.IsDir() {
+        return candidate
+      }
+    }
+    parent := filepath.Dir(dir)
+    if parent == dir {
+      return ""
+    }
+    dir = parent
+  }
+}
+
+// nodePlatformPair is nodePlatformPairFor applied to this build's own target.
+func nodePlatformPair() (string, string) {
+  return nodePlatformPairFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// nodePlatformPairFor maps a Go build target onto the `process.platform` and
+// `process.arch` pair npm spells a platform package with, so the package name
+// this host resolves is the same one the JS launcher resolves.
+//
+// Only the members whose two vocabularies disagree are mapped. Every other
+// value is identical on both sides and passes through, which keeps a target
+// neither side publishes yet resolvable rather than silently wrong, and keeps
+// this from becoming a list that has to grow with every new port.
+func nodePlatformPairFor(goos, goarch string) (string, string) {
+  platform := goos
+  switch platform {
+  case "windows":
+    platform = "win32"
+  case "solaris":
+    platform = "sunos"
+  }
+  arch := goarch
+  switch arch {
+  case "amd64":
+    arch = "x64"
+  case "386":
+    arch = "ia32"
+  case "ppc64le":
+    arch = "ppc64"
+  }
+  return platform, arch
+}
+
 // ttsxCommand returns a ttsx exec.Cmd bound to a background context. Use
 // ttsxCommandContext when the caller owns a cancellable context.
-func ttsxCommand(args ...string) *exec.Cmd {
-  return ttsxCommandContext(context.Background(), args...)
+func ttsxCommand(anchors []string, args ...string) *exec.Cmd {
+  return ttsxCommandContext(context.Background(), anchors, args...)
 }
 
 // ttsxCommandContext is the cancellable variant, used by the config loaders so
 // their subprocess is torn down with the call that started it. It carries no
 // deadline: evaluating a user config is the user's own code running, and how
 // long that is allowed to take is not this binary's decision.
-func ttsxCommandContext(ctx context.Context, args ...string) *exec.Cmd {
-  ttsx := os.Getenv("TTSC_TTSX_BINARY")
-  if ttsx == "" {
-    ttsx = "ttsx"
-  }
+//
+// `anchors` are the file paths the launcher is resolved from; see
+// resolveTtsxLauncher.
+func ttsxCommandContext(ctx context.Context, anchors []string, args ...string) *exec.Cmd {
+  ttsx := resolveTtsxLauncher(anchors)
   if shouldRunTtsxThroughNode(ttsx) {
     node := os.Getenv("TTSC_NODE_BINARY")
     if node == "" {
