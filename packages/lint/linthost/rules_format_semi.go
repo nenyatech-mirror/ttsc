@@ -59,11 +59,11 @@ func (formatSemi) Visits() []shimast.Kind {
     shimast.KindPropertyDeclaration,
     shimast.KindTypeAliasDeclaration,
     // Interface / type-literal members, plus the class-member spellings
-    // the accessor and index-signature kinds share. Prettier drops their
-    // trailing `;` under semi:false and inserts it under semi:true, in
-    // both cases only when they are newline-separated; see
-    // stripMemberSemicolon and insertMemberSemicolon for the per-context
-    // hazard rules.
+    // the accessor and index-signature kinds share. Prettier terminates
+    // a member of a body laid out across lines and leaves a one-line
+    // body's last member bare, so both directions read the written line
+    // structure; see stripMemberSemicolon and insertMemberSemicolon for
+    // the per-direction hazard rules.
     shimast.KindPropertySignature,
     shimast.KindMethodSignature,
     shimast.KindIndexSignature,
@@ -426,9 +426,13 @@ func memberSemicolonRedundant(src string, after int, isClassField bool) bool {
 // while a list still written on one line separates its members with `;`
 // and leaves the last one bare (`type T = { a: number }` is Prettier's
 // own output for that input). Read off the source, that condition is
-// "the next significant byte sits on a later line", the mirror image of
-// memberSemicolonRedundant, which strips only where the same shape makes
-// the `;` optional.
+// "the next significant byte sits on a later line".
+//
+// memberSemicolonRedundant reads the same oracle rule from the other end,
+// which is why the two are complementary rather than opposite: a `;`
+// before a same-line `}` closes a flat list, where Prettier prints no
+// trailing separator at all, so the strip drops it and this never adds
+// one back.
 //
 // Keying on the written line structure is also what reproduces Prettier's
 // object-wrap preservation without a second layout model. An interface
