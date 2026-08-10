@@ -4,7 +4,7 @@
 
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/samchon/ttsc/blob/master/LICENSE) [![NPM Version](https://img.shields.io/npm/v/@ttsc/lint.svg)](https://www.npmjs.com/package/@ttsc/lint) [![NPM Downloads](https://img.shields.io/npm/dm/@ttsc/lint.svg)](https://www.npmjs.com/package/@ttsc/lint) [![Build Status](https://github.com/samchon/ttsc/workflows/test/badge.svg)](https://github.com/samchon/ttsc/actions?query=workflow%3Atest) [![Guide Documents](https://img.shields.io/badge/Guide-Documents-forestgreen)](https://ttsc.dev/docs) [![Discord Badge](https://img.shields.io/badge/discord-samchon-d91965?style=flat&labelColor=5866f2&logo=discord&logoColor=white&link=https://discord.gg/E94XhzrUCZ)](https://discord.gg/E94XhzrUCZ)
 
-A linter and formatter. Co-protagonist of the [`ttsc`](https://ttsc.dev) toolchain, paired with `ttsc`, it replaces `eslint` and `prettier`.
+A linter and formatter. Co-protagonist of the [`ttsc`](https://ttsc.dev) toolchain, paired with `ttsc`, it replaces `eslint` and covers most of `prettier`.
 
 720+ rules across 21 families. Lint violations surface as `error TSxxxxx` from a single compile pass; the formatter applies via `ttsc format`.
 
@@ -101,6 +101,8 @@ npx ttsc format
 ## Format
 
 Configure the formatter through the `format` block in `lint.config.ts`. Keys mirror `.prettierrc`; the presence of the block, even empty `format: {}`, enables the always-on format rules at Prettier defaults so `ttsc format` rewrites your source to match.
+
+One boundary to know before you drop `prettier`: no pass normalizes the whitespace between two tokens, so `a=1`, `if(x){`, and `const i : number` are left as written. See [Format → Scope](https://ttsc.dev/docs/lint/format#scope).
 
 ```ts
 // lint.config.ts
