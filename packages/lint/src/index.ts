@@ -1789,8 +1789,9 @@ function evaluateTtsxConfigPlugins(
       "--no-plugins",
       loaderPath,
     ];
-    if (process.env.TTSC_TSGO_BINARY) {
-      args.unshift("--binary", process.env.TTSC_TSGO_BINARY);
+    const tsgoBinary = resolveConfigTsgo(configPath, context);
+    if (tsgoBinary) {
+      args.unshift("--binary", tsgoBinary);
     }
     const env = {
       ...nodeConfigLoaderEnv(configPath),
@@ -2453,6 +2454,73 @@ function nodeConfigLoaderEnv(configPath: string): NodeJS.ProcessEnv {
  * and is not for a host that loaded this descriptor in process. The bare name
  * remains the last resort for an installation none of them reach.
  */
+/**
+ * The native TypeScript compiler the config evaluator must run.
+ *
+ * The evaluator builds the loader in an ephemeral directory, so the child it
+ * spawns cannot discover `typescript` the way an ordinary invocation does: the
+ * directory is not in the project, and `linkNearestNodeModules` is the only
+ * thing that puts the project's modules within reach of it. Leaving the child
+ * to re-derive the compiler from there made this work by inheritance —
+ * `TTSC_TSGO_BINARY` is exported by `ttsx` to its own descendants, so a build
+ * launched under `ttsx` passed a binary down and a build launched any other way
+ * did not. A published consumer exports no such variable, and neither does a
+ * process that deliberately sheds the launcher's runtime state, and for those
+ * the evaluator failed with `ttsc: typescript is required` before it read a
+ * line of the config.
+ *
+ * The host has already resolved a compiler for the project it is linting, so
+ * the answer is asked of the project rather than of the environment. The config
+ * comes first and the descriptor's own location second, the same order and for
+ * the same reason as {@link resolveTtsxLauncher}. An explicit `TTSC_TSGO_BINARY`
+ * still wins, so an embedder that pins a compiler keeps pinning it.
+ *
+ * Returning `undefined` leaves the child to resolve for itself, which is what
+ * it did before: a project that cannot answer here could not answer there
+ * either, and the child's own diagnostic is the one that names the missing
+ * package.
+ */
+function resolveConfigTsgo(
+  configPath: string,
+  context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
+): string | undefined {
+  const explicit = process.env.TTSC_TSGO_BINARY?.trim();
+  if (explicit) return explicit;
+  const anchors = [
+    configPath,
+    path.join(context.projectRoot, "package.json"),
+    context.dirname,
+  ];
+  for (const anchor of anchors) {
+    const binary = tsgoBinaryFrom(anchor);
+    if (binary !== undefined) return binary;
+  }
+  return undefined;
+}
+
+/**
+ * The platform compiler binary of the `typescript` install `anchor` can see, or
+ * `undefined` when this anchor reaches neither the package nor its platform
+ * dependency. Mirrors ttsc's own resolution order so both name one file.
+ */
+function tsgoBinaryFrom(anchor: string): string | undefined {
+  try {
+    const manifest = createRequire(anchor).resolve("typescript/package.json");
+    const platform = createRequire(manifest).resolve(
+      `@typescript/typescript-${process.platform}-${process.arch}/package.json`,
+    );
+    const binary = path.join(
+      path.dirname(platform),
+      "lib",
+      process.platform === "win32" ? "tsc.exe" : "tsc",
+    );
+    return fs.existsSync(binary) ? binary : undefined;
+  } catch {
+    // This anchor cannot see the compiler; the caller tries the next one.
+    return undefined;
+  }
+}
+
 function resolveTtsxLauncher(anchors: readonly string[]): string {
   const explicit = process.env.TTSC_TTSX_BINARY?.trim();
   if (explicit) return explicit;

@@ -17,10 +17,14 @@ const { PLATFORM_TARGETS, SCOPES } = require("../build-current.cjs");
 const { PACKAGE_BUILDS_BEFORE_PLATFORMS } = require("../build-platforms.cjs");
 
 const root = path.resolve(__dirname, "..", "..");
-const testTtscRequire = createRequire(
-  path.join(root, "tests", "test-ttsc", "package.json"),
-);
-const { parse: parseYaml } = testTtscRequire("yaml");
+// The workflow assertion below parses YAML, and `scripts/` belongs to the root
+// package, so the root manifest declares the parser and anchors the resolution.
+// Borrowing another package's manifest for it made this file's dependency
+// invisible from the package that owns it: `tests/test-ttsc` imported no YAML,
+// so its entry read as dead weight, and removing it took this file's only
+// parser with it.
+const rootRequire = createRequire(path.join(root, "package.json"));
+const { parse: parseYaml } = rootRequire("yaml");
 
 function ids(files) {
   return planForPaths(files).laneIds;

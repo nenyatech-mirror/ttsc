@@ -95,9 +95,10 @@ The runner strips the variable from every child environment, so a measured cell 
 
 ## The Objective Sequence
 
-One native session receives its arm's frozen base sequence, read from `benchmarks/evidence/instructions/<arm>/<scope>/<step>.md`:
+One native session receives its arm's frozen base sequence, read from `benchmarks/evidence/instructions/<arm>/<scope>/<step>.md`. The two arms do not share one sequence:
 
-`backend-start` → `backend-review` → `backend-final` → `frontend-start` → `frontend-review` → `frontend-final` → `overall-review` → `overall-final`
+- **Plain**, eight objectives — `backend-start` → `backend-review` → `backend-final` → `frontend-start` → `frontend-review` → `frontend-final` → `overall-review` → `overall-final`.
+- **Evidence**, seven — the same order without `overall-review`. That arm has two review scopes and no third: `evidence/review` proves mechanically that a citation carries a review written against the cited content as it stands, and what a by-hand third re-read alone could do moved into Frontend Review, the last scope and the only one where both layers are finished.
 
 `EvidenceBenchmarkInstruction.entries()` is the only authority on that sequence.
 
@@ -105,7 +106,7 @@ The runner joins each objective with the same arm's `instructions/<arm>/continue
 
 The arms share no runtime instruction bytes. Do not add operator prose.
 
-Only Plain stops at a Review boundary; Evidence runs the eight objectives without stopping. [plain-review.md](plain-review.md) owns that loop.
+Only Plain stops at a Review boundary; Evidence runs its sequence without stopping. [plain-review.md](plain-review.md) owns that loop.
 
 ## What Is Retained
 

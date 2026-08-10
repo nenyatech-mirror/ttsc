@@ -1,5 +1,6 @@
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 
+import { sanitizeBenchmarkEnvironment } from "../../../../benchmarks/evidence/src/sanitizeBenchmarkEnvironment";
 import type { IRunResult } from "./IRunResult";
 import { pluginCacheDirectory } from "./pluginCacheDirectory";
 
@@ -23,6 +24,14 @@ const DEFAULT_TIMEOUT: number = 1_800_000;
  * The package manager is invoked through `process.env.npm_execpath` for the
  * same reason `EvidenceBenchmarkWorkspace` does: it is the entry point the
  * launching `pnpm` already resolved, so no shim on PATH has to be assumed.
+ *
+ * The environment is sanitized through the runner's own module for the same
+ * reason. This suite runs under `ttsx`, which preloads its TypeScript hook into
+ * every descendant through `NODE_OPTIONS`; a launched cell's scripts never see
+ * it, because `EvidenceBenchmarkRunner` strips it before spawning the measured
+ * agent. Leaving it here would run each gate in an environment no cell has —
+ * and `vite build` fails outright in it, because loading `vite.config.ts` calls
+ * a `resolveSync` the preloaded hook chain does not implement.
  */
 export const runScript = (props: {
   readonly cwd: string;
@@ -35,7 +44,9 @@ export const runScript = (props: {
     throw new Error(
       "The benchmark feature suite must be launched through pnpm; EvidenceBenchmarkWorkspace requires the same entry point.",
     );
-  const environment: NodeJS.ProcessEnv = { ...process.env };
+  const environment: NodeJS.ProcessEnv = sanitizeBenchmarkEnvironment(
+    process.env,
+  );
   // The launching suite's own package identity would otherwise leak into a
   // workspace script and answer for the wrong package.
   for (const name of Object.keys(environment))
