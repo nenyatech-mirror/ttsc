@@ -1,57 +1,58 @@
 {
-  "generatedAt": "2026-08-06T11:33:32.869Z",
+  "generatedAt": "2026-08-10T06:38:25.909Z",
+  "origin": "samchon/ttsc",
   "cells": [
     {
       "engine": "codex",
       "subject": "todo",
       "arm": "plain",
-      "runId": "2a44f046-1acb-4607-b826-30a3e7fa784b",
-      "benchmarkRevision": "cdbda42111ecc8f459f2772065caf067b6db3f91",
+      "runId": "48d1c3b9-e64f-4096-a169-7d5794b262e9",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
       "model": "gpt-5.6-luna",
       "effort": "high",
-      "status": "completed",
-      "stage": "overall-final",
-      "launchedAt": "2026-08-04T22:56:35.678Z",
-      "tokens": 550208042,
+      "status": "running",
+      "stage": "overall-review",
+      "launchedAt": "2026-08-09T18:17:34.899Z",
+      "tokens": 582889101,
       "tokenUsage": {
-        "totalTokens": 550208042,
-        "inputTokens": 549450600,
-        "cachedInputTokens": 540780032,
+        "totalTokens": 582889101,
+        "inputTokens": 581820103,
+        "cachedInputTokens": 571859200,
         "cacheWriteInputTokens": 0,
-        "outputTokens": 757442,
-        "reasoningOutputTokens": 219624
+        "outputTokens": 1068998,
+        "reasoningOutputTokens": 334195
       },
       "inspection": {
-        "attempts": 2,
+        "attempts": 10,
         "failures": 0,
         "tokenUsage": {
-          "totalTokens": 5076126,
-          "inputTokens": 5052440,
-          "cachedInputTokens": 4742400,
+          "totalTokens": 25425089,
+          "inputTokens": 25283428,
+          "cachedInputTokens": 23792384,
           "cacheWriteInputTokens": 0,
-          "outputTokens": 23686,
-          "reasoningOutputTokens": 13551
+          "outputTokens": 141661,
+          "reasoningOutputTokens": 83642
         },
-        "elapsedMs": 677418.1623
+        "elapsedMs": 3629244.9220999996
       },
       "apiCost": {
         "provider": "openrouter",
         "pricingAsOf": "2026-08-01",
         "priceSource": "https://openrouter.ai/api/v1/models",
         "currency": "USD",
-        "amountUsd": 7.03830834,
-        "requests": 6154,
-        "shortContextRequests": 6154,
+        "amountUsd": 6.88405626,
+        "requests": 4294,
+        "shortContextRequests": 4294,
         "longContextRequests": 0,
         "longContextThresholdTokens": 272000
       },
       "suspendedMs": 0,
       "suspensions": [],
-      "workElapsedMs": 41872418.1623,
+      "workElapsedMs": 42755397.0576,
       "worktree": {
-        "files": 58,
-        "additions": 6550,
-        "deletions": 134
+        "files": 90,
+        "additions": 8360,
+        "deletions": 138
       },
       "reviewVerdicts": [
         {
@@ -60,14 +61,14 @@
           "decision": "fail",
           "action": "retry",
           "goalIndex": 1,
-          "terminalTurnId": "beb05a5f-6e8a-4904-acfb-b9159cf2d608",
-          "rationale": "Both questions fail. The review skill requires a complete manifest and one full-file read per command in manifest order (workspace/.agents/skills/review/SKILL.md:48-55). The claimed final dry round emitted a 60-file manifest at backend-review.log positions 28135-28196, but its subsequent commands only reread requirements and a few test/config files (positions 28205, 28334, 28520, 28778, 29074-29125); position 29135 is an rg search, which counts as zero. There are no final-round reads of the manifest's API, schema, controllers, providers, or most tests, despite the dry claim at position 29281 and final report at position 30320. The tests also violate the workspace testing rule that every test needs a business assertion and typia.assert alone proves only shape (workspace/.agents/skills/backend/testing.md:149-160): test_api_auth_login (workspace/packages/backend/test/features/api/requirements/test_api_requirements.ts:48-57), test_api_auth_refresh (:65-71), and test_api_auth_recover (:124-133) contain only typia.assert calls with no business assertion. Unverified: none.",
-          "pausedAt": "2026-08-05T01:00:09.817Z",
-          "decidedAt": "2026-08-05T01:05:53.845Z",
-          "resumedAt": "2026-08-05T01:05:53.854Z",
+          "terminalTurnId": "88a8b921-2179-4225-a0de-4d32a127d2b8",
+          "rationale": "Q1 fails: after calibration the stream says the final fresh round began at backend-review.log:14508, but docs/analysis/02-domain-model.md was read only with Select-Object -First 35 and -Skip 35 -First 35 at backend-review.log:14648 and :14708. The workspace file continues through lines 71 and 125, so the final round was not a full read; the stream nevertheless claims a completed dry round at :20890. Q2 fails: testing instructions require numbered-step JSDoc (workspace/.agents/skills/backend/testing.md:45), but test_api_todo_active.ts:7 has none; they forbid direct Prisma setup/proof (testing.md:172), violated by TodoSetup.ts:39-45 and test_api_todo_account.ts:70,80-85; and forbid combining one operation's success and refusal (testing.md:176), violated by test_api_todo_auth.ts:66 and :71. All cited facts are verified; no unverified facts are relied upon.",
+          "pausedAt": "2026-08-09T20:06:44.344Z",
+          "decidedAt": "2026-08-09T20:12:49.792Z",
+          "resumedAt": "2026-08-09T20:12:49.827Z",
           "verdictRelativePath": "supervision/00-backend-0-verdict.json",
-          "verdictSha256": "f8568dd2fa0a4180822087b0daaf073e11a5ac05d88316811170a62319f7f8b5",
-          "workspaceMaterialSha256": "0aa9d294bd06514a3b1dbdd9426be2dfac91a8d751e18b72570ab2912b769c02"
+          "verdictSha256": "9aeee4f656bec471824ac76c7ad4858d6904def8d9301a38aa5b920b1490c691",
+          "workspaceMaterialSha256": "3b41e4cf3b74bfffcb15c02373ac4e4c01b53950924ff86fdd2201f3f3099c4d"
         },
         {
           "scope": "backend",
@@ -75,551 +76,14 @@
           "decision": "fail",
           "action": "retry",
           "goalIndex": 2,
-          "terminalTurnId": "f2dca2a1-d83a-4873-b6f4-d149ea4b8582",
-          "rationale": "Question 1 is not proven. The review skill requires a new sorted manifest before every round and a fresh full round after calibration (workspace/.agents/skills/review/SKILL.md:50-57, 79-81). The stream’s manifest commands occur at backend-remind-1.log:231, 3303, and 6254 only. Calibration changed the product at :14719 and was restored by :14954; the purported final round starts at :15062 with direct requirement reads at :15065, with no new manifest. Requirements are also reread out of sequence at :15065-15897 and :15964-16821. Thus the claimed final dry round at :26495 is unsupported; a fresh clean check:watch rebuild is likewise unverified (the final command only tails an existing log at :25516). Question 2 is no. The workspace testing rule says every test needs a business assertion and typia.assert alone proves only shape (workspace/.agents/skills/backend/testing.md:151-160). test_api_auth_login and test_api_auth_refresh contain only typia.assert calls for their success and follow-up observations, with no business assertion (workspace/packages/backend/test/features/api/requirements/test_api_requirements.ts:59-70, 79-87).",
-          "pausedAt": "2026-08-05T02:02:46.353Z",
-          "decidedAt": "2026-08-05T02:08:34.655Z",
-          "resumedAt": "2026-08-05T02:08:34.671Z",
+          "terminalTurnId": "013bab32-1a7d-4c81-a964-747a21250d0f",
+          "rationale": "Question 1: No. Review instructions require one fresh sorted manifest, one complete file read per command, and a dry round (workspace/.agents/skills/review/SKILL.md:48-57, 71-75). The stream shows incomplete/range reads in an earlier round (backend-remind-1.log:974-1065), provider rereads in bounded ranges after truncation (12032, 12041-12734), and the purported final round’s manifest sequence restarting with config/lint.config.ts, config/tsconfig.json, and package.json at 16569-16919 after package.json was already read at 16504, before continuing docs at 16925. The first final gate command failed at 22671; it was corrected and rerun at 22761-22784 without another full review round. The dry claim at 23655 is contradicted by these commands. Question 2: No. Testing instructions require numbered JSDoc steps and matching body comments (workspace/.agents/skills/backend/testing.md:43-45), but test_api_todo_account.ts has a one-line scenario JSDoc at line 8. They also prohibit direct Prisma reads for setup or proof (testing.md:166-176); the final tests directly query Prisma in test_api_todo_account.ts:75-91, test_api_todo_trash.ts:68, and helpers/TodoSetup.ts:39-46. No material fact above is unverified.",
+          "pausedAt": "2026-08-09T20:35:16.337Z",
+          "decidedAt": "2026-08-09T20:40:13.636Z",
+          "resumedAt": "2026-08-09T20:40:13.957Z",
           "verdictRelativePath": "supervision/01-backend-1-verdict.json",
-          "verdictSha256": "fabbb82360aff6ff17b5c391510319a164141220f9b7a36df3721fab1fe95dd7",
-          "workspaceMaterialSha256": "54345e5735a991f0efd47b7c9bbe6e29ad309b509021945236baefe6346f6843"
-        }
-      ],
-      "stages": [
-        {
-          "name": "backend-start",
-          "tokens": 29872719,
-          "elapsedMs": 2768000,
-          "tokenPercent": 5,
-          "timePercent": 7
-        },
-        {
-          "name": "backend-review",
-          "tokens": 76412747,
-          "elapsedMs": 4974126.7557,
-          "tokenPercent": 14,
-          "timePercent": 12
-        },
-        {
-          "name": "backend-remind-1",
-          "tokens": 53757022,
-          "elapsedMs": 3757291.4066,
-          "tokenPercent": 10,
-          "timePercent": 9
-        },
-        {
-          "name": "backend-remind-2",
-          "tokens": 77182440,
-          "elapsedMs": 4151000,
-          "tokenPercent": 14,
-          "timePercent": 10
-        },
-        {
-          "name": "backend-final",
-          "tokens": 17813133,
-          "elapsedMs": 1081000,
-          "tokenPercent": 3,
-          "timePercent": 3
-        },
-        {
-          "name": "frontend-start",
-          "tokens": 26279528,
-          "elapsedMs": 2352000,
-          "tokenPercent": 5,
-          "timePercent": 6
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 65607292,
-          "elapsedMs": 5020000,
-          "tokenPercent": 12,
-          "timePercent": 12
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 29374477,
-          "elapsedMs": 2197000,
-          "tokenPercent": 5,
-          "timePercent": 5
-        },
-        {
-          "name": "overall-review",
-          "tokens": 42281833,
-          "elapsedMs": 4512000,
-          "tokenPercent": 8,
-          "timePercent": 11
-        },
-        {
-          "name": "overall-remind-1",
-          "tokens": 19115354,
-          "elapsedMs": 2501000,
-          "tokenPercent": 3,
-          "timePercent": 6
-        },
-        {
-          "name": "overall-remind-2",
-          "tokens": 58582861,
-          "elapsedMs": 3857000,
-          "tokenPercent": 11,
-          "timePercent": 9
-        },
-        {
-          "name": "overall-remind-3",
-          "tokens": 15216940,
-          "elapsedMs": 1777000,
-          "tokenPercent": 3,
-          "timePercent": 4
-        },
-        {
-          "name": "overall-final",
-          "tokens": 33466068,
-          "elapsedMs": 2925000,
-          "tokenPercent": 6,
-          "timePercent": 7
-        }
-      ]
-    },
-    {
-      "engine": "codex",
-      "subject": "todo",
-      "arm": "evidence",
-      "runId": "0e710f75-6acc-435b-9352-2f6128feae89",
-      "benchmarkRevision": "cdbda42111ecc8f459f2772065caf067b6db3f91",
-      "model": "gpt-5.6-luna",
-      "effort": "high",
-      "status": "completed",
-      "stage": "overall-final",
-      "launchedAt": "2026-08-04T22:56:37.190Z",
-      "tokens": 129928059,
-      "tokenUsage": {
-        "totalTokens": 129928059,
-        "inputTokens": 129599653,
-        "cachedInputTokens": 128005888,
-        "cacheWriteInputTokens": 0,
-        "outputTokens": 328406,
-        "reasoningOutputTokens": 75709
-      },
-      "inspection": {
-        "attempts": 0,
-        "failures": 0,
-        "tokenUsage": {
-          "totalTokens": 0,
-          "inputTokens": 0,
-          "cachedInputTokens": 0,
-          "cacheWriteInputTokens": 0,
-          "outputTokens": 0,
-          "reasoningOutputTokens": 0
-        },
-        "elapsedMs": 0
-      },
-      "apiCost": {
-        "provider": "openrouter",
-        "pricingAsOf": "2026-08-01",
-        "priceSource": "https://openrouter.ai/api/v1/models",
-        "currency": "USD",
-        "amountUsd": 1.63647898,
-        "requests": 973,
-        "shortContextRequests": 973,
-        "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
-      },
-      "suspendedMs": 0,
-      "suspensions": [],
-      "workElapsedMs": 13635887.9596,
-      "worktree": {
-        "files": 113,
-        "additions": 6810,
-        "deletions": 136
-      },
-      "reviewVerdicts": [],
-      "stages": [
-        {
-          "name": "backend-start",
-          "tokens": 32474293,
-          "elapsedMs": 3857000,
-          "tokenPercent": 25,
-          "timePercent": 28
-        },
-        {
-          "name": "backend-review",
-          "tokens": 24618646,
-          "elapsedMs": 2630000,
-          "tokenPercent": 19,
-          "timePercent": 19
-        },
-        {
-          "name": "backend-final",
-          "tokens": 449038,
-          "elapsedMs": 50000,
-          "tokenPercent": 0,
-          "timePercent": 0
-        },
-        {
-          "name": "frontend-start",
-          "tokens": 35876257,
-          "elapsedMs": 3692000,
-          "tokenPercent": 28,
-          "timePercent": 27
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 24149238,
-          "elapsedMs": 1559000,
-          "tokenPercent": 19,
-          "timePercent": 11
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 662024,
-          "elapsedMs": 12000,
-          "tokenPercent": 1,
-          "timePercent": 0
-        },
-        {
-          "name": "overall-review",
-          "tokens": 10142522,
-          "elapsedMs": 1373000,
-          "tokenPercent": 8,
-          "timePercent": 10
-        },
-        {
-          "name": "overall-final",
-          "tokens": 1556041,
-          "elapsedMs": 138000,
-          "tokenPercent": 1,
-          "timePercent": 1
-        }
-      ]
-    },
-    {
-      "engine": "codex",
-      "subject": "reddit",
-      "arm": "plain",
-      "runId": "b8e996fe-3b6c-42c9-bfe0-ea36ccd5799a",
-      "benchmarkRevision": "cdbda42111ecc8f459f2772065caf067b6db3f91",
-      "model": "gpt-5.6-luna",
-      "effort": "high",
-      "status": "completed",
-      "stage": "overall-final",
-      "launchedAt": "2026-08-04T22:56:34.736Z",
-      "tokens": 507893364,
-      "tokenUsage": {
-        "totalTokens": 507893364,
-        "inputTokens": 507204295,
-        "cachedInputTokens": 501348608,
-        "cacheWriteInputTokens": 0,
-        "outputTokens": 689069,
-        "reasoningOutputTokens": 172430
-      },
-      "inspection": {
-        "attempts": 1,
-        "failures": 0,
-        "tokenUsage": {
-          "totalTokens": 2485559,
-          "inputTokens": 2473832,
-          "cachedInputTokens": 2307072,
-          "cacheWriteInputTokens": 0,
-          "outputTokens": 11727,
-          "reasoningOutputTokens": 6732
-        },
-        "elapsedMs": 450292.7752
-      },
-      "apiCost": {
-        "provider": "openrouter",
-        "pricingAsOf": "2026-08-01",
-        "priceSource": "https://openrouter.ai/api/v1/models",
-        "currency": "USD",
-        "amountUsd": 6.37637004,
-        "requests": 4060,
-        "shortContextRequests": 4060,
-        "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
-      },
-      "suspendedMs": 0,
-      "suspensions": [],
-      "workElapsedMs": 50074428.7455,
-      "worktree": {
-        "files": 157,
-        "additions": 21480,
-        "deletions": 145
-      },
-      "reviewVerdicts": [
-        {
-          "scope": "backend",
-          "attempt": 0,
-          "decision": "fail",
-          "action": "retry",
-          "goalIndex": 1,
-          "terminalTurnId": "364e8d8d-2bc1-4880-868b-4b3044d87457",
-          "rationale": "The prescribed loop did not run to dryness. The attempt announced its final edit-free round at backend-review.log:L22582, built a manifest at L22583, but the purported full reads at L22676-L22908 only returned character counts (e.g. `read ... chars=...`), not file contents. workspace/.agents/skills/review/SKILL.md:L48-L55 explicitly says counts/summaries are zero and requires complete contents, so the final round was not a valid full round; the completion claim at backend-review.log:L23927 is contradicted by the stream. Tests are also improperly written. The workspace testing rules require a business assertion in every test and say type validation alone proves only shape (workspace/.agents/skills/backend/testing.md:L149-L160). `test_api_reddit_recovery_complete` has no assertion and merely awaits the call (workspace/packages/backend/test/features/api/reddit/test_api_reddit_operations.ts:L24-L25), while subscription, ban-list, ban-history, and report-history tests only call `typia.assert` with no business assertion (same file:L38-L39, L62-L65, L68-L69).",
-          "pausedAt": "2026-08-05T03:00:48.182Z",
-          "decidedAt": "2026-08-05T03:08:32.471Z",
-          "resumedAt": "2026-08-05T03:08:32.481Z",
-          "verdictRelativePath": "supervision/00-backend-0-verdict.json",
-          "verdictSha256": "97147aa65d5ac93cbcf5dadd67d88b64788cb32661f77d4e8cf28ce05aa0cff0",
-          "workspaceMaterialSha256": "97b3cde17ec572337133b2d5cb076ca69184613563b1998c9e9a475e95c91315"
-        }
-      ],
-      "stages": [
-        {
-          "name": "backend-start",
-          "tokens": 17450090,
-          "elapsedMs": 2301000,
-          "tokenPercent": 3,
-          "timePercent": 5
-        },
-        {
-          "name": "backend-review",
-          "tokens": 165158901,
-          "elapsedMs": 12800292.7752,
-          "tokenPercent": 33,
-          "timePercent": 26
-        },
-        {
-          "name": "backend-remind-1",
-          "tokens": 138892661,
-          "elapsedMs": 8309000,
-          "tokenPercent": 27,
-          "timePercent": 17
-        },
-        {
-          "name": "backend-final",
-          "tokens": 48759929,
-          "elapsedMs": 2486000,
-          "tokenPercent": 10,
-          "timePercent": 5
-        },
-        {
-          "name": "frontend-start",
-          "tokens": 31723600,
-          "elapsedMs": 15381000,
-          "tokenPercent": 6,
-          "timePercent": 31
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 50035842,
-          "elapsedMs": 3662000,
-          "tokenPercent": 10,
-          "timePercent": 7
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 38799644,
-          "elapsedMs": 3376000,
-          "tokenPercent": 8,
-          "timePercent": 7
-        },
-        {
-          "name": "overall-review",
-          "tokens": 14809736,
-          "elapsedMs": 1768000,
-          "tokenPercent": 3,
-          "timePercent": 4
-        },
-        {
-          "name": "overall-final",
-          "tokens": 1895546,
-          "elapsedMs": 441000,
-          "tokenPercent": 0,
-          "timePercent": 1
-        }
-      ]
-    },
-    {
-      "engine": "codex",
-      "subject": "reddit",
-      "arm": "evidence",
-      "runId": "dfec73eb-2e01-4e0c-bb93-9b21df14da77",
-      "benchmarkRevision": "0f465f52c69b4b7e6b25fab1c1676de5ea6db15f",
-      "model": "gpt-5.6-luna",
-      "effort": "high",
-      "status": "completed",
-      "stage": "overall-final",
-      "launchedAt": "2026-08-05T11:50:02.929Z",
-      "tokens": 215369781,
-      "tokenUsage": {
-        "totalTokens": 215369781,
-        "inputTokens": 214995138,
-        "cachedInputTokens": 211989248,
-        "cacheWriteInputTokens": 0,
-        "outputTokens": 374643,
-        "reasoningOutputTokens": 112660
-      },
-      "inspection": {
-        "attempts": 0,
-        "failures": 0,
-        "tokenUsage": {
-          "totalTokens": 0,
-          "inputTokens": 0,
-          "cachedInputTokens": 0,
-          "cacheWriteInputTokens": 0,
-          "outputTokens": 0,
-          "reasoningOutputTokens": 0
-        },
-        "elapsedMs": 0
-      },
-      "apiCost": {
-        "provider": "openrouter",
-        "pricingAsOf": "2026-08-01",
-        "priceSource": "https://openrouter.ai/api/v1/models",
-        "currency": "USD",
-        "amountUsd": 2.64526728,
-        "requests": 1605,
-        "shortContextRequests": 1605,
-        "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
-      },
-      "suspendedMs": 0,
-      "suspensions": [],
-      "workElapsedMs": 17905711.1109,
-      "worktree": {
-        "files": 224,
-        "additions": 15641,
-        "deletions": 70
-      },
-      "reviewVerdicts": [],
-      "stages": [
-        {
-          "name": "backend-start",
-          "tokens": 20078882,
-          "elapsedMs": 2321000,
-          "tokenPercent": 9,
-          "timePercent": 13
-        },
-        {
-          "name": "backend-review",
-          "tokens": 21232045,
-          "elapsedMs": 1941000,
-          "tokenPercent": 10,
-          "timePercent": 11
-        },
-        {
-          "name": "backend-final",
-          "tokens": 787363,
-          "elapsedMs": 26000,
-          "tokenPercent": 0,
-          "timePercent": 0
-        },
-        {
-          "name": "frontend-start",
-          "tokens": 47141668,
-          "elapsedMs": 4544000,
-          "tokenPercent": 22,
-          "timePercent": 25
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 49550289,
-          "elapsedMs": 3307000,
-          "tokenPercent": 23,
-          "timePercent": 18
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 2034081,
-          "elapsedMs": 80000,
-          "tokenPercent": 1,
-          "timePercent": 0
-        },
-        {
-          "name": "overall-review",
-          "tokens": 72196159,
-          "elapsedMs": 5342000,
-          "tokenPercent": 34,
-          "timePercent": 30
-        },
-        {
-          "name": "overall-final",
-          "tokens": 2349294,
-          "elapsedMs": 248000,
-          "tokenPercent": 1,
-          "timePercent": 1
-        }
-      ]
-    },
-    {
-      "engine": "codex",
-      "subject": "shopping",
-      "arm": "plain",
-      "runId": "4a0eedc2-7991-4ec2-bdab-0100e6a8b2b3",
-      "benchmarkRevision": "cdbda42111ecc8f459f2772065caf067b6db3f91",
-      "model": "gpt-5.6-luna",
-      "effort": "high",
-      "status": "completed",
-      "stage": "overall-final",
-      "launchedAt": "2026-08-05T10:35:07.515Z",
-      "tokens": 798198850,
-      "tokenUsage": {
-        "totalTokens": 798198850,
-        "inputTokens": 797185608,
-        "cachedInputTokens": 785385216,
-        "cacheWriteInputTokens": 0,
-        "outputTokens": 1013242,
-        "reasoningOutputTokens": 280423
-      },
-      "inspection": {
-        "attempts": 5,
-        "failures": 0,
-        "tokenUsage": {
-          "totalTokens": 16257151,
-          "inputTokens": 16198331,
-          "cachedInputTokens": 15365632,
-          "cacheWriteInputTokens": 0,
-          "outputTokens": 58820,
-          "reasoningOutputTokens": 30901
-        },
-        "elapsedMs": 1689542.0947
-      },
-      "apiCost": {
-        "provider": "openrouter",
-        "pricingAsOf": "2026-08-01",
-        "priceSource": "https://openrouter.ai/api/v1/models",
-        "currency": "USD",
-        "amountUsd": 9.64183656,
-        "requests": 5967,
-        "shortContextRequests": 5967,
-        "longContextRequests": 0,
-        "longContextThresholdTokens": 272000
-      },
-      "suspendedMs": 0,
-      "suspensions": [],
-      "workElapsedMs": 81518819.80919999,
-      "worktree": {
-        "files": 169,
-        "additions": 24723,
-        "deletions": 114
-      },
-      "reviewVerdicts": [
-        {
-          "scope": "backend",
-          "attempt": 0,
-          "decision": "fail",
-          "action": "retry",
-          "goalIndex": 1,
-          "terminalTurnId": "f68ed320-bec4-4803-80dd-45524379c9c2",
-          "rationale": "Question 1: fail. The review skill requires complete contents returned, exactly one manifest file per command, and rejects summaries/counts as reads (workspace/.agents/skills/review/SKILL.md:48-55). After the last reported fix (backend-review.log:53690), the Round 6 manifest was created (backend-review.log:53691), but one command then looped over all requirements and all 64 manifest files together (backend-review.log:53701); its output contained only READ line/character counts and MANIFEST 01-64 labels, not file contents (backend-review.log:53840). Therefore the claimed final dry Round 6 (backend-review.log:54461) is not proven. Question 2: fail. Testing instructions require a proven working path for every published operation and a business assertion (workspace/.agents/skills/backend/testing.md:26,39,132,158). The stream reports 106 accessors and 106 smoke tests (backend-review.log:16234), but the tests for sellerDashboard appear only as an unauthenticated guard call (workspace/packages/backend/test/features/api/test_api_operation_guards.ts:427-429). The requirement requires an authenticated seller summary containing four concrete counts (workspace/docs/analysis/03-functional-requirements.md:567-576), and no test observes that success behavior. Unverified facts: none.",
-          "pausedAt": "2026-08-05T12:36:05.253Z",
-          "decidedAt": "2026-08-05T12:42:34.781Z",
-          "resumedAt": "2026-08-05T12:42:34.787Z",
-          "verdictRelativePath": "supervision/00-backend-0-verdict.json",
-          "verdictSha256": "2f48a5d39803c632b0a9655c8d00b82069ef57275bf5380b90b82b32e08153bb",
-          "workspaceMaterialSha256": "b90896c1a1cba260cd51c42e855424d0a844309be96bcacd94395ad208342f18"
-        },
-        {
-          "scope": "backend",
-          "attempt": 1,
-          "decision": "fail",
-          "action": "retry",
-          "goalIndex": 2,
-          "terminalTurnId": "fd4b2188-9576-4d1c-bfb7-8b628a825669",
-          "rationale": "Q1 is no. After scoped edits at backend-remind-1.log stream lines 184472-184473 and 184820-184821, the supposed final manifest was only added at 184926-184927. The subsequent commands at 184935-184941 and 185027-185160 looped over all manifest paths, emitting hashes/counts rather than returning each file in full, and each command read many files, contrary to workspace/.agents/skills/review/SKILL.md:50-54. No ordered per-file full reads follow that manifest before tests at 185167 and the completion claim at 185804-185809. The check:watch attempts at 185197-185208, 185220-185245, and 185266-185298 failed with exit 124; the later command at 185418-185433 only observed process liveness, not a clean diagnostic rebuild. Thus no final dry round is evidenced. Q2 is no. workspace/.agents/skills/backend/testing.md:26,34,39,138,158 requires per-operation tests with one primary operation, working-path coverage, and business assertions. packages/backend/test/features/api/test_api_business_journey.ts:22-320 is one exported test invoking dozens of different accessors, despite claiming to exercise each published operation, violating the one-primary-operation rule. packages/backend/test/features/api/test_api_operation_guards.ts:4-10 and :20-543 mostly wrap calls in a generic 401 helper; specifically :180-218 labels customer/seller login and recovery as unauthenticated actor-guard refusals, while docs/analysis/01-actors-and-auth.md:17-19,47-51,71-73,101-105 require successful login and recovery flows. These tests therefore do not prove the promised business behavior. I did not independently verify every other accessor-to-test mapping; that is unverified, but these documented violations suffice.",
-          "pausedAt": "2026-08-05T18:14:36.913Z",
-          "decidedAt": "2026-08-05T18:21:02.458Z",
-          "resumedAt": "2026-08-05T18:21:02.468Z",
-          "verdictRelativePath": "supervision/01-backend-1-verdict.json",
-          "verdictSha256": "6c5d89bc57810367868791480951d7dcb8beaffca9fbd5d86685c6e5df516a63",
-          "workspaceMaterialSha256": "f631d9bb0f29a24127cdbc7480b74bd6cbd292e121e50e77f112e83e01ee46e7"
+          "verdictSha256": "cc9f46019c7e3380e611b1177d092853ee11e6373a8b4be03c36f07880b25002",
+          "workspaceMaterialSha256": "f593567a9077b4ed54c896d7cdc1cf68c431a2f5569a819759cb8c07cd4cae94"
         },
         {
           "scope": "backend",
@@ -627,14 +91,14 @@
           "decision": "fail",
           "action": "retry",
           "goalIndex": 3,
-          "terminalTurnId": "e09d31dc-41ff-407a-a170-7d7a574f481c",
-          "rationale": "The review loop did not produce a qualifying dry round. In the claimed final round, every manifest command from backend-remind-2.log:23163 through 23693 used `Get-Content -Raw | Out-Null` and retained only a `READ ...` marker (for example :23163-23166), whereas workspace/.agents/skills/review/SKILL.md:48-54 requires complete file contents to be returned and examined. The manifest was only line-counted after the round at backend-remind-2.log:23865-23874, and the dry claim at :24173 is therefore unverified/contradicted by the retained reads. The tests are also not properly written: workspace/.agents/skills/backend/testing.md:34-41 requires one primary operation per test and a proven working path, but test_api_business_journey.ts:21-30 declares one test that calls many operations (continuing through :47-177), rather than one primary operation per test. Thus both judged questions are no.",
-          "pausedAt": "2026-08-05T18:50:29.364Z",
-          "decidedAt": "2026-08-05T18:55:48.933Z",
-          "resumedAt": "2026-08-05T18:55:48.965Z",
+          "terminalTurnId": "619896b9-b2f5-4dfc-96bc-bdc308f80745",
+          "rationale": "Question 1 is no: the final manifest at backend-remind-2.log stream line 17933 lists docs/analysis/03-functional-requirements.md once, but the final pass reads it at line 18679 and again out of order at line 19230, after docs/analysis/04 and 05 (lines 18925 and 18969) and before package.json (line 19288). Therefore the claimed dry round (lines 24136 and 25431) did not satisfy the required manifest-order read record. Question 2 is no: workspace/.agents/skills/backend/testing.md:168-172 forbids direct Prisma reads for setup or proof, but test_api_todo_account.ts imports MyGlobal at line 6 and reads Prisma at lines 81 and 91-97; test_api_todo_auth.ts imports it at line 6 and reads Prisma at lines 32, 36, and 66-72. The passing 46-test report at stream line 24281 does not cure that violation. No other facts were relied upon; unverified claims are none.",
+          "pausedAt": "2026-08-09T21:13:00.632Z",
+          "decidedAt": "2026-08-09T21:19:07.880Z",
+          "resumedAt": "2026-08-09T21:19:07.904Z",
           "verdictRelativePath": "supervision/02-backend-2-verdict.json",
-          "verdictSha256": "9bdb4542396ecdcc87a35817c603f43c2cd9ec519c8318e32e321f36e5b67ef0",
-          "workspaceMaterialSha256": "dfc318eb9e6756d59582c58b154aedc8e03b0cbe6f38092bd57fe07551223fa2"
+          "verdictSha256": "af634972d9f8fa5c785637fe070d53043805b05d9e757ea7c67ce6ede9e8e92f",
+          "workspaceMaterialSha256": "7269c042be6e62704765b1224deaccbb8e6bd9cd61e79d80d7b6cf9772291e64"
         },
         {
           "scope": "backend",
@@ -642,114 +106,811 @@
           "decision": "fail",
           "action": "retry",
           "goalIndex": 4,
-          "terminalTurnId": "7d8cdfcc-3392-4c53-bc80-5618ae6c3a34",
-          "rationale": "The review loop did not produce a qualifying dry round. The final candidate manifest was generated at backend-remind-3.log:13757-13875 and claimed strict reading at :13882, but each subsequent manifest command only assigned Get-Content -Raw to $s and emitted a character count, not the file contents: docs/analysis/01 at :13957-13964, and backend tests at :14259-14265. This violates the review procedure's full-return requirement; the later completion claim at :14995-15000 cannot establish otherwise. The tests are also insufficient. Workspace/.agents/skills/backend/testing.md requires operation-sized behavioral proof (lines 26, 138, 158). test_api_operation_guards.ts contains 106 operation-named tests; representative tests at lines 19-26, 351-358, and 466-474 only call expectUnauthenticated, while the sole typia.assert examples at lines 13-16 prove shape. They do not prove successful business behavior or persisted outcomes for those operations. The claimed gates and TEST_AUTOMATION_REPORT in the stream are unverified as substantive behavioral proof.",
-          "pausedAt": "2026-08-05T20:23:48.992Z",
-          "decidedAt": "2026-08-05T20:29:31.521Z",
-          "resumedAt": "2026-08-05T20:29:31.531Z",
+          "terminalTurnId": "59a8a989-b6c8-43a4-9ef9-e971a043e975",
+          "rationale": "Question 1 is no. The stream shows Round 1 finding fixes at backend-remind-3.log:10273, then only build:prisma/build:main/build:test at :10314-10339 before the new Round 2 manifest at :10424; no packages/backend check:watch invocation or clean marker occurs in that round. Clean watch evidence appears only at :17774 (Round 2) and :24808 (Round 3). The rounds also begin by reading config files (:2885, :3188; likewise :18288 and :18317) before the first docs/analysis requirement (:3214 and :18355), contrary to the requirement-first procedure. Any pre-existing watcher state is unverified and cannot replace the missing recorded gate. Question 2 is no. The testing instructions require one primary accessor per test and operation-specific refusal coverage (workspace/.agents/skills/backend/testing.md:34-41, 132). test_api_todo_ownership_refuses_cross_account_access bundles independent at/update/complete/trash/history/index operations in one test (workspace/packages/backend/test/features/api/todo/test_api_todo_ownership.ts:16-34). The instructions also require raw HTTP for deliberately malformed wire inputs (testing.md:164), but test_api_todo_rules_browse injects unsupported completion, sort, page, and limit values through typed-SDK calls with type assertions (workspace/packages/backend/test/features/api/todo/test_api_todo_rules.ts:63-66). Required boundary behavior is unproved: equal start/due dates must be valid (workspace/docs/analysis/04-business-rules.md:67), yet the date tests cover only optional dates and an earlier due date (test_api_todo_rules.ts:34-46); tie-break ordering for equal keys is required at docs line 119 but the sorting test uses distinct dates and a missing-date item only (test_api_todo_rules.ts:70-93).",
+          "pausedAt": "2026-08-09T22:00:27.171Z",
+          "decidedAt": "2026-08-09T22:07:10.763Z",
+          "resumedAt": "2026-08-09T22:07:10.784Z",
           "verdictRelativePath": "supervision/03-backend-3-verdict.json",
-          "verdictSha256": "b8e01a8b718b9ee96179c81fd786f0bb90294ed161b405104d1211f25766032e",
-          "workspaceMaterialSha256": "1b44c6fabf420487abd6a7d0a88026932a7f9373cb16cd6d33810270357dcec4"
+          "verdictSha256": "eea96b5acbbae2ab38b890486b14e3a45ceff18242f26ffe1e586e673e566fba",
+          "workspaceMaterialSha256": "9e2faabe1964b82ed1e1616973284332b9e9b84b6165a7790496d897284bb202"
         },
         {
           "scope": "backend",
           "attempt": 4,
           "decision": "fail",
-          "action": "quality-failed",
+          "action": "final",
           "goalIndex": 5,
-          "terminalTurnId": "add51c82-673a-489c-ac73-04be44fd9297",
-          "rationale": "Question 1: no. The restart22 manifest was created at backend-remind-4.log:14644 and lists docs/analysis in 01–05 order (output at :14771), but the recorded reads start with 01, then 05, then packages/api at :14777–14779; 02 is only read later at :15054 (with 03/04 later still). Thus the claimed dry round at :28848 was not a manifest-order full round, and no later manifest/read sequence repairs it. Question 2: no. Workspace testing instructions require one primary operation per test and a business assertion beyond type validation (workspace/.agents/skills/backend/testing.md:34-39,151-158). test_api_seller_recovery.ts documents identity preservation but only performs typia.assert calls and never asserts identity or a business outcome (workspace/packages/backend/test/features/api/seller/test_api_seller_recovery.ts:4-13). test_api_health.ts likewise documents reachability/contract validation and only calls the accessor plus typia.assert (workspace/packages/backend/test/features/api/health/test_api_health.ts:4-14,24-28). The business journey also claims to exercise each published operation in one function (workspace/packages/backend/test/features/api/test_api_business_journey.ts:21-22) while invoking many operations, contrary to the one-primary-operation rule. No unverified facts are relied upon.",
-          "pausedAt": "2026-08-05T20:40:20.412Z",
-          "decidedAt": "2026-08-05T20:44:59.232Z",
+          "terminalTurnId": "f59c0b2c-d28f-46eb-bc03-2118eb503e64",
+          "rationale": "Q1 fails: the review skill requires any failed final gate to invalidate the round and require another full round (workspace/.agents/skills/review/SKILL.md:71-75). The stream records the purported final round complete at backend-remind-4.log:43815, then the check:watch wrapper exits 1 with WATCH_MARKER=False at :44226. Only process/status checks follow; the wrapper is rerun successfully at :44497, with no new manifest or full-scope reads before the dry claim at :44514. Q2 fails: testing instructions require one primary accessor per test (workspace/.agents/skills/backend/testing.md:34-41). `test_api_todo_ownership_requires_authentication` independently tests four accessors (workspace/packages/backend/test/features/api/todo/test_api_todo_ownership.ts:17-21), and the cross-account test independently tests six (lines 40-45); these are subjects, not setup/observation. Both facts are verified; no material fact relied on here is unverified.",
+          "pausedAt": "2026-08-09T22:57:19.173Z",
+          "decidedAt": "2026-08-09T23:03:13.717Z",
+          "resumedAt": "2026-08-09T23:03:13.736Z",
           "verdictRelativePath": "supervision/04-backend-4-verdict.json",
-          "verdictSha256": "85ae352dfa42f9fc8335239e4e6a86a2e6ef2a6d44f1aa23a8b9d12685c5c925",
-          "workspaceMaterialSha256": "ea863f571a3d04d60cf290972e629e8c0816f213d16b3cf89d8f3cea710baf40"
+          "verdictSha256": "d357e91f8cec68299d6dd2388717761e356b6ba6ade373fbf157d7b63a4523e3",
+          "workspaceMaterialSha256": "d11ed0d2ef5992ea7c7a99f5935702d50cf4f1cdf8b23ceb78ba6a1796c97cac"
+        },
+        {
+          "scope": "frontend",
+          "attempt": 0,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 8,
+          "terminalTurnId": "ee072fb0-5764-4493-8f9b-0c47ecdaa72f",
+          "rationale": "Question 1 is no. The Round 4 manifest printed at frontend-review.log stream lines 9004–9007 requires packages/api/src/functional/todo/auth/user/index.ts before its recovery files, but the stream reads recovery/index.ts at 9073 and only reads auth/user/index.ts at 9100, with unrelated files between; docs/analysis/03-functional-requirements.md is also redundantly reread at 9049. The claimed final Round 5 starts at 10057, but the scope commands assign each file to $content and output only “full read complete”; for example, packages/api/src/functional/health/index.ts is recorded at 10058–10061 with no contents returned. Any internal examination of the captured variable is unverified, so the required literal dry round is not proven; this contradicts the completion claim at 12236. Question 2 is no. The workspace requires each tests/journeys file to export one async journey function and register one Playwright test (.agents/skills/frontend/verification.md:28–42). packages/frontend/tests/journeys/product.spec.ts exports no journey function and registers six tests at lines 30, 67, 93, 104, 117, and 124. Its profile assertion at lines 80–82 only checks the already-filled input value, not the required persisted/user-visible consequence, contrary to the concrete-effect gate (.agents/skills/frontend/verification.md:131–134).",
+          "pausedAt": "2026-08-10T01:43:48.027Z",
+          "decidedAt": "2026-08-10T01:48:52.310Z",
+          "resumedAt": "2026-08-10T01:48:52.349Z",
+          "verdictRelativePath": "supervision/05-frontend-0-verdict.json",
+          "verdictSha256": "523365698cd4bde632eb306113c9fa6ad17b2ccf276c71a76c4a1b4a0954e52e",
+          "workspaceMaterialSha256": "0716cfe5f76f2e3c863dd0350c3a189da6129fb9c7c582348f09ac220f8ca566"
+        },
+        {
+          "scope": "frontend",
+          "attempt": 1,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 9,
+          "terminalTurnId": "056c9dc6-afe1-45e9-83d0-e0ee53760e3a",
+          "rationale": "The review loop itself is evidenced: fresh 71-file manifest at frontend-remind-1.log:6478, one successful full Get-Content read per manifest entry in order at lines 6547-6939, clean gates at 7136, and backend/frontend reload reported 200/200 at 6536. However, tests are not properly written per workspace/.agents/skills/frontend/verification.md:26-42, which requires each journeys file to export one async journey function and register one Playwright test. packages/frontend/tests/journeys/product.spec.ts:50-264 has eleven inline test registrations and no exported journey function. The 11/11 green result at frontend-remind-1.log:7136 does not cure that violation.",
+          "pausedAt": "2026-08-10T02:53:53.604Z",
+          "decidedAt": "2026-08-10T03:02:20.701Z",
+          "resumedAt": "2026-08-10T03:02:20.726Z",
+          "verdictRelativePath": "supervision/06-frontend-1-verdict.json",
+          "verdictSha256": "a74bba5dd9e966c5c9e4442cd99c00187df43ec55297e5782cb34f36f6d6a1af",
+          "workspaceMaterialSha256": "6e344432274f7f19897063d12e20fc3336b5c6ad95ee8de5a2b96d9829bfac1c"
+        },
+        {
+          "scope": "frontend",
+          "attempt": 2,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 10,
+          "terminalTurnId": "365b4446-8d3e-4d1f-acbe-e382d226726f",
+          "rationale": "Question 1: no. The rejected-review turn starts at stream line 22; lines 23-41 contain only reasoning/goal/status events, line 42 starts the final answer, and lines 43-2031 are only its streamed prose. There are no current-turn file-read or command records, so no review round occurred. The instruction itself states at line 27 that a round with no read commands did not happen, while the completion claim at line 2031 is unsupported. Question 2: no. The workspace requires each journeys file to export one async journey function and register one test (workspace/.agents/skills/frontend/verification.md:28-42), but product.spec.ts has no exported journey function and directly registers many tests (lines 50, 98, 128, 145, 156, 169, 183, 205, 217, 244, 256). The auxiliary suites also assert only rendering/viewport or screenshot reachability (tests/contract/scaffold.spec.ts:38-50; tests/readme.spec.ts:3-9; tests/ui-review.spec.ts:3-21), not business outcomes. The live journey assertions do cover several concrete effects (product.spec.ts:57-89, 128-142, 183-203, 217-240), but that does not cure the suite-level instruction violations.",
+          "pausedAt": "2026-08-10T03:03:53.824Z",
+          "decidedAt": "2026-08-10T03:09:18.748Z",
+          "resumedAt": "2026-08-10T03:09:18.774Z",
+          "verdictRelativePath": "supervision/07-frontend-2-verdict.json",
+          "verdictSha256": "ec893f55fb134dabd12f478586b0ff5139d0e44a0823c042d5237be36d0e97ae",
+          "workspaceMaterialSha256": "6e344432274f7f19897063d12e20fc3336b5c6ad95ee8de5a2b96d9829bfac1c"
+        },
+        {
+          "scope": "frontend",
+          "attempt": 3,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 11,
+          "terminalTurnId": "e6207049-3e88-40a3-a9d4-c65afd1220b5",
+          "rationale": "Question 1 fails. The review-skill procedure requires one exact manifest file per command in manifest order (workspace/.agents/skills/review/SKILL.md:50-53) and a failed final gate to invalidate the round and force a new full read (lines 71-75). In frontend-remind-3.log, the manifest completed at stream line 2219, but stream line 2841 reads packages/backend/package.json together with Get-Process and line 3770 rereads packages/frontend/index.html after the scoped files. The next manifest at 3947 is followed by duplicate reads of docs/analysis/03-functional-requirements.md at lines 3965 and 3986 before the API read at 3999. The purported final full read is at lines 5156-5485, but its e2e gate failed with exit 1 (12 passed, 1 failed) at line 6064 and was only rerun successfully at line 6299; no new manifest/full read followed. Question 2 also fails. workspace/.agents/skills/frontend/verification.md:28-42 requires each journeys file to export one async journey function and register one Playwright test. packages/frontend/tests/journeys/product.spec.ts has no exported journey function and registers 13 separate test blocks (lines 50, 100, 130, 147, 163, 177, 188, 201, 215, 237, 249, 276, 288).",
+          "pausedAt": "2026-08-10T03:51:43.846Z",
+          "decidedAt": "2026-08-10T03:59:09.227Z",
+          "resumedAt": "2026-08-10T03:59:09.250Z",
+          "verdictRelativePath": "supervision/08-frontend-3-verdict.json",
+          "verdictSha256": "aa75a94ab0d712c6890624a507950bc586fe2f9084f6603cfde0a2efedf4636b",
+          "workspaceMaterialSha256": "3aedd1e870154d1ea2e4aeb8e824e3d7fb102d811d4c1920ee52d42fabf780f0"
+        },
+        {
+          "scope": "frontend",
+          "attempt": 4,
+          "decision": "fail",
+          "action": "final",
+          "goalIndex": 12,
+          "terminalTurnId": "8cb7681f-028f-4549-b72c-20cdaca454d4",
+          "rationale": "Question 1: fail. `frontend-remind-4.log` shows one manifest command at line 122 and the only complete scope read at command positions 292–1370. After the gate commands (1520–2245), positions 2313–2387 read only a subset of files; no new manifest or requirement-first full round appears before the final checks at 2435–2440. The ten-round claim at position 3678 is therefore unverified. This also omits the required mutation calibration (`workspace/.agents/skills/review/SKILL.md:77-81`) and new manifest per round (`:50-57`). Question 2: fail. `workspace/.agents/skills/frontend/verification.md:28-42` requires each journeys file to export one async journey function and register one test. `workspace/packages/frontend/tests/journeys/product.spec.ts` exports no journey function and instead declares 13 anonymous tests at lines 50, 100, 130, 147, 163, 177, 188, 201, 215, 237, 249, 276, and 288. The claimed prior rounds and calibration are unverified.",
+          "pausedAt": "2026-08-10T04:12:00.213Z",
+          "decidedAt": "2026-08-10T04:17:22.342Z",
+          "resumedAt": "2026-08-10T04:17:22.384Z",
+          "verdictRelativePath": "supervision/09-frontend-4-verdict.json",
+          "verdictSha256": "06f2a22d3468d4508a3804bcb92bfbd18f5e302090c9845482256e4d4decf843",
+          "workspaceMaterialSha256": "a4749dfc989548a35c677ec9b630ae2f564d3630bc24ca007fa24033d1efad49"
         }
       ],
       "stages": [
         {
           "name": "backend-start",
-          "tokens": 255451467,
-          "elapsedMs": 21763000,
-          "tokenPercent": 32,
-          "timePercent": 27
+          "tokens": 32898028,
+          "elapsedMs": 3710000,
+          "tokenPercent": 6,
+          "timePercent": 9
         },
         {
           "name": "backend-review",
-          "tokens": 96330115,
-          "elapsedMs": 29034683.5983,
-          "tokenPercent": 12,
-          "timePercent": 36
+          "tokens": 33580868,
+          "elapsedMs": 3023317.0952,
+          "tokenPercent": 6,
+          "timePercent": 7
         },
         {
           "name": "backend-remind-1",
-          "tokens": 200349760,
-          "elapsedMs": 16978096.0348,
-          "tokenPercent": 25,
-          "timePercent": 21
+          "tokens": 18894976,
+          "elapsedMs": 1589424.6472,
+          "tokenPercent": 3,
+          "timePercent": 4
         },
         {
           "name": "backend-remind-2",
-          "tokens": 53548586,
-          "elapsedMs": 2060624.6206,
-          "tokenPercent": 7,
-          "timePercent": 3
+          "tokens": 36281554,
+          "elapsedMs": 2271679.2040999997,
+          "tokenPercent": 6,
+          "timePercent": 5
         },
         {
           "name": "backend-remind-3",
-          "tokens": 33982000,
-          "elapsedMs": 1866808.7756,
-          "tokenPercent": 4,
-          "timePercent": 2
+          "tokens": 52679325,
+          "elapsedMs": 2832359.1956,
+          "tokenPercent": 9,
+          "timePercent": 7
         },
         {
           "name": "backend-remind-4",
-          "tokens": 7430726,
-          "elapsedMs": 860329.0654,
-          "tokenPercent": 1,
-          "timePercent": 1
+          "tokens": 43373718,
+          "elapsedMs": 3221239.6574999997,
+          "tokenPercent": 7,
+          "timePercent": 8
         },
         {
           "name": "backend-final",
-          "tokens": 21481679,
-          "elapsedMs": 1148000,
-          "tokenPercent": 3,
+          "tokens": 4754945,
+          "elapsedMs": 290000,
+          "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "frontend-start",
-          "tokens": 34329031,
-          "elapsedMs": 2726000,
-          "tokenPercent": 4,
-          "timePercent": 3
+          "tokens": 50709138,
+          "elapsedMs": 3622000,
+          "tokenPercent": 9,
+          "timePercent": 8
         },
         {
           "name": "frontend-review",
-          "tokens": 32984528,
-          "elapsedMs": 2995000,
+          "tokens": 69109422,
+          "elapsedMs": 4361193.6012,
+          "tokenPercent": 12,
+          "timePercent": 10
+        },
+        {
+          "name": "frontend-remind-1",
+          "tokens": 63841789,
+          "elapsedMs": 4352773.5722,
+          "tokenPercent": 11,
+          "timePercent": 10
+        },
+        {
+          "name": "frontend-remind-2",
+          "tokens": 3320544,
+          "elapsedMs": 364663.9853,
+          "tokenPercent": 1,
+          "timePercent": 1
+        },
+        {
+          "name": "frontend-remind-3",
+          "tokens": 31206831,
+          "elapsedMs": 2958068.7285,
+          "tokenPercent": 5,
+          "timePercent": 7
+        },
+        {
+          "name": "frontend-remind-4",
+          "tokens": 10703174,
+          "elapsedMs": 1044525.2353000001,
+          "tokenPercent": 2,
+          "timePercent": 2
+        },
+        {
+          "name": "frontend-final",
+          "tokens": 53074870,
+          "elapsedMs": 2101000,
+          "tokenPercent": 9,
+          "timePercent": 5
+        },
+        {
+          "name": "overall-review",
+          "tokens": 78459919,
+          "elapsedMs": 7013152.135499999,
+          "tokenPercent": 13,
+          "timePercent": 16
+        }
+      ]
+    },
+    {
+      "engine": "codex",
+      "subject": "todo",
+      "arm": "evidence",
+      "runId": "b9b5d09d-c375-4ee6-b750-3b2622c33689",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
+      "model": "gpt-5.6-luna",
+      "effort": "high",
+      "status": "completed",
+      "stage": "overall-final",
+      "launchedAt": "2026-08-09T18:17:36.401Z",
+      "tokens": 92080910,
+      "tokenUsage": {
+        "totalTokens": 92080910,
+        "inputTokens": 91772838,
+        "cachedInputTokens": 90294528,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 308072,
+        "reasoningOutputTokens": 86527
+      },
+      "inspection": {
+        "attempts": 0,
+        "failures": 0,
+        "tokenUsage": {
+          "totalTokens": 0,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "elapsedMs": 0
+      },
+      "apiCost": {
+        "provider": "openrouter",
+        "pricingAsOf": "2026-08-01",
+        "priceSource": "https://openrouter.ai/api/v1/models",
+        "currency": "USD",
+        "amountUsd": 1.23561948,
+        "requests": 747,
+        "shortContextRequests": 747,
+        "longContextRequests": 0,
+        "longContextThresholdTokens": 272000
+      },
+      "suspendedMs": 0,
+      "suspensions": [],
+      "workElapsedMs": 10811064.0902,
+      "worktree": {
+        "files": 129,
+        "additions": 8731,
+        "deletions": 123
+      },
+      "reviewVerdicts": [],
+      "stages": [
+        {
+          "name": "backend-start",
+          "tokens": 36526952,
+          "elapsedMs": 4879000,
+          "tokenPercent": 40,
+          "timePercent": 45
+        },
+        {
+          "name": "backend-review",
+          "tokens": 11510707,
+          "elapsedMs": 967000,
+          "tokenPercent": 13,
+          "timePercent": 9
+        },
+        {
+          "name": "backend-final",
+          "tokens": 2434939,
+          "elapsedMs": 352000,
+          "tokenPercent": 3,
+          "timePercent": 3
+        },
+        {
+          "name": "frontend-start",
+          "tokens": 29777795,
+          "elapsedMs": 3175000,
+          "tokenPercent": 32,
+          "timePercent": 29
+        },
+        {
+          "name": "frontend-review",
+          "tokens": 8755740,
+          "elapsedMs": 938000,
+          "tokenPercent": 10,
+          "timePercent": 9
+        },
+        {
+          "name": "frontend-final",
+          "tokens": 669850,
+          "elapsedMs": 93000,
+          "tokenPercent": 1,
+          "timePercent": 1
+        },
+        {
+          "name": "overall-final",
+          "tokens": 2404927,
+          "elapsedMs": 323000,
+          "tokenPercent": 3,
+          "timePercent": 3
+        }
+      ]
+    },
+    {
+      "engine": "codex",
+      "subject": "reddit",
+      "arm": "plain",
+      "runId": "8e9cc1b8-0d4c-408d-8baf-905d8acd4fe4",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
+      "model": "gpt-5.6-luna",
+      "effort": "high",
+      "status": "running",
+      "stage": "frontend-review",
+      "launchedAt": "2026-08-09T18:17:36.232Z",
+      "tokens": 540753472,
+      "tokenUsage": {
+        "totalTokens": 540753472,
+        "inputTokens": 539698400,
+        "cachedInputTokens": 528909568,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 1055072,
+        "reasoningOutputTokens": 317964
+      },
+      "inspection": {
+        "attempts": 5,
+        "failures": 0,
+        "tokenUsage": {
+          "totalTokens": 17814986,
+          "inputTokens": 17749534,
+          "cachedInputTokens": 16782336,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 65452,
+          "reasoningOutputTokens": 33804
+        },
+        "elapsedMs": 1953077.3035999998
+      },
+      "apiCost": {
+        "provider": "openrouter",
+        "pricingAsOf": "2026-08-01",
+        "priceSource": "https://openrouter.ai/api/v1/models",
+        "currency": "USD",
+        "amountUsd": 6.69720772,
+        "requests": 3800,
+        "shortContextRequests": 3800,
+        "longContextRequests": 0,
+        "longContextThresholdTokens": 272000
+      },
+      "suspendedMs": 0,
+      "suspensions": [],
+      "workElapsedMs": 41022667.77809999,
+      "worktree": {
+        "files": 154,
+        "additions": 12920,
+        "deletions": 140
+      },
+      "reviewVerdicts": [
+        {
+          "scope": "backend",
+          "attempt": 0,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 1,
+          "terminalTurnId": "6e4eb352-b978-4e63-8560-885857668c6b",
+          "rationale": "Question 1: No. The review skill requires a new complete sorted manifest before every round and one file per command (workspace/.agents/skills/review/SKILL.md:50-53). Manifest-generation commands appear only at backend-review.log positions 83, 137, 6682, 6803, and 20136. After the claimed Round 3 restart at 21913, Round 4 at 34851, Round 5 at 61632, and Round 6 at 78923, the stream rereads requirements/scope but generates no new manifest; the final dry claim at 90894 and report at 91508 therefore contradict the command stream. The required named check:watch gate is also not invoked in the retained stream: positions 90897-91018 run lint, Prisma/main/SDK/test builds, and tests, while 91080-91189 only read watcher logs and 91206 queries processes. Whether an equivalent watcher was launched outside the retained stream is unverified. Question 2: No. The workspace instructions require concrete assertions for every success/refusal/boundary/effect and tests that fail when behavior changes (workspace/.agents/skills/review/backend.md:28-31), and reject assertions of only shape/non-null/status (workspace/.agents/skills/review/backend.md:104-108). Many tests are only no-throw/type-shape checks: test_api_community_create at packages/backend/test/features/api/requirements/test_api_requirements.ts:50-51, test_api_post_delete at :75-76, test_api_vote_enter at :85-86, test_api_report_approve at :95-96, and the authentication/logout/deletion checks at :32-43. They do not observe the claimed bootstrap, deletion, score/karma, report-target, session, or password effects. Later semantic tests at :116-202 cover only a subset and do not make the earlier suite properly written; the green 53-execution report at backend-review.log:90987-91018 does not cure that deficiency.",
+          "pausedAt": "2026-08-09T20:53:54.446Z",
+          "decidedAt": "2026-08-09T20:59:45.215Z",
+          "resumedAt": "2026-08-09T20:59:45.229Z",
+          "verdictRelativePath": "supervision/00-backend-0-verdict.json",
+          "verdictSha256": "e1c6347bb4a9c3ad5f875cf7824aa284569b7b0109d82abfae2e246d88870681",
+          "workspaceMaterialSha256": "44deba220a9d28a8ac1c83db29ff74d3b66ade5c613760dcf8e7014e7f1df20d"
+        },
+        {
+          "scope": "backend",
+          "attempt": 1,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 2,
+          "terminalTurnId": "677c1cec-68b7-4d15-8df5-3bd02ba3bd56",
+          "rationale": "Q1 is no. The review skill requires complete contents returned/examined and a fresh full round after any invalidating gate failure (workspace/.agents/skills/review/SKILL.md:48-55, 71-75). The purported post-calibration dry round is only recorded as a claim at backend-remind-1.log:37988; its per-file commands at backend-remind-1.log:37632-37635 return only `READ ...: N chars`, not file contents, so full examination is unverified. Its watcher check failed with exit 1 and reported cache-lock/watch-unavailable diagnostics at backend-remind-1.log:38102-38189; the stream then shows only waiting/log inspection and a later pass at backend-remind-1.log:38297-38409, with no new full reread. Q2 is no. Testing instructions require behavior-sized coverage and every stated refusal/boundary (workspace/.agents/skills/backend/testing.md:34-41, 130-145). The vote requirements explicitly apply the same cast/change/remove behavior to both posts and comments, including score and author-karma effects (workspace/docs/analysis/03-functional-requireMENTS.md:141-161; workspace/docs/analysis/04-business-rules.md:157-186). The tests prove `votes.vote` only on a post (workspace/packages/backend/test/features/api/requirements/test_api_requirements.ts:87-88); the comment vote call is only setup for `removeCommentVote` and has no cast/karma assertion (line 91-92), and the transition test is post-only (lines 129-140). Thus the published vote operation's required comment behavior is not properly tested.",
+          "pausedAt": "2026-08-09T21:51:08.252Z",
+          "decidedAt": "2026-08-09T21:55:51.720Z",
+          "resumedAt": "2026-08-09T21:55:51.731Z",
+          "verdictRelativePath": "supervision/01-backend-1-verdict.json",
+          "verdictSha256": "afb6bda79828ab8c5635c80166befb43a3356a9ec3725d52306032bb1dae26cb",
+          "workspaceMaterialSha256": "ba7175b0c58388b8bd13ce18832f62d13d91888b0513c8aecac8dbff68d6ba63"
+        },
+        {
+          "scope": "backend",
+          "attempt": 2,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 3,
+          "terminalTurnId": "eb744e85-394b-4f63-9197-2b7652f29ab8",
+          "rationale": "Question 1: fail. The last product edit is recorded at backend-remind-2.log:237058, but the only explicit complete manifest command is at :177427; the post-edit pass starts reading docs at :237419 without a new manifest and later claims the manifest was read at :262622. The final `pnpm check:watch` commands at :263219 and :263338 both failed with exit code 124 and no output; the report’s claim at :266262 that the gate passed is therefore unverified. Question 2: fail. The workspace testing rule forbids direct Prisma reads for setup/proof (.agents/skills/backend/testing.md:166-176, especially :172), yet four tests directly query `MyGlobal.prisma.recovery_proofs`, e.g. test_api_auth_recovery_complete.ts:3,18, test_api_auth_recovery_request.ts:3,18, test_api_auth_recovery_concurrent_completion.ts:3,18, and test_api_auth_recovery_proof_reuse_refused.ts:3,18.",
+          "pausedAt": "2026-08-10T03:08:06.209Z",
+          "decidedAt": "2026-08-10T03:17:12.320Z",
+          "resumedAt": "2026-08-10T03:17:12.337Z",
+          "verdictRelativePath": "supervision/02-backend-2-verdict.json",
+          "verdictSha256": "cd1aed4f363bdecd02725c262e46a9c53460885e8063122d07aa2edcce2074e7",
+          "workspaceMaterialSha256": "e7e242b2fe24e66574d78fcc34d0442fead226d5de1283d69604b22614cdc838"
+        },
+        {
+          "scope": "backend",
+          "attempt": 3,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 4,
+          "terminalTurnId": "a5dd28c0-8920-476a-9766-f5381e5092bc",
+          "rationale": "Question 1: No. The claimed dry report at backend-remind-3.log:54302 is not supported by a clean gate: the final `pnpm check:watch` at :53675 completed at :53688 with exit code 124 and empty output; retries at :53874 and :54111 also failed/time-out, with only watcher process listings afterward. A successful clean rebuild is therefore unverified. The stream also records compaction at :40980, then re-reads an earlier test range at :41034 without a new manifest, contrary to review/SKILL.md:25,50,52,57. Question 2: No. workspace/.agents/skills/backend/testing.md:168-172 forbids direct Prisma reads for setup or proof. Four current recovery tests directly import `MyGlobal` and query `MyGlobal.prisma.recovery_proofs` (test_api_auth_recovery_complete.ts:3,21; test_api_auth_recovery_concurrent_completion.ts:3,18; test_api_auth_recovery_proof_reuse_refused.ts:3,18; test_api_auth_recovery_request.ts:3,18). Thus the tests are not properly written despite business assertions.",
+          "pausedAt": "2026-08-10T04:03:11.098Z",
+          "decidedAt": "2026-08-10T04:10:21.171Z",
+          "resumedAt": "2026-08-10T04:10:21.185Z",
+          "verdictRelativePath": "supervision/03-backend-3-verdict.json",
+          "verdictSha256": "ef4f0ff2ee5b5008522f968c80a2478b30b70f297f16464b72851a1627226ae2",
+          "workspaceMaterialSha256": "cc10eccb902ea69e7ac97ad4d0403dc82ba58a19a3c410eb88b0dd5a3cb74162"
+        },
+        {
+          "scope": "backend",
+          "attempt": 4,
+          "decision": "fail",
+          "action": "final",
+          "goalIndex": 5,
+          "terminalTurnId": "90b96dce-eb6f-4113-acba-9d3ba1324f86",
+          "rationale": "The review loop did not reach a provable dry round. The review instructions require a complete returned manifest and full returned file contents (.agents/skills/review/SKILL.md:50-55). The purported final round’s manifest command returned only MANIFEST_COUNT plus the first and last paths (backend-remind-4.log:57519-57526), and its 137 file reads used `Get-Content ... | Out-Null`, with null aggregated output (for example backend-remind-4.log:57608-57609; the sequence continues through 57941). A watcher command was issued afterward (backend-remind-4.log:58013-58020), but that cannot repair the invalid read round; the final claim of three full dry rounds (backend-remind-4.log:58301) is contradicted by the retained commands. The tests are also not properly written: REQ-AUTH-REG-003 requires login to preserve the user’s existing subscriptions and community roles (workspace/docs/analysis/01-actors-and-auth.md:23-27), while test_api_auth_login.ts only registers a fresh user, logs in, and asserts an empty subscription list (workspace/packages/backend/test/features/api/requirements/test_api_auth_login.ts:17-25), so it would pass even if login discarded existing subscriptions/roles, contrary to the testing requirement to prove each required behavior (workspace/.agents/skills/backend/testing.md:132-140).",
+          "pausedAt": "2026-08-10T04:42:42.160Z",
+          "decidedAt": "2026-08-10T04:48:49.102Z",
+          "resumedAt": "2026-08-10T04:48:49.138Z",
+          "verdictRelativePath": "supervision/04-backend-4-verdict.json",
+          "verdictSha256": "584122b58c59afd7f6532360a4563b1a3243b859640e94166215da98cb92bac1",
+          "workspaceMaterialSha256": "800c9817427f8447c6a21ce2720e8aeedb442956a1870781305db1be5894f54b"
+        }
+      ],
+      "stages": [
+        {
+          "name": "backend-start",
+          "tokens": 37147695,
+          "elapsedMs": 4071000,
+          "tokenPercent": 7,
+          "timePercent": 10
+        },
+        {
+          "name": "backend-review",
+          "tokens": 82976296,
+          "elapsedMs": 5591546.8352,
+          "tokenPercent": 15,
+          "timePercent": 14
+        },
+        {
+          "name": "backend-remind-1",
+          "tokens": 49109000,
+          "elapsedMs": 3303948.1599,
+          "tokenPercent": 9,
+          "timePercent": 8
+        },
+        {
+          "name": "backend-remind-2",
+          "tokens": 208492738,
+          "elapsedMs": 15767011.343,
+          "tokenPercent": 39,
+          "timePercent": 38
+        },
+        {
+          "name": "backend-remind-3",
+          "tokens": 47983418,
+          "elapsedMs": 3154986.9778,
+          "tokenPercent": 9,
+          "timePercent": 8
+        },
+        {
+          "name": "backend-remind-4",
+          "tokens": 40624253,
+          "elapsedMs": 2280583.9877,
+          "tokenPercent": 8,
+          "timePercent": 6
+        },
+        {
+          "name": "backend-final",
+          "tokens": 10537311,
+          "elapsedMs": 786000,
+          "tokenPercent": 2,
+          "timePercent": 2
+        },
+        {
+          "name": "frontend-start",
+          "tokens": 26280767,
+          "elapsedMs": 3177000,
+          "tokenPercent": 5,
+          "timePercent": 8
+        },
+        {
+          "name": "frontend-review",
+          "tokens": 37601994,
+          "elapsedMs": 2890590.474499993,
+          "tokenPercent": 7,
+          "timePercent": 7
+        }
+      ]
+    },
+    {
+      "engine": "codex",
+      "subject": "reddit",
+      "arm": "evidence",
+      "runId": "bd0299c4-1b87-461b-b0e5-0be962d648bf",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
+      "model": "gpt-5.6-luna",
+      "effort": "high",
+      "status": "completed",
+      "stage": "overall-final",
+      "launchedAt": "2026-08-09T18:17:34.075Z",
+      "tokens": 245024631,
+      "tokenUsage": {
+        "totalTokens": 245024631,
+        "inputTokens": 244313278,
+        "cachedInputTokens": 239531776,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 711353,
+        "reasoningOutputTokens": 250023
+      },
+      "inspection": {
+        "attempts": 0,
+        "failures": 0,
+        "tokenUsage": {
+          "totalTokens": 0,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "elapsedMs": 0
+      },
+      "apiCost": {
+        "provider": "openrouter",
+        "pricingAsOf": "2026-08-01",
+        "priceSource": "https://openrouter.ai/api/v1/models",
+        "currency": "USD",
+        "amountUsd": 3.30027976,
+        "requests": 1729,
+        "shortContextRequests": 1729,
+        "longContextRequests": 0,
+        "longContextThresholdTokens": 272000
+      },
+      "suspendedMs": 0,
+      "suspensions": [],
+      "workElapsedMs": 24156301.949399997,
+      "worktree": {
+        "files": 137,
+        "additions": 14490,
+        "deletions": 162
+      },
+      "reviewVerdicts": [],
+      "stages": [
+        {
+          "name": "backend-start",
+          "tokens": 172779712,
+          "elapsedMs": 15908000,
+          "tokenPercent": 71,
+          "timePercent": 66
+        },
+        {
+          "name": "backend-review",
+          "tokens": 16278832,
+          "elapsedMs": 1904000,
+          "tokenPercent": 7,
+          "timePercent": 8
+        },
+        {
+          "name": "backend-final",
+          "tokens": 3036565,
+          "elapsedMs": 222000,
+          "tokenPercent": 1,
+          "timePercent": 1
+        },
+        {
+          "name": "frontend-start",
+          "tokens": 25307573,
+          "elapsedMs": 2746000,
+          "tokenPercent": 10,
+          "timePercent": 11
+        },
+        {
+          "name": "frontend-review",
+          "tokens": 16424549,
+          "elapsedMs": 1990000,
+          "tokenPercent": 7,
+          "timePercent": 8
+        },
+        {
+          "name": "frontend-final",
+          "tokens": 3722475,
+          "elapsedMs": 455000,
+          "tokenPercent": 2,
+          "timePercent": 2
+        },
+        {
+          "name": "overall-final",
+          "tokens": 7474925,
+          "elapsedMs": 571000,
+          "tokenPercent": 3,
+          "timePercent": 2
+        }
+      ]
+    },
+    {
+      "engine": "codex",
+      "subject": "shopping",
+      "arm": "plain",
+      "runId": "d8a3e4a6-f559-4148-8199-749581292fd0",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
+      "model": "gpt-5.6-luna",
+      "effort": "high",
+      "status": "running",
+      "stage": "frontend-review",
+      "launchedAt": "2026-08-09T18:17:35.359Z",
+      "tokens": 568382345,
+      "tokenUsage": {
+        "totalTokens": 568382345,
+        "inputTokens": 567260664,
+        "cachedInputTokens": 555301888,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 1121681,
+        "reasoningOutputTokens": 299846
+      },
+      "inspection": {
+        "attempts": 5,
+        "failures": 0,
+        "tokenUsage": {
+          "totalTokens": 14470365,
+          "inputTokens": 14401235,
+          "cachedInputTokens": 13688320,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 69130,
+          "reasoningOutputTokens": 37122
+        },
+        "elapsedMs": 2049120.6853
+      },
+      "apiCost": {
+        "provider": "openrouter",
+        "pricingAsOf": "2026-08-01",
+        "priceSource": "https://openrouter.ai/api/v1/models",
+        "currency": "USD",
+        "amountUsd": 7.17225238,
+        "requests": 4084,
+        "shortContextRequests": 4084,
+        "longContextRequests": 0,
+        "longContextThresholdTokens": 272000
+      },
+      "suspendedMs": 0,
+      "suspensions": [],
+      "workElapsedMs": 44260285.074200004,
+      "worktree": {
+        "files": 155,
+        "additions": 21126,
+        "deletions": 127
+      },
+      "reviewVerdicts": [
+        {
+          "scope": "backend",
+          "attempt": 0,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 1,
+          "terminalTurnId": "3a29fa09-255a-4dc8-bf58-6731be6dcb47",
+          "rationale": "Question 1 is no. The review skill requires each round's complete file contents to be returned (workspace/.agents/skills/review/SKILL.md:48-55). The claimed final dry round (backend-review.log:39768, summarized at :40246) used `Get-Content ... -Raw | Out-Null` for the scoped configuration, source, and test files (backend-review.log:39561-39679), so those contents were not returned or examined in that round. The required gate was also not clean: `pnpm check:watch rebuild` failed with TS5042 (backend-review.log:31084), and the later `pnpm check:watch` ended by timeout 124 (backend-review.log:35572); the final report acknowledges this at :40246. Question 2 is no. The workspace testing contract requires one test per operation with working-path/refusal coverage and business assertions (workspace/.agents/skills/backend/testing.md:26-41, :132, :151-160). `packages/backend/test/features/api/shopping/test_api_shopping_operation_boundaries.ts:15-124` puts roughly a hundred accessors into one test and checks only a generic thrown-error refusal via lines 5-11; it supplies no operation-specific working paths or business effects. It also uses `any` and an `as (...args: any[])` cast at lines 5 and 124, expressly forbidden by testing.md:166-176. Unverified: unrelated implementation defects were not assessed because they are outside the two questions.",
+          "pausedAt": "2026-08-09T20:57:59.421Z",
+          "decidedAt": "2026-08-09T21:03:17.989Z",
+          "resumedAt": "2026-08-09T21:03:18.011Z",
+          "verdictRelativePath": "supervision/00-backend-0-verdict.json",
+          "verdictSha256": "4fdf95af45d6bff2ef45016884942e2e9706d774a960c80917f1a70484ee5946",
+          "workspaceMaterialSha256": "5582f5856f5d2d300b152e5cee5d4d00c25d808fffca379a65d72da5a9ece0ec"
+        },
+        {
+          "scope": "backend",
+          "attempt": 1,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 2,
+          "terminalTurnId": "ef31f512-ea2c-45f9-92a5-e592db351e9a",
+          "rationale": "Question 1: No. The stream shows nonconforming rounds: Round 1 used partial `Select-Object -Skip/-First` reads (backend-remind-1.log:786-1477, 2933-4912), and the agent explicitly acknowledged splitting large files (backend-remind-1.log:4983, 28124, 40089). Later rounds also used range reads (backend-remind-1.log:12043-13493). The final raw-read round (backend-remind-1.log:56977-57391) and dry claim (59229) cannot cure earlier rounds that were not one-file-per-command full reads. Question 2: No. Workspace testing rules require one primary operation and at least one test per operation (workspace/.agents/skills/backend/testing.md:34-39), a business assertion in every test (line 158), and forbid direct Prisma reads for proof (line 172). The stream reports 107 accessors but only 12 scenarios (backend-remind-1.log:59229). `test_api_shopping_customer_join` and login only perform `typia.assert` shape checks without a business assertion (workspace/packages/backend/test/features/api/shopping/test_api_shopping.ts:24-51). The administration and business-journey functions bundle many operations into single tests (test_api_shopping_administration_edges.ts:24-152; test_api_shopping_business_journey.ts:26-646), and both directly query Prisma (administration_edges.ts:4,85; business_journey.ts:4,663).",
+          "pausedAt": "2026-08-09T23:34:33.221Z",
+          "decidedAt": "2026-08-09T23:40:12.752Z",
+          "resumedAt": "2026-08-09T23:40:12.764Z",
+          "verdictRelativePath": "supervision/01-backend-1-verdict.json",
+          "verdictSha256": "6f978baf50478474ff8049f6d056d2aa8b4315eb902b67ae75f878b1a8e32873",
+          "workspaceMaterialSha256": "887a57ce31727f6d74f2362371ebed662fca85307a0fcecc918d6b262c8f4364"
+        },
+        {
+          "scope": "backend",
+          "attempt": 2,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 3,
+          "terminalTurnId": "b37bbd04-17b9-4dee-8aad-c256946889b6",
+          "rationale": "Question 1: No. Round 14 did emit a manifest (backend-remind-2.log:296765) and finish its scope read at pnpm-workspace.yaml (stream line 321666), with no findings reported at line 322247. However, the required packages/backend pnpm check:watch gate started at line 322856, emitted a watch-unavailable warning at 322861, and completed with status failed and exitCode 124 at 322905. The review skill requires a failed gate to invalidate the round and trigger another full round (workspace/.agents/skills/review/SKILL.md:71-73); no subsequent manifest/read round occurred before the final report at line 324094. Question 2: No. Testing instructions require one primary operation (testing.md:34-41), numbered behavior JSDoc/body steps (45), business assertions beyond typia shape checks (151-160), and prohibit direct Prisma setup/proof (172-175). Violations are present in test_api_shopping.ts:24-33 and 35-51 (shape-only registration/login), 121-137 and 153-173 (password changes with no business assertion), and 67-102 (address mutation without observable list/update proof); business_journey.ts:26-30 spans many operations and directly queries Prisma at 648-659; administration_edges.ts:24-25 spans many operations and directly queries Prisma at 85-88 and 161-164. Both questions therefore fail.",
+          "pausedAt": "2026-08-10T03:26:58.258Z",
+          "decidedAt": "2026-08-10T03:34:25.973Z",
+          "resumedAt": "2026-08-10T03:34:25.982Z",
+          "verdictRelativePath": "supervision/02-backend-2-verdict.json",
+          "verdictSha256": "984f2ed267ed993fb3e8632081fdcee7195fac6dccde1440ceb7c861e568d4a7",
+          "workspaceMaterialSha256": "8d6778573d72012f7ddabe770c9eee16c4e4b409d0a170d6840e2eda12df6b73"
+        },
+        {
+          "scope": "backend",
+          "attempt": 3,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 4,
+          "terminalTurnId": "01747d1a-4abe-4fa8-ae7d-ebe457d8de47",
+          "rationale": "Question 1: Fail. The review skill requires full contents to be returned, a new manifest per round, and unchanged clean gates (workspace/.agents/skills/review/SKILL.md:48-55,69-75). The purported final reads at backend-remind-3.log:35387-35620 all pipe Get-Content -Raw to Out-Null and retain only READ markers, so no file contents are evidenced; the agent also called it the “same” manifest at :35383. The closing pnpm check:watch at :35648 has exit 124/status failed and empty output, followed by forced watcher termination at :35659. The completion claim at :36281 is therefore unverified and contradicted by the retained record. Question 2: Fail. Testing instructions require one primary operation per test and a business assertion (workspace/.agents/skills/backend/testing.md:26-41,151-160). test_api_shopping_business_journey.ts:30-170 and test_api_shopping_administration_edges.ts:25-166 each place many distinct operations in one exported test. test_api_shopping.ts:25-33 performs only typia.assert checks, with no business assertion. The stream’s 107 textual accessor-reference count at :35302 does not establish per-operation tests.",
+          "pausedAt": "2026-08-10T03:58:40.057Z",
+          "decidedAt": "2026-08-10T04:05:29.462Z",
+          "resumedAt": "2026-08-10T04:05:29.478Z",
+          "verdictRelativePath": "supervision/03-backend-3-verdict.json",
+          "verdictSha256": "7a0da4c493a9bf5668243238e11836f647bedd8a0b175359f8fe747eeba689ec",
+          "workspaceMaterialSha256": "fd3b88fff9cd5e1abc278eca918e4f4ba87871ab95d91970f62d77b65c7137c5"
+        },
+        {
+          "scope": "backend",
+          "attempt": 4,
+          "decision": "fail",
+          "action": "final",
+          "goalIndex": 5,
+          "terminalTurnId": "4bf8bc26-f5cb-4ebf-9f4a-7d3121671890",
+          "rationale": "Question 1 is not proven dry: the final-round requirement reads are at backend-remind-4.log:35366-35469, but its manifest is emitted only at :35592, contrary to workspace/.agents/skills/review/SKILL.md:48-51; the final `pnpm check:watch` item is explicitly `status=failed`, `exitCode=124` at :37898, so a clean successful gate is unverified. The initial required-instruction reads at :121-179 all pipe contents to `Out-Null`, so full returned reads are not evidenced. Question 2 fails: testing.md:26,34,39,158,172 requires one proving test per operation, one primary operation, business assertions, and no direct Prisma proof. The stream reports 107 accessors but only 12 executions at :38492; the workspace has only 12 exported tests (health:18; shopping:25,36,54,68,105,122,140,154; administration_edges:25; business_journey:30,721). `test_api_shopping.ts:68-101` bundles four operations, while :24-51 uses only `typia.assert`; direct `MyGlobal.prisma` proof appears at administration_edges:85,161-163 and business_journey:660-669,734. Therefore the prescribed loop/gate evidence and the test suite do not satisfy the stated standards.",
+          "pausedAt": "2026-08-10T05:08:20.567Z",
+          "decidedAt": "2026-08-10T05:17:49.844Z",
+          "resumedAt": "2026-08-10T05:17:49.877Z",
+          "verdictRelativePath": "supervision/04-backend-4-verdict.json",
+          "verdictSha256": "02c91806a50c46f5c527419fe4cbfffd6e2d690c008bfccda942c127ef40b828",
+          "workspaceMaterialSha256": "c47752576688c1ee545dd4d95cce8ed01dca518b4873d804172f10790efb53be"
+        }
+      ],
+      "stages": [
+        {
+          "name": "backend-start",
+          "tokens": 42694073,
+          "elapsedMs": 4585000,
+          "tokenPercent": 8,
+          "timePercent": 10
+        },
+        {
+          "name": "backend-review",
+          "tokens": 67535297,
+          "elapsedMs": 5284030.5624,
+          "tokenPercent": 12,
+          "timePercent": 12
+        },
+        {
+          "name": "backend-remind-1",
+          "tokens": 115178752,
+          "elapsedMs": 9378886.9744,
+          "tokenPercent": 20,
+          "timePercent": 21
+        },
+        {
+          "name": "backend-remind-2",
+          "tokens": 191241167,
+          "elapsedMs": 13844209.6011,
+          "tokenPercent": 34,
+          "timePercent": 31
+        },
+        {
+          "name": "backend-remind-3",
+          "tokens": 20839833,
+          "elapsedMs": 1732174.3956,
           "tokenPercent": 4,
           "timePercent": 4
         },
         {
-          "name": "frontend-final",
-          "tokens": 12675177,
-          "elapsedMs": 1128000,
-          "tokenPercent": 2,
-          "timePercent": 1
+          "name": "backend-remind-4",
+          "tokens": 75418648,
+          "elapsedMs": 4279819.1518,
+          "tokenPercent": 13,
+          "timePercent": 10
         },
         {
-          "name": "overall-review",
-          "tokens": 40754935,
-          "elapsedMs": 2429000,
+          "name": "backend-final",
+          "tokens": 1471628,
+          "elapsedMs": 217000,
+          "tokenPercent": 0,
+          "timePercent": 0
+        },
+        {
+          "name": "frontend-start",
+          "tokens": 28745673,
+          "elapsedMs": 2752000,
           "tokenPercent": 5,
-          "timePercent": 3
+          "timePercent": 6
         },
         {
-          "name": "overall-final",
-          "tokens": 8880846,
-          "elapsedMs": 694000,
-          "tokenPercent": 1,
-          "timePercent": 1
+          "name": "frontend-review",
+          "tokens": 25257274,
+          "elapsedMs": 2187164.3889000043,
+          "tokenPercent": 4,
+          "timePercent": 5
         }
       ]
     },
@@ -757,21 +918,21 @@
       "engine": "codex",
       "subject": "shopping",
       "arm": "evidence",
-      "runId": "9f03b6ac-ec6a-4792-b331-170925f71769",
-      "benchmarkRevision": "0f465f52c69b4b7e6b25fab1c1676de5ea6db15f",
+      "runId": "33baf096-f2ea-4d07-91f7-a4cb4616ad2b",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
       "model": "gpt-5.6-luna",
       "effort": "high",
       "status": "completed",
       "stage": "overall-final",
-      "launchedAt": "2026-08-05T11:43:04.638Z",
-      "tokens": 271608864,
+      "launchedAt": "2026-08-09T18:17:36.404Z",
+      "tokens": 270580805,
       "tokenUsage": {
-        "totalTokens": 271608864,
-        "inputTokens": 271102963,
-        "cachedInputTokens": 267391232,
+        "totalTokens": 270580805,
+        "inputTokens": 269863683,
+        "cachedInputTokens": 265916928,
         "cacheWriteInputTokens": 0,
-        "outputTokens": 505901,
-        "reasoningOutputTokens": 142867
+        "outputTokens": 717122,
+        "reasoningOutputTokens": 216460
       },
       "inspection": {
         "attempts": 0,
@@ -791,77 +952,70 @@
         "pricingAsOf": "2026-08-01",
         "priceSource": "https://openrouter.ai/api/v1/models",
         "currency": "USD",
-        "amountUsd": 3.34862602,
-        "requests": 1949,
-        "shortContextRequests": 1949,
+        "amountUsd": 3.48411798,
+        "requests": 1914,
+        "shortContextRequests": 1914,
         "longContextRequests": 0,
         "longContextThresholdTokens": 272000
       },
       "suspendedMs": 0,
       "suspensions": [],
-      "workElapsedMs": 30704076.0124,
+      "workElapsedMs": 26781620.4043,
       "worktree": {
-        "files": 304,
-        "additions": 22398,
-        "deletions": 64
+        "files": 323,
+        "additions": 29494,
+        "deletions": 148
       },
       "reviewVerdicts": [],
       "stages": [
         {
           "name": "backend-start",
-          "tokens": 77076340,
-          "elapsedMs": 6936000,
-          "tokenPercent": 28,
-          "timePercent": 23
+          "tokens": 105617004,
+          "elapsedMs": 10082000,
+          "tokenPercent": 39,
+          "timePercent": 38
         },
         {
           "name": "backend-review",
-          "tokens": 142169643,
-          "elapsedMs": 11055000,
-          "tokenPercent": 52,
-          "timePercent": 36
+          "tokens": 78806134,
+          "elapsedMs": 8685000,
+          "tokenPercent": 29,
+          "timePercent": 32
         },
         {
           "name": "backend-final",
-          "tokens": 1450772,
-          "elapsedMs": 40000,
-          "tokenPercent": 1,
-          "timePercent": 0
-        },
-        {
-          "name": "frontend-start",
-          "tokens": 19691264,
-          "elapsedMs": 1736000,
-          "tokenPercent": 7,
-          "timePercent": 6
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 12937317,
-          "elapsedMs": 1051000,
-          "tokenPercent": 5,
-          "timePercent": 3
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 1350449,
-          "elapsedMs": 59000,
+          "tokens": 782876,
+          "elapsedMs": 82000,
           "tokenPercent": 0,
           "timePercent": 0
         },
         {
-          "name": "overall-review",
-          "tokens": 15019791,
-          "elapsedMs": 1382000,
-          "tokenPercent": 6,
-          "timePercent": 5
+          "name": "frontend-start",
+          "tokens": 52825873,
+          "elapsedMs": 5235000,
+          "tokenPercent": 20,
+          "timePercent": 20
+        },
+        {
+          "name": "frontend-review",
+          "tokens": 19862471,
+          "elapsedMs": 1662000,
+          "tokenPercent": 7,
+          "timePercent": 6
+        },
+        {
+          "name": "frontend-final",
+          "tokens": 6385192,
+          "elapsedMs": 449000,
+          "tokenPercent": 2,
+          "timePercent": 2
         },
         {
           "name": "overall-final",
-          "tokens": 1913288,
-          "elapsedMs": 125000,
-          "tokenPercent": 1,
-          "timePercent": 0
+          "tokens": 6301255,
+          "elapsedMs": 370000,
+          "tokenPercent": 2,
+          "timePercent": 1
         }
       ]
     },
@@ -869,21 +1023,21 @@
       "engine": "codex",
       "subject": "erp",
       "arm": "plain",
-      "runId": "afd81c7f-af9a-4201-bf14-ce8318059eff",
-      "benchmarkRevision": "cdbda42111ecc8f459f2772065caf067b6db3f91",
+      "runId": "0b9deae2-9926-49f4-9b6c-d454844a4470",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
       "model": "gpt-5.6-luna",
       "effort": "high",
-      "status": "completed",
-      "stage": "overall-final",
-      "launchedAt": "2026-08-04T22:56:46.636Z",
-      "tokens": 714065356,
+      "status": "running",
+      "stage": "backend-start",
+      "launchedAt": "2026-08-09T18:17:34.421Z",
+      "tokens": 416741026,
       "tokenUsage": {
-        "totalTokens": 714065356,
-        "inputTokens": 712946660,
-        "cachedInputTokens": 702705408,
+        "totalTokens": 416741026,
+        "inputTokens": 416033911,
+        "cachedInputTokens": 411630080,
         "cacheWriteInputTokens": 0,
-        "outputTokens": 1118696,
-        "reasoningOutputTokens": 289463
+        "outputTokens": 707115,
+        "reasoningOutputTokens": 99597
       },
       "inspection": {
         "attempts": 0,
@@ -903,147 +1057,28 @@
         "pricingAsOf": "2026-08-01",
         "priceSource": "https://openrouter.ai/api/v1/models",
         "currency": "USD",
-        "amountUsd": 8.72874333,
-        "requests": 6350,
-        "shortContextRequests": 6345,
-        "longContextRequests": 5,
+        "amountUsd": 4.9809529,
+        "requests": 2850,
+        "shortContextRequests": 2850,
+        "longContextRequests": 0,
         "longContextThresholdTokens": 272000
       },
       "suspendedMs": 0,
       "suspensions": [],
-      "workElapsedMs": 95428958.3676,
+      "workElapsedMs": 44477720.3922,
       "worktree": {
-        "files": 540,
-        "additions": 85855,
-        "deletions": 177
+        "files": 353,
+        "additions": 66021,
+        "deletions": 2
       },
       "reviewVerdicts": [],
       "stages": [
         {
           "name": "backend-start",
-          "tokens": 241812680,
-          "elapsedMs": 28606000,
-          "tokenPercent": 34,
-          "timePercent": 30
-        },
-        {
-          "name": "backend-review",
-          "tokens": 38982408,
-          "elapsedMs": 4445000,
-          "tokenPercent": 5,
-          "timePercent": 5
-        },
-        {
-          "name": "backend-final",
-          "tokens": 21974059,
-          "elapsedMs": 4964000,
-          "tokenPercent": 3,
-          "timePercent": 5
-        },
-        {
-          "name": "frontend-start",
-          "tokens": 43048839,
-          "elapsedMs": 4311000,
-          "tokenPercent": 6,
-          "timePercent": 5
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 25654881,
-          "elapsedMs": 2100000,
-          "tokenPercent": 4,
-          "timePercent": 2
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 20757555,
-          "elapsedMs": 2252000,
-          "tokenPercent": 3,
-          "timePercent": 2
-        },
-        {
-          "name": "overall-review",
-          "tokens": 27835579,
-          "elapsedMs": 8538000,
-          "tokenPercent": 4,
-          "timePercent": 9
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 7543797,
-          "elapsedMs": 979000,
-          "tokenPercent": 1,
-          "timePercent": 1
-        },
-        {
-          "name": "overall-review",
-          "tokens": 6997841,
-          "elapsedMs": 1578000,
-          "tokenPercent": 1,
-          "timePercent": 2
-        },
-        {
-          "name": "overall-remind",
-          "tokens": 38261501,
-          "elapsedMs": 2757000,
-          "tokenPercent": 5,
-          "timePercent": 3
-        },
-        {
-          "name": "overall-final",
-          "tokens": 36871881,
-          "elapsedMs": 3567000,
-          "tokenPercent": 5,
-          "timePercent": 4
-        },
-        {
-          "name": "backend-review",
-          "tokens": 10603378,
-          "elapsedMs": 642000,
-          "tokenPercent": 1,
-          "timePercent": 1
-        },
-        {
-          "name": "backend-final",
-          "tokens": 9596377,
-          "elapsedMs": 824000,
-          "tokenPercent": 1,
-          "timePercent": 1
-        },
-        {
-          "name": "frontend-start",
-          "tokens": 27563562,
-          "elapsedMs": 2319000,
-          "tokenPercent": 4,
-          "timePercent": 2
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 67337376,
-          "elapsedMs": 6328000,
-          "tokenPercent": 9,
-          "timePercent": 7
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 7596446,
-          "elapsedMs": 705000,
-          "tokenPercent": 1,
-          "timePercent": 1
-        },
-        {
-          "name": "overall-review",
-          "tokens": 67996413,
-          "elapsedMs": 5668000,
-          "tokenPercent": 10,
-          "timePercent": 6
-        },
-        {
-          "name": "overall-final",
-          "tokens": 13630783,
-          "elapsedMs": 1589000,
-          "tokenPercent": 2,
-          "timePercent": 2
+          "tokens": 416741026,
+          "elapsedMs": 44477720.3922,
+          "tokenPercent": 100,
+          "timePercent": 100
         }
       ]
     },
@@ -1051,21 +1086,21 @@
       "engine": "codex",
       "subject": "erp",
       "arm": "evidence",
-      "runId": "db8f5371-abfe-4ee0-ae11-bab409742e61",
-      "benchmarkRevision": "cdbda42111ecc8f459f2772065caf067b6db3f91",
+      "runId": "39df34aa-3ad0-45f3-b5fb-0fb7f0b3abec",
+      "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
       "model": "gpt-5.6-luna",
       "effort": "high",
-      "status": "completed",
-      "stage": "overall-final",
-      "launchedAt": "2026-08-04T22:56:46.982Z",
-      "tokens": 777597677,
+      "status": "running",
+      "stage": "frontend-start",
+      "launchedAt": "2026-08-09T18:17:36.411Z",
+      "tokens": 339053980,
       "tokenUsage": {
-        "totalTokens": 777597677,
-        "inputTokens": 776407136,
-        "cachedInputTokens": 765122816,
+        "totalTokens": 339053980,
+        "inputTokens": 338492388,
+        "cachedInputTokens": 334473728,
         "cacheWriteInputTokens": 0,
-        "outputTokens": 1190541,
-        "reasoningOutputTokens": 275214
+        "outputTokens": 561592,
+        "reasoningOutputTokens": 194067
       },
       "inspection": {
         "attempts": 0,
@@ -1085,77 +1120,49 @@
         "pricingAsOf": "2026-08-01",
         "priceSource": "https://openrouter.ai/api/v1/models",
         "currency": "USD",
-        "amountUsd": 9.49726732,
-        "requests": 5600,
-        "shortContextRequests": 5598,
-        "longContextRequests": 2,
+        "amountUsd": 4.08355848,
+        "requests": 2251,
+        "shortContextRequests": 2251,
+        "longContextRequests": 0,
         "longContextThresholdTokens": 272000
       },
       "suspendedMs": 0,
       "suspensions": [],
-      "workElapsedMs": 94511255.90850002,
+      "workElapsedMs": 42851314.02590001,
       "worktree": {
-        "files": 1469,
-        "additions": 104541,
-        "deletions": 104
+        "files": 2731,
+        "additions": 156319,
+        "deletions": 130
       },
       "reviewVerdicts": [],
       "stages": [
         {
           "name": "backend-start",
-          "tokens": 645364359,
-          "elapsedMs": 83545000,
-          "tokenPercent": 83,
-          "timePercent": 88
+          "tokens": 286432546,
+          "elapsedMs": 34773000,
+          "tokenPercent": 84,
+          "timePercent": 81
         },
         {
           "name": "backend-review",
-          "tokens": 38058969,
-          "elapsedMs": 3272000,
-          "tokenPercent": 5,
-          "timePercent": 3
+          "tokens": 33173335,
+          "elapsedMs": 5670000,
+          "tokenPercent": 10,
+          "timePercent": 13
         },
         {
           "name": "backend-final",
-          "tokens": 1301536,
-          "elapsedMs": 262000,
-          "tokenPercent": 0,
+          "tokens": 2585270,
+          "elapsedMs": 170000,
+          "tokenPercent": 1,
           "timePercent": 0
         },
         {
           "name": "frontend-start",
-          "tokens": 29445251,
-          "elapsedMs": 2334000,
-          "tokenPercent": 4,
-          "timePercent": 2
-        },
-        {
-          "name": "frontend-review",
-          "tokens": 8217738,
-          "elapsedMs": 911000,
-          "tokenPercent": 1,
-          "timePercent": 1
-        },
-        {
-          "name": "frontend-final",
-          "tokens": 2089303,
-          "elapsedMs": 110000,
-          "tokenPercent": 0,
-          "timePercent": 0
-        },
-        {
-          "name": "overall-review",
-          "tokens": 47811404,
-          "elapsedMs": 3667000,
-          "tokenPercent": 6,
-          "timePercent": 4
-        },
-        {
-          "name": "overall-final",
-          "tokens": 5309117,
-          "elapsedMs": 333000,
-          "tokenPercent": 1,
-          "timePercent": 0
+          "tokens": 16862829,
+          "elapsedMs": 2238314.0259000063,
+          "tokenPercent": 5,
+          "timePercent": 5
         }
       ]
     }

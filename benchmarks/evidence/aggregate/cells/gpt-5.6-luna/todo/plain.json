@@ -2,53 +2,53 @@
   "engine": "codex",
   "subject": "todo",
   "arm": "plain",
-  "runId": "2a44f046-1acb-4607-b826-30a3e7fa784b",
-  "benchmarkRevision": "cdbda42111ecc8f459f2772065caf067b6db3f91",
+  "runId": "48d1c3b9-e64f-4096-a169-7d5794b262e9",
+  "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
   "model": "gpt-5.6-luna",
   "effort": "high",
-  "status": "completed",
-  "stage": "overall-final",
-  "launchedAt": "2026-08-04T22:56:35.678Z",
-  "tokens": 550208042,
+  "status": "running",
+  "stage": "overall-review",
+  "launchedAt": "2026-08-09T18:17:34.899Z",
+  "tokens": 582889101,
   "tokenUsage": {
-    "totalTokens": 550208042,
-    "inputTokens": 549450600,
-    "cachedInputTokens": 540780032,
+    "totalTokens": 582889101,
+    "inputTokens": 581820103,
+    "cachedInputTokens": 571859200,
     "cacheWriteInputTokens": 0,
-    "outputTokens": 757442,
-    "reasoningOutputTokens": 219624
+    "outputTokens": 1068998,
+    "reasoningOutputTokens": 334195
   },
   "inspection": {
-    "attempts": 2,
+    "attempts": 10,
     "failures": 0,
     "tokenUsage": {
-      "totalTokens": 5076126,
-      "inputTokens": 5052440,
-      "cachedInputTokens": 4742400,
+      "totalTokens": 25425089,
+      "inputTokens": 25283428,
+      "cachedInputTokens": 23792384,
       "cacheWriteInputTokens": 0,
-      "outputTokens": 23686,
-      "reasoningOutputTokens": 13551
+      "outputTokens": 141661,
+      "reasoningOutputTokens": 83642
     },
-    "elapsedMs": 677418.1623
+    "elapsedMs": 3629244.9220999996
   },
   "apiCost": {
     "provider": "openrouter",
     "pricingAsOf": "2026-08-01",
     "priceSource": "https://openrouter.ai/api/v1/models",
     "currency": "USD",
-    "amountUsd": 7.03830834,
-    "requests": 6154,
-    "shortContextRequests": 6154,
+    "amountUsd": 6.88405626,
+    "requests": 4294,
+    "shortContextRequests": 4294,
     "longContextRequests": 0,
     "longContextThresholdTokens": 272000
   },
   "suspendedMs": 0,
   "suspensions": [],
-  "workElapsedMs": 41872418.1623,
+  "workElapsedMs": 42755397.0576,
   "worktree": {
-    "files": 58,
-    "additions": 6550,
-    "deletions": 134
+    "files": 90,
+    "additions": 8360,
+    "deletions": 138
   },
   "reviewVerdicts": [
     {
@@ -57,14 +57,14 @@
       "decision": "fail",
       "action": "retry",
       "goalIndex": 1,
-      "terminalTurnId": "beb05a5f-6e8a-4904-acfb-b9159cf2d608",
-      "rationale": "Both questions fail. The review skill requires a complete manifest and one full-file read per command in manifest order (workspace/.agents/skills/review/SKILL.md:48-55). The claimed final dry round emitted a 60-file manifest at backend-review.log positions 28135-28196, but its subsequent commands only reread requirements and a few test/config files (positions 28205, 28334, 28520, 28778, 29074-29125); position 29135 is an rg search, which counts as zero. There are no final-round reads of the manifest's API, schema, controllers, providers, or most tests, despite the dry claim at position 29281 and final report at position 30320. The tests also violate the workspace testing rule that every test needs a business assertion and typia.assert alone proves only shape (workspace/.agents/skills/backend/testing.md:149-160): test_api_auth_login (workspace/packages/backend/test/features/api/requirements/test_api_requirements.ts:48-57), test_api_auth_refresh (:65-71), and test_api_auth_recover (:124-133) contain only typia.assert calls with no business assertion. Unverified: none.",
-      "pausedAt": "2026-08-05T01:00:09.817Z",
-      "decidedAt": "2026-08-05T01:05:53.845Z",
-      "resumedAt": "2026-08-05T01:05:53.854Z",
+      "terminalTurnId": "88a8b921-2179-4225-a0de-4d32a127d2b8",
+      "rationale": "Q1 fails: after calibration the stream says the final fresh round began at backend-review.log:14508, but docs/analysis/02-domain-model.md was read only with Select-Object -First 35 and -Skip 35 -First 35 at backend-review.log:14648 and :14708. The workspace file continues through lines 71 and 125, so the final round was not a full read; the stream nevertheless claims a completed dry round at :20890. Q2 fails: testing instructions require numbered-step JSDoc (workspace/.agents/skills/backend/testing.md:45), but test_api_todo_active.ts:7 has none; they forbid direct Prisma setup/proof (testing.md:172), violated by TodoSetup.ts:39-45 and test_api_todo_account.ts:70,80-85; and forbid combining one operation's success and refusal (testing.md:176), violated by test_api_todo_auth.ts:66 and :71. All cited facts are verified; no unverified facts are relied upon.",
+      "pausedAt": "2026-08-09T20:06:44.344Z",
+      "decidedAt": "2026-08-09T20:12:49.792Z",
+      "resumedAt": "2026-08-09T20:12:49.827Z",
       "verdictRelativePath": "supervision/00-backend-0-verdict.json",
-      "verdictSha256": "f8568dd2fa0a4180822087b0daaf073e11a5ac05d88316811170a62319f7f8b5",
-      "workspaceMaterialSha256": "0aa9d294bd06514a3b1dbdd9426be2dfac91a8d751e18b72570ab2912b769c02"
+      "verdictSha256": "9aeee4f656bec471824ac76c7ad4858d6904def8d9301a38aa5b920b1490c691",
+      "workspaceMaterialSha256": "3b41e4cf3b74bfffcb15c02373ac4e4c01b53950924ff86fdd2201f3f3099c4d"
     },
     {
       "scope": "backend",
@@ -72,107 +72,241 @@
       "decision": "fail",
       "action": "retry",
       "goalIndex": 2,
-      "terminalTurnId": "f2dca2a1-d83a-4873-b6f4-d149ea4b8582",
-      "rationale": "Question 1 is not proven. The review skill requires a new sorted manifest before every round and a fresh full round after calibration (workspace/.agents/skills/review/SKILL.md:50-57, 79-81). The stream’s manifest commands occur at backend-remind-1.log:231, 3303, and 6254 only. Calibration changed the product at :14719 and was restored by :14954; the purported final round starts at :15062 with direct requirement reads at :15065, with no new manifest. Requirements are also reread out of sequence at :15065-15897 and :15964-16821. Thus the claimed final dry round at :26495 is unsupported; a fresh clean check:watch rebuild is likewise unverified (the final command only tails an existing log at :25516). Question 2 is no. The workspace testing rule says every test needs a business assertion and typia.assert alone proves only shape (workspace/.agents/skills/backend/testing.md:151-160). test_api_auth_login and test_api_auth_refresh contain only typia.assert calls for their success and follow-up observations, with no business assertion (workspace/packages/backend/test/features/api/requirements/test_api_requirements.ts:59-70, 79-87).",
-      "pausedAt": "2026-08-05T02:02:46.353Z",
-      "decidedAt": "2026-08-05T02:08:34.655Z",
-      "resumedAt": "2026-08-05T02:08:34.671Z",
+      "terminalTurnId": "013bab32-1a7d-4c81-a964-747a21250d0f",
+      "rationale": "Question 1: No. Review instructions require one fresh sorted manifest, one complete file read per command, and a dry round (workspace/.agents/skills/review/SKILL.md:48-57, 71-75). The stream shows incomplete/range reads in an earlier round (backend-remind-1.log:974-1065), provider rereads in bounded ranges after truncation (12032, 12041-12734), and the purported final round’s manifest sequence restarting with config/lint.config.ts, config/tsconfig.json, and package.json at 16569-16919 after package.json was already read at 16504, before continuing docs at 16925. The first final gate command failed at 22671; it was corrected and rerun at 22761-22784 without another full review round. The dry claim at 23655 is contradicted by these commands. Question 2: No. Testing instructions require numbered JSDoc steps and matching body comments (workspace/.agents/skills/backend/testing.md:43-45), but test_api_todo_account.ts has a one-line scenario JSDoc at line 8. They also prohibit direct Prisma reads for setup or proof (testing.md:166-176); the final tests directly query Prisma in test_api_todo_account.ts:75-91, test_api_todo_trash.ts:68, and helpers/TodoSetup.ts:39-46. No material fact above is unverified.",
+      "pausedAt": "2026-08-09T20:35:16.337Z",
+      "decidedAt": "2026-08-09T20:40:13.636Z",
+      "resumedAt": "2026-08-09T20:40:13.957Z",
       "verdictRelativePath": "supervision/01-backend-1-verdict.json",
-      "verdictSha256": "fabbb82360aff6ff17b5c391510319a164141220f9b7a36df3721fab1fe95dd7",
-      "workspaceMaterialSha256": "54345e5735a991f0efd47b7c9bbe6e29ad309b509021945236baefe6346f6843"
+      "verdictSha256": "cc9f46019c7e3380e611b1177d092853ee11e6373a8b4be03c36f07880b25002",
+      "workspaceMaterialSha256": "f593567a9077b4ed54c896d7cdc1cf68c431a2f5569a819759cb8c07cd4cae94"
+    },
+    {
+      "scope": "backend",
+      "attempt": 2,
+      "decision": "fail",
+      "action": "retry",
+      "goalIndex": 3,
+      "terminalTurnId": "619896b9-b2f5-4dfc-96bc-bdc308f80745",
+      "rationale": "Question 1 is no: the final manifest at backend-remind-2.log stream line 17933 lists docs/analysis/03-functional-requirements.md once, but the final pass reads it at line 18679 and again out of order at line 19230, after docs/analysis/04 and 05 (lines 18925 and 18969) and before package.json (line 19288). Therefore the claimed dry round (lines 24136 and 25431) did not satisfy the required manifest-order read record. Question 2 is no: workspace/.agents/skills/backend/testing.md:168-172 forbids direct Prisma reads for setup or proof, but test_api_todo_account.ts imports MyGlobal at line 6 and reads Prisma at lines 81 and 91-97; test_api_todo_auth.ts imports it at line 6 and reads Prisma at lines 32, 36, and 66-72. The passing 46-test report at stream line 24281 does not cure that violation. No other facts were relied upon; unverified claims are none.",
+      "pausedAt": "2026-08-09T21:13:00.632Z",
+      "decidedAt": "2026-08-09T21:19:07.880Z",
+      "resumedAt": "2026-08-09T21:19:07.904Z",
+      "verdictRelativePath": "supervision/02-backend-2-verdict.json",
+      "verdictSha256": "af634972d9f8fa5c785637fe070d53043805b05d9e757ea7c67ce6ede9e8e92f",
+      "workspaceMaterialSha256": "7269c042be6e62704765b1224deaccbb8e6bd9cd61e79d80d7b6cf9772291e64"
+    },
+    {
+      "scope": "backend",
+      "attempt": 3,
+      "decision": "fail",
+      "action": "retry",
+      "goalIndex": 4,
+      "terminalTurnId": "59a8a989-b6c8-43a4-9ef9-e971a043e975",
+      "rationale": "Question 1 is no. The stream shows Round 1 finding fixes at backend-remind-3.log:10273, then only build:prisma/build:main/build:test at :10314-10339 before the new Round 2 manifest at :10424; no packages/backend check:watch invocation or clean marker occurs in that round. Clean watch evidence appears only at :17774 (Round 2) and :24808 (Round 3). The rounds also begin by reading config files (:2885, :3188; likewise :18288 and :18317) before the first docs/analysis requirement (:3214 and :18355), contrary to the requirement-first procedure. Any pre-existing watcher state is unverified and cannot replace the missing recorded gate. Question 2 is no. The testing instructions require one primary accessor per test and operation-specific refusal coverage (workspace/.agents/skills/backend/testing.md:34-41, 132). test_api_todo_ownership_refuses_cross_account_access bundles independent at/update/complete/trash/history/index operations in one test (workspace/packages/backend/test/features/api/todo/test_api_todo_ownership.ts:16-34). The instructions also require raw HTTP for deliberately malformed wire inputs (testing.md:164), but test_api_todo_rules_browse injects unsupported completion, sort, page, and limit values through typed-SDK calls with type assertions (workspace/packages/backend/test/features/api/todo/test_api_todo_rules.ts:63-66). Required boundary behavior is unproved: equal start/due dates must be valid (workspace/docs/analysis/04-business-rules.md:67), yet the date tests cover only optional dates and an earlier due date (test_api_todo_rules.ts:34-46); tie-break ordering for equal keys is required at docs line 119 but the sorting test uses distinct dates and a missing-date item only (test_api_todo_rules.ts:70-93).",
+      "pausedAt": "2026-08-09T22:00:27.171Z",
+      "decidedAt": "2026-08-09T22:07:10.763Z",
+      "resumedAt": "2026-08-09T22:07:10.784Z",
+      "verdictRelativePath": "supervision/03-backend-3-verdict.json",
+      "verdictSha256": "eea96b5acbbae2ab38b890486b14e3a45ceff18242f26ffe1e586e673e566fba",
+      "workspaceMaterialSha256": "9e2faabe1964b82ed1e1616973284332b9e9b84b6165a7790496d897284bb202"
+    },
+    {
+      "scope": "backend",
+      "attempt": 4,
+      "decision": "fail",
+      "action": "final",
+      "goalIndex": 5,
+      "terminalTurnId": "f59c0b2c-d28f-46eb-bc03-2118eb503e64",
+      "rationale": "Q1 fails: the review skill requires any failed final gate to invalidate the round and require another full round (workspace/.agents/skills/review/SKILL.md:71-75). The stream records the purported final round complete at backend-remind-4.log:43815, then the check:watch wrapper exits 1 with WATCH_MARKER=False at :44226. Only process/status checks follow; the wrapper is rerun successfully at :44497, with no new manifest or full-scope reads before the dry claim at :44514. Q2 fails: testing instructions require one primary accessor per test (workspace/.agents/skills/backend/testing.md:34-41). `test_api_todo_ownership_requires_authentication` independently tests four accessors (workspace/packages/backend/test/features/api/todo/test_api_todo_ownership.ts:17-21), and the cross-account test independently tests six (lines 40-45); these are subjects, not setup/observation. Both facts are verified; no material fact relied on here is unverified.",
+      "pausedAt": "2026-08-09T22:57:19.173Z",
+      "decidedAt": "2026-08-09T23:03:13.717Z",
+      "resumedAt": "2026-08-09T23:03:13.736Z",
+      "verdictRelativePath": "supervision/04-backend-4-verdict.json",
+      "verdictSha256": "d357e91f8cec68299d6dd2388717761e356b6ba6ade373fbf157d7b63a4523e3",
+      "workspaceMaterialSha256": "d11ed0d2ef5992ea7c7a99f5935702d50cf4f1cdf8b23ceb78ba6a1796c97cac"
+    },
+    {
+      "scope": "frontend",
+      "attempt": 0,
+      "decision": "fail",
+      "action": "retry",
+      "goalIndex": 8,
+      "terminalTurnId": "ee072fb0-5764-4493-8f9b-0c47ecdaa72f",
+      "rationale": "Question 1 is no. The Round 4 manifest printed at frontend-review.log stream lines 9004–9007 requires packages/api/src/functional/todo/auth/user/index.ts before its recovery files, but the stream reads recovery/index.ts at 9073 and only reads auth/user/index.ts at 9100, with unrelated files between; docs/analysis/03-functional-requirements.md is also redundantly reread at 9049. The claimed final Round 5 starts at 10057, but the scope commands assign each file to $content and output only “full read complete”; for example, packages/api/src/functional/health/index.ts is recorded at 10058–10061 with no contents returned. Any internal examination of the captured variable is unverified, so the required literal dry round is not proven; this contradicts the completion claim at 12236. Question 2 is no. The workspace requires each tests/journeys file to export one async journey function and register one Playwright test (.agents/skills/frontend/verification.md:28–42). packages/frontend/tests/journeys/product.spec.ts exports no journey function and registers six tests at lines 30, 67, 93, 104, 117, and 124. Its profile assertion at lines 80–82 only checks the already-filled input value, not the required persisted/user-visible consequence, contrary to the concrete-effect gate (.agents/skills/frontend/verification.md:131–134).",
+      "pausedAt": "2026-08-10T01:43:48.027Z",
+      "decidedAt": "2026-08-10T01:48:52.310Z",
+      "resumedAt": "2026-08-10T01:48:52.349Z",
+      "verdictRelativePath": "supervision/05-frontend-0-verdict.json",
+      "verdictSha256": "523365698cd4bde632eb306113c9fa6ad17b2ccf276c71a76c4a1b4a0954e52e",
+      "workspaceMaterialSha256": "0716cfe5f76f2e3c863dd0350c3a189da6129fb9c7c582348f09ac220f8ca566"
+    },
+    {
+      "scope": "frontend",
+      "attempt": 1,
+      "decision": "fail",
+      "action": "retry",
+      "goalIndex": 9,
+      "terminalTurnId": "056c9dc6-afe1-45e9-83d0-e0ee53760e3a",
+      "rationale": "The review loop itself is evidenced: fresh 71-file manifest at frontend-remind-1.log:6478, one successful full Get-Content read per manifest entry in order at lines 6547-6939, clean gates at 7136, and backend/frontend reload reported 200/200 at 6536. However, tests are not properly written per workspace/.agents/skills/frontend/verification.md:26-42, which requires each journeys file to export one async journey function and register one Playwright test. packages/frontend/tests/journeys/product.spec.ts:50-264 has eleven inline test registrations and no exported journey function. The 11/11 green result at frontend-remind-1.log:7136 does not cure that violation.",
+      "pausedAt": "2026-08-10T02:53:53.604Z",
+      "decidedAt": "2026-08-10T03:02:20.701Z",
+      "resumedAt": "2026-08-10T03:02:20.726Z",
+      "verdictRelativePath": "supervision/06-frontend-1-verdict.json",
+      "verdictSha256": "a74bba5dd9e966c5c9e4442cd99c00187df43ec55297e5782cb34f36f6d6a1af",
+      "workspaceMaterialSha256": "6e344432274f7f19897063d12e20fc3336b5c6ad95ee8de5a2b96d9829bfac1c"
+    },
+    {
+      "scope": "frontend",
+      "attempt": 2,
+      "decision": "fail",
+      "action": "retry",
+      "goalIndex": 10,
+      "terminalTurnId": "365b4446-8d3e-4d1f-acbe-e382d226726f",
+      "rationale": "Question 1: no. The rejected-review turn starts at stream line 22; lines 23-41 contain only reasoning/goal/status events, line 42 starts the final answer, and lines 43-2031 are only its streamed prose. There are no current-turn file-read or command records, so no review round occurred. The instruction itself states at line 27 that a round with no read commands did not happen, while the completion claim at line 2031 is unsupported. Question 2: no. The workspace requires each journeys file to export one async journey function and register one test (workspace/.agents/skills/frontend/verification.md:28-42), but product.spec.ts has no exported journey function and directly registers many tests (lines 50, 98, 128, 145, 156, 169, 183, 205, 217, 244, 256). The auxiliary suites also assert only rendering/viewport or screenshot reachability (tests/contract/scaffold.spec.ts:38-50; tests/readme.spec.ts:3-9; tests/ui-review.spec.ts:3-21), not business outcomes. The live journey assertions do cover several concrete effects (product.spec.ts:57-89, 128-142, 183-203, 217-240), but that does not cure the suite-level instruction violations.",
+      "pausedAt": "2026-08-10T03:03:53.824Z",
+      "decidedAt": "2026-08-10T03:09:18.748Z",
+      "resumedAt": "2026-08-10T03:09:18.774Z",
+      "verdictRelativePath": "supervision/07-frontend-2-verdict.json",
+      "verdictSha256": "ec893f55fb134dabd12f478586b0ff5139d0e44a0823c042d5237be36d0e97ae",
+      "workspaceMaterialSha256": "6e344432274f7f19897063d12e20fc3336b5c6ad95ee8de5a2b96d9829bfac1c"
+    },
+    {
+      "scope": "frontend",
+      "attempt": 3,
+      "decision": "fail",
+      "action": "retry",
+      "goalIndex": 11,
+      "terminalTurnId": "e6207049-3e88-40a3-a9d4-c65afd1220b5",
+      "rationale": "Question 1 fails. The review-skill procedure requires one exact manifest file per command in manifest order (workspace/.agents/skills/review/SKILL.md:50-53) and a failed final gate to invalidate the round and force a new full read (lines 71-75). In frontend-remind-3.log, the manifest completed at stream line 2219, but stream line 2841 reads packages/backend/package.json together with Get-Process and line 3770 rereads packages/frontend/index.html after the scoped files. The next manifest at 3947 is followed by duplicate reads of docs/analysis/03-functional-requirements.md at lines 3965 and 3986 before the API read at 3999. The purported final full read is at lines 5156-5485, but its e2e gate failed with exit 1 (12 passed, 1 failed) at line 6064 and was only rerun successfully at line 6299; no new manifest/full read followed. Question 2 also fails. workspace/.agents/skills/frontend/verification.md:28-42 requires each journeys file to export one async journey function and register one Playwright test. packages/frontend/tests/journeys/product.spec.ts has no exported journey function and registers 13 separate test blocks (lines 50, 100, 130, 147, 163, 177, 188, 201, 215, 237, 249, 276, 288).",
+      "pausedAt": "2026-08-10T03:51:43.846Z",
+      "decidedAt": "2026-08-10T03:59:09.227Z",
+      "resumedAt": "2026-08-10T03:59:09.250Z",
+      "verdictRelativePath": "supervision/08-frontend-3-verdict.json",
+      "verdictSha256": "aa75a94ab0d712c6890624a507950bc586fe2f9084f6603cfde0a2efedf4636b",
+      "workspaceMaterialSha256": "3aedd1e870154d1ea2e4aeb8e824e3d7fb102d811d4c1920ee52d42fabf780f0"
+    },
+    {
+      "scope": "frontend",
+      "attempt": 4,
+      "decision": "fail",
+      "action": "final",
+      "goalIndex": 12,
+      "terminalTurnId": "8cb7681f-028f-4549-b72c-20cdaca454d4",
+      "rationale": "Question 1: fail. `frontend-remind-4.log` shows one manifest command at line 122 and the only complete scope read at command positions 292–1370. After the gate commands (1520–2245), positions 2313–2387 read only a subset of files; no new manifest or requirement-first full round appears before the final checks at 2435–2440. The ten-round claim at position 3678 is therefore unverified. This also omits the required mutation calibration (`workspace/.agents/skills/review/SKILL.md:77-81`) and new manifest per round (`:50-57`). Question 2: fail. `workspace/.agents/skills/frontend/verification.md:28-42` requires each journeys file to export one async journey function and register one test. `workspace/packages/frontend/tests/journeys/product.spec.ts` exports no journey function and instead declares 13 anonymous tests at lines 50, 100, 130, 147, 163, 177, 188, 201, 215, 237, 249, 276, and 288. The claimed prior rounds and calibration are unverified.",
+      "pausedAt": "2026-08-10T04:12:00.213Z",
+      "decidedAt": "2026-08-10T04:17:22.342Z",
+      "resumedAt": "2026-08-10T04:17:22.384Z",
+      "verdictRelativePath": "supervision/09-frontend-4-verdict.json",
+      "verdictSha256": "06f2a22d3468d4508a3804bcb92bfbd18f5e302090c9845482256e4d4decf843",
+      "workspaceMaterialSha256": "a4749dfc989548a35c677ec9b630ae2f564d3630bc24ca007fa24033d1efad49"
     }
   ],
   "stages": [
     {
       "name": "backend-start",
-      "tokens": 29872719,
-      "elapsedMs": 2768000,
-      "tokenPercent": 5,
-      "timePercent": 7
+      "tokens": 32898028,
+      "elapsedMs": 3710000,
+      "tokenPercent": 6,
+      "timePercent": 9
     },
     {
       "name": "backend-review",
-      "tokens": 76412747,
-      "elapsedMs": 4974126.7557,
-      "tokenPercent": 14,
-      "timePercent": 12
+      "tokens": 33580868,
+      "elapsedMs": 3023317.0952,
+      "tokenPercent": 6,
+      "timePercent": 7
     },
     {
       "name": "backend-remind-1",
-      "tokens": 53757022,
-      "elapsedMs": 3757291.4066,
-      "tokenPercent": 10,
-      "timePercent": 9
-    },
-    {
-      "name": "backend-remind-2",
-      "tokens": 77182440,
-      "elapsedMs": 4151000,
-      "tokenPercent": 14,
-      "timePercent": 10
-    },
-    {
-      "name": "backend-final",
-      "tokens": 17813133,
-      "elapsedMs": 1081000,
-      "tokenPercent": 3,
-      "timePercent": 3
-    },
-    {
-      "name": "frontend-start",
-      "tokens": 26279528,
-      "elapsedMs": 2352000,
-      "tokenPercent": 5,
-      "timePercent": 6
-    },
-    {
-      "name": "frontend-review",
-      "tokens": 65607292,
-      "elapsedMs": 5020000,
-      "tokenPercent": 12,
-      "timePercent": 12
-    },
-    {
-      "name": "frontend-final",
-      "tokens": 29374477,
-      "elapsedMs": 2197000,
-      "tokenPercent": 5,
-      "timePercent": 5
-    },
-    {
-      "name": "overall-review",
-      "tokens": 42281833,
-      "elapsedMs": 4512000,
-      "tokenPercent": 8,
-      "timePercent": 11
-    },
-    {
-      "name": "overall-remind-1",
-      "tokens": 19115354,
-      "elapsedMs": 2501000,
-      "tokenPercent": 3,
-      "timePercent": 6
-    },
-    {
-      "name": "overall-remind-2",
-      "tokens": 58582861,
-      "elapsedMs": 3857000,
-      "tokenPercent": 11,
-      "timePercent": 9
-    },
-    {
-      "name": "overall-remind-3",
-      "tokens": 15216940,
-      "elapsedMs": 1777000,
+      "tokens": 18894976,
+      "elapsedMs": 1589424.6472,
       "tokenPercent": 3,
       "timePercent": 4
     },
     {
-      "name": "overall-final",
-      "tokens": 33466068,
-      "elapsedMs": 2925000,
+      "name": "backend-remind-2",
+      "tokens": 36281554,
+      "elapsedMs": 2271679.2040999997,
       "tokenPercent": 6,
+      "timePercent": 5
+    },
+    {
+      "name": "backend-remind-3",
+      "tokens": 52679325,
+      "elapsedMs": 2832359.1956,
+      "tokenPercent": 9,
       "timePercent": 7
+    },
+    {
+      "name": "backend-remind-4",
+      "tokens": 43373718,
+      "elapsedMs": 3221239.6574999997,
+      "tokenPercent": 7,
+      "timePercent": 8
+    },
+    {
+      "name": "backend-final",
+      "tokens": 4754945,
+      "elapsedMs": 290000,
+      "tokenPercent": 1,
+      "timePercent": 1
+    },
+    {
+      "name": "frontend-start",
+      "tokens": 50709138,
+      "elapsedMs": 3622000,
+      "tokenPercent": 9,
+      "timePercent": 8
+    },
+    {
+      "name": "frontend-review",
+      "tokens": 69109422,
+      "elapsedMs": 4361193.6012,
+      "tokenPercent": 12,
+      "timePercent": 10
+    },
+    {
+      "name": "frontend-remind-1",
+      "tokens": 63841789,
+      "elapsedMs": 4352773.5722,
+      "tokenPercent": 11,
+      "timePercent": 10
+    },
+    {
+      "name": "frontend-remind-2",
+      "tokens": 3320544,
+      "elapsedMs": 364663.9853,
+      "tokenPercent": 1,
+      "timePercent": 1
+    },
+    {
+      "name": "frontend-remind-3",
+      "tokens": 31206831,
+      "elapsedMs": 2958068.7285,
+      "tokenPercent": 5,
+      "timePercent": 7
+    },
+    {
+      "name": "frontend-remind-4",
+      "tokens": 10703174,
+      "elapsedMs": 1044525.2353000001,
+      "tokenPercent": 2,
+      "timePercent": 2
+    },
+    {
+      "name": "frontend-final",
+      "tokens": 53074870,
+      "elapsedMs": 2101000,
+      "tokenPercent": 9,
+      "timePercent": 5
+    },
+    {
+      "name": "overall-review",
+      "tokens": 78459919,
+      "elapsedMs": 7013152.135499999,
+      "tokenPercent": 13,
+      "timePercent": 16
     }
   ]
 }
