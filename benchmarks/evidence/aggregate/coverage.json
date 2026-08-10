@@ -166,7 +166,7 @@
         "obligations": [],
         "edges": []
       },
-      "runId": "5a6fe634-8f01-48de-bd7f-c877e554edf7"
+      "runId": "b9b5d09d-c375-4ee6-b750-3b2622c33689"
     },
     {
       "model": "gpt-5.6-luna",
@@ -334,7 +334,7 @@
         "obligations": [],
         "edges": []
       },
-      "runId": "9d7c7429-0e2d-4a8a-a8e6-a85f8a939064"
+      "runId": "bd0299c4-1b87-461b-b0e5-0be962d648bf"
     },
     {
       "model": "gpt-5.6-luna",
@@ -502,7 +502,7 @@
         "obligations": [],
         "edges": []
       },
-      "runId": "67926096-1226-46e2-a28a-461b33d266da"
+      "runId": "33baf096-f2ea-4d07-91f7-a4cb4616ad2b"
     }
   ],
   "source": {

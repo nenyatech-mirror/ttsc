@@ -2,21 +2,21 @@
   "engine": "codex",
   "subject": "todo",
   "arm": "evidence",
-  "runId": "5a6fe634-8f01-48de-bd7f-c877e554edf7",
-  "benchmarkRevision": "c5a270a128ad4c74c85da0a26808013ec31942ee",
+  "runId": "b9b5d09d-c375-4ee6-b750-3b2622c33689",
+  "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
   "model": "gpt-5.6-luna",
   "effort": "high",
   "status": "completed",
   "stage": "overall-final",
-  "launchedAt": "2026-08-05T14:25:50.444Z",
-  "tokens": 187514696,
+  "launchedAt": "2026-08-09T18:17:36.401Z",
+  "tokens": 92080910,
   "tokenUsage": {
-    "totalTokens": 187514696,
-    "inputTokens": 187117781,
-    "cachedInputTokens": 184992000,
+    "totalTokens": 92080910,
+    "inputTokens": 91772838,
+    "cachedInputTokens": 90294528,
     "cacheWriteInputTokens": 0,
-    "outputTokens": 396915,
-    "reasoningOutputTokens": 113736
+    "outputTokens": 308072,
+    "reasoningOutputTokens": 86527
   },
   "inspection": {
     "attempts": 0,
@@ -36,78 +36,70 @@
     "pricingAsOf": "2026-08-01",
     "priceSource": "https://openrouter.ai/api/v1/models",
     "currency": "USD",
-    "amountUsd": 2.3006471,
-    "requests": 1339,
-    "shortContextRequests": 1339,
+    "amountUsd": 1.23561948,
+    "requests": 747,
+    "shortContextRequests": 747,
     "longContextRequests": 0,
-    "longContextThresholdTokens": 272000,
-    "replayedUpdates": 0
+    "longContextThresholdTokens": 272000
   },
   "suspendedMs": 0,
   "suspensions": [],
-  "workElapsedMs": 17457495.6826,
+  "workElapsedMs": 10811064.0902,
   "worktree": {
-    "files": 153,
-    "additions": 7292,
-    "deletions": 134
+    "files": 129,
+    "additions": 8731,
+    "deletions": 123
   },
   "reviewVerdicts": [],
   "stages": [
     {
       "name": "backend-start",
-      "tokens": 79030606,
-      "elapsedMs": 6754000,
-      "tokenPercent": 42,
-      "timePercent": 39
+      "tokens": 36526952,
+      "elapsedMs": 4879000,
+      "tokenPercent": 40,
+      "timePercent": 45
     },
     {
       "name": "backend-review",
-      "tokens": 13594891,
-      "elapsedMs": 1599000,
-      "tokenPercent": 7,
+      "tokens": 11510707,
+      "elapsedMs": 967000,
+      "tokenPercent": 13,
       "timePercent": 9
     },
     {
       "name": "backend-final",
-      "tokens": 812101,
-      "elapsedMs": 41000,
-      "tokenPercent": 0,
-      "timePercent": 0
+      "tokens": 2434939,
+      "elapsedMs": 352000,
+      "tokenPercent": 3,
+      "timePercent": 3
     },
     {
       "name": "frontend-start",
-      "tokens": 40531887,
-      "elapsedMs": 4182000,
-      "tokenPercent": 22,
-      "timePercent": 24
+      "tokens": 29777795,
+      "elapsedMs": 3175000,
+      "tokenPercent": 32,
+      "timePercent": 29
     },
     {
       "name": "frontend-review",
-      "tokens": 9276285,
-      "elapsedMs": 1416000,
-      "tokenPercent": 5,
-      "timePercent": 8
+      "tokens": 8755740,
+      "elapsedMs": 938000,
+      "tokenPercent": 10,
+      "timePercent": 9
     },
     {
       "name": "frontend-final",
-      "tokens": 4038343,
-      "elapsedMs": 759000,
-      "tokenPercent": 2,
-      "timePercent": 4
-    },
-    {
-      "name": "overall-review",
-      "tokens": 38828595,
-      "elapsedMs": 2540000,
-      "tokenPercent": 21,
-      "timePercent": 15
+      "tokens": 669850,
+      "elapsedMs": 93000,
+      "tokenPercent": 1,
+      "timePercent": 1
     },
     {
       "name": "overall-final",
-      "tokens": 1401988,
-      "elapsedMs": 61000,
-      "tokenPercent": 1,
-      "timePercent": 0
+      "tokens": 2404927,
+      "elapsedMs": 323000,
+      "tokenPercent": 3,
+      "timePercent": 3
     }
   ]
 }
