@@ -444,7 +444,8 @@ func memberSemicolonRedundant(src string, after int, isClassField bool) bool {
 // The edit is a zero-width insertion at the member's End(), so it stays
 // disjoint from the format/statement-split, format/indent, and
 // format/print-width edits that may land on the same lines; the applier
-// rejects overlapping edits. It cannot change the parse either: the
+// keeps one finding per contested range, so an overlap would cost a whole
+// cascade pass. It cannot change the parse either: the
 // parser already ended the member at that offset (parseTypeMemberSemicolon
 // runs before finishNode), so the inserted `;` only spells out a boundary
 // the parse had already made.
