@@ -10,15 +10,15 @@ import { SHARED_PLUGIN_CACHE_DIR } from "../internal/plugin-cache";
  *
  * The banner is injected at the SOURCE level (sourcePreambleFS prepends it
  * before TypeScript-Go parses), which shifts every recorded coordinate down by
- * the banner's line count — diagnostics included. The reported line then names a
- * line that does not exist in the file on disk, and because the duplicate filter
- * in `runBuild.ts` compares positions, the shifted report never matched the
- * plugin-free recovery pass and the user was shown one error twice at two
+ * the banner's line count — diagnostics included. The reported line then names
+ * a line that does not exist in the file on disk, and because the duplicate
+ * filter in `runBuild.ts` compares positions, the shifted report never matched
+ * the plugin-free recovery pass and the user was shown one error twice at two
  * contradictory positions. The source-map side of this invariant is already
  * covered here; this is the diagnostic side.
  *
- * 1. Build a project with a three-line banner (an eight-line preamble) whose
- *    only error sits on source line 5.
+ * 1. Build a project with a three-line banner (an eight-line preamble) whose only
+ *    error sits on source line 5.
  * 2. Run `ttsc --emit`.
  * 3. Assert the failure names line 5 once, never names the shifted line 13, and
  *    never quotes the banner text back at the user.
@@ -70,8 +70,9 @@ export const test_banner_diagnostic_lines_point_at_original_source = () => {
   );
   // Both rendered forms are accepted: the native host prints `file:line:col -`
   // and the plugin-free recovery pass prints `file(line,col):`.
-  const positions = [...stderr.matchAll(/main\.ts(?::(\d+):\d+|\((\d+),\d+\))/g)]
-    .map((match) => Number(match[1] ?? match[2]));
+  const positions = [
+    ...stderr.matchAll(/main\.ts(?::(\d+):\d+|\((\d+),\d+\))/g),
+  ].map((match) => Number(match[1] ?? match[2]));
   assert.ok(
     positions.length > 0,
     `stderr reported no position for main.ts:\n${stderr}`,

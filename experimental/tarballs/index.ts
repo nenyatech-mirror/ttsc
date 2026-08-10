@@ -28,9 +28,9 @@ const PRINT_PLAN = process.argv.includes("--print-plan");
  *
  * Full mode is the rehearsal for `pnpm run package:latest:publish`, so this is
  * the whole publishable set of `packages/*`: every one of them reaches a
- * consumer through the registry, and a `files` gap, a missing `exports`
- * target, or an unbuilt `lib` only shows up in a real `pnpm pack`. Platform
- * packages are not listed here — `listTargets` discovers them from disk.
+ * consumer through the registry, and a `files` gap, a missing `exports` target,
+ * or an unbuilt `lib` only shows up in a real `pnpm pack`. Platform packages
+ * are not listed here — `listTargets` discovers them from disk.
  */
 const FULL_PACKAGES = [
   "ttsc",
@@ -49,8 +49,8 @@ const FULL_PACKAGES = [
 ];
 
 /**
- * Publishable packages full mode deliberately does not pack, keyed by
- * published name, with the reason as the value.
+ * Publishable packages full mode deliberately does not pack, keyed by published
+ * name, with the reason as the value.
  *
  * Empty on purpose: nothing published is currently held back from the
  * rehearsal. An entry here is a decision, not a gap, so the reason has to say
@@ -64,11 +64,11 @@ const FULL_EXCLUSIONS: Record<string, string> = {};
 /**
  * The deliberately narrow current-platform set, by directory name.
  *
- * PR CI installs only ttsc, the utility plugins and the local platform
- * tarball, so everything an integration workflow never installs stays out. In
- * particular `@ttsc/wasm` is intentionally skipped — its only PR-CI consumer
- * would be a website build, and the website is not part of the typia / bun
- * smoke flow. Full mode packs everything (release).
+ * PR CI installs only ttsc, the utility plugins and the local platform tarball,
+ * so everything an integration workflow never installs stays out. In particular
+ * `@ttsc/wasm` is intentionally skipped — its only PR-CI consumer would be a
+ * website build, and the website is not part of the typia / bun smoke flow.
+ * Full mode packs everything (release).
  */
 const CURRENT_PACKAGES = [
   "ttsc",
