@@ -4,19 +4,19 @@
       "model": "gpt-5.6-luna",
       "subject": "todo",
       "edges": {
-        "requirementToModel":     { "eligible": 64, "reached": 64 },
+        "requirementToModel": { "eligible": 64, "reached": 64 },
         "requirementToOperation": { "eligible": 69, "reached": 69 },
-        "requirementToDto":       { "eligible": 53, "reached": 52 },
-        "requirementToTest":      { "eligible": 73, "reached": 73 },
-        "requirementToScreen":    { "eligible": 63, "reached": 63 },
-        "requirementToJourney":   { "eligible": 66, "reached": 56 },
-        "modelToOperation":       { "eligible": 6, "reached": 6 },
-        "modelToDto":             { "eligible": 6, "reached": 6 },
-        "accessorToTest":         { "eligible": 24, "reached": 24 },
-        "accessorToHook":         { "eligible": 24, "reached": 24 },
-        "hookToScreen":           { "eligible": 24, "reached": 23 },
-        "screenToJourney":        { "eligible": 7, "reached": 7 },
-        "columnToProperty":       { "eligible": 42, "reached": 29 }
+        "requirementToDto": { "eligible": 53, "reached": 52 },
+        "requirementToTest": { "eligible": 73, "reached": 73 },
+        "requirementToScreen": { "eligible": 63, "reached": 63 },
+        "requirementToJourney": { "eligible": 66, "reached": 56 },
+        "modelToOperation": { "eligible": 6, "reached": 6 },
+        "modelToDto": { "eligible": 6, "reached": 6 },
+        "accessorToTest": { "eligible": 24, "reached": 24 },
+        "accessorToHook": { "eligible": 24, "reached": 24 },
+        "hookToScreen": { "eligible": 24, "reached": 23 },
+        "screenToJourney": { "eligible": 7, "reached": 7 },
+        "columnToProperty": { "eligible": 42, "reached": 29 }
       }
     }
   ]
