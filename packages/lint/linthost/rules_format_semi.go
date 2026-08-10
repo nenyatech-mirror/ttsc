@@ -15,6 +15,21 @@ import (
 // optional semicolon. Body-shaped declarations (functions, classes,
 // namespaces, enums) and control-flow statements (if/for/while/try)
 // are out of scope because they parse correctly without a terminator.
+//
+// Interface, type-literal, and class members do not take the statement
+// path. Both directions route through member-specific code
+// (stripMemberSemicolon, insertMemberSemicolon) that keys on the written
+// line structure rather than on the member kind, because Prettier prints
+// a member's `;` only where that member list broke.
+//
+// One consequence is worth stating rather than leaving to be inferred: a
+// type member of a body still written on one line is never terminated, so
+// `interface D { (a: number): void }` keeps its bare call signature.
+// Prettier reaches its own terminator by breaking the body first, and
+// breaking it is format/indent's decision, which today covers property,
+// method, and index signatures but not a call or construct signature.
+// Terminating a one-line member here instead would be a layout decision
+// this rule does not own, and would emit a shape Prettier never does.
 type formatSemi struct{ optionsRule }
 
 // formatSemiOptions is the Go mirror of `TtscLintRuleOptions.Semi`. The
@@ -43,9 +58,12 @@ func (formatSemi) Visits() []shimast.Kind {
     shimast.KindExportAssignment,
     shimast.KindPropertyDeclaration,
     shimast.KindTypeAliasDeclaration,
-    // Interface / type-literal members. Prettier drops their trailing
-    // `;` under semi:false when they are newline-separated; see
-    // stripMemberSemicolon for the per-context hazard rules.
+    // Interface / type-literal members, plus the class-member spellings
+    // the accessor and index-signature kinds share. Prettier drops their
+    // trailing `;` under semi:false and inserts it under semi:true, in
+    // both cases only when they are newline-separated; see
+    // stripMemberSemicolon and insertMemberSemicolon for the per-context
+    // hazard rules.
     shimast.KindPropertySignature,
     shimast.KindMethodSignature,
     shimast.KindIndexSignature,
@@ -70,11 +88,11 @@ func (formatSemi) Check(ctx *Context, node *shimast.Node) {
     return
   }
   // Interface / type-literal members and class fields carry their own
-  // ASI rules, distinct from top-level statements, so the never
-  // direction routes through a dedicated stripper. Class fields keep
-  // their existing always-direction insertion (falling through below);
-  // inserting a missing interface/type member terminator is out of scope
-  // for this strip fix, so type members short-circuit in always mode.
+  // ASI rules, distinct from top-level statements, so each direction
+  // routes through a dedicated member path. A class field keeps its
+  // existing always-direction insertion by falling through to the
+  // statement branch below: its body always breaks in Prettier, so it
+  // needs no line-structure test.
   isClassField := node.Kind == shimast.KindPropertyDeclaration
   isTypeMember := isTypeMemberKind(node.Kind)
   if preferNever && (isClassField || isTypeMember) {
@@ -82,6 +100,7 @@ func (formatSemi) Check(ctx *Context, node *shimast.Node) {
     return
   }
   if isTypeMember {
+    insertMemberSemicolon(ctx, src, node, end)
     return
   }
   hasSemi := src[end-1] == ';'
@@ -282,11 +301,22 @@ func preferNeverSafeKind(kind shimast.Kind) bool {
 }
 
 // isTypeMemberKind reports whether `kind` is an interface or
-// object-type-literal member whose trailing `;` Prettier strips under
-// semi:false. Class fields (KindPropertyDeclaration) are handled
-// separately because their initializer is an expression and so they
-// carry the full expression-ASI hazard set, while type members only
-// risk a call/construct-signature (`(`) or generic-call-signature (`<`)
+// object-type-literal member: the kinds whose trailing `;` Prettier
+// strips under semi:false and inserts under semi:true.
+//
+// All seven take the same answer in both directions, which is measured
+// rather than assumed from symmetry. The `format/semi` conformance cases
+// run a property, method, index, call, and construct signature plus both
+// accessors through pinned Prettier 3.8.3, and every one of them comes
+// back terminated once its body is broken across lines.
+// GetAccessor and SetAccessor also spell a class or object-literal
+// accessor, which is not a type member at all; the context test in
+// memberTakesSemicolonTerminator, not this predicate, separates those.
+//
+// Class fields (KindPropertyDeclaration) are handled separately because
+// their initializer is an expression and so they carry the full
+// expression-ASI hazard set, while type members only risk a
+// call/construct-signature (`(`) or generic-call-signature (`<`)
 // continuation.
 func isTypeMemberKind(kind shimast.Kind) bool {
   switch kind {
@@ -306,12 +336,13 @@ func isTypeMemberKind(kind shimast.Kind) bool {
 // stripMemberSemicolon removes a redundant trailing `;` from an
 // interface / type-literal member or a class field under semi:false.
 //
-// The member-terminating `;` is located robustly: typescript-go parses
-// the terminator as a separate token (parseTypeMemberSemicolon /
-// parseSemicolonAfterPropertyName run after finishNode), so a member
-// node's End() may sit before the `;`. Accept either a `;` already at
-// End()-1 or the first `;` reached scanning horizontal whitespace
-// forward from End().
+// The member-terminating `;` is located robustly. typescript-go consumes
+// it as a separate token before closing the node (parseTypeMemberSemicolon
+// and parseSemicolonAfterPropertyName both run ahead of finishNode), so
+// End() normally sits just past it; an error-recovery path that returns
+// without consuming leaves it outside instead. Accept either a `;`
+// already at End()-1 or the first `;` reached scanning horizontal
+// whitespace forward from End().
 //
 // The `;` is dropped only when it is redundant, see
 // memberSemicolonRedundant, so single-line separators stay intact and
@@ -385,6 +416,115 @@ func memberSemicolonRedundant(src string, after int, isClassField bool) bool {
     }
   }
   return true
+}
+
+// insertMemberSemicolon appends the terminator Prettier prints after an
+// interface, type-literal, or class member that ends its physical line.
+//
+// Prettier emits the member separator inside an `ifBreak`: a member list
+// laid out across lines terminates every member, its last one included,
+// while a list still written on one line separates its members with `;`
+// and leaves the last one bare (`type T = { a: number }` is Prettier's
+// own output for that input). Read off the source, that condition is
+// "the next significant byte sits on a later line", the mirror image of
+// memberSemicolonRedundant, which strips only where the same shape makes
+// the `;` optional.
+//
+// Keying on the written line structure is also what reproduces Prettier's
+// object-wrap preservation without a second layout model. An interface
+// body always breaks, so once format/indent has broken it out this asks
+// for the terminator on the next cascade pass; an inline type literal,
+// which no pass breaks, never reaches the condition and keeps the shape
+// its author wrote.
+//
+// The edit is a zero-width insertion at the member's End(), so it stays
+// disjoint from the format/statement-split, format/indent, and
+// format/print-width edits that may land on the same lines; the applier
+// rejects overlapping edits. It cannot change the parse either: the
+// parser already ended the member at that offset (parseTypeMemberSemicolon
+// runs before finishNode), so the inserted `;` only spells out a boundary
+// the parse had already made.
+//
+// Idempotent: a re-parse folds the inserted `;` into the member's range,
+// so the next pass reads it at End()-1 and abstains.
+func insertMemberSemicolon(ctx *Context, src string, node *shimast.Node, end int) {
+  if !memberTakesSemicolonTerminator(node) {
+    return
+  }
+  switch src[end-1] {
+  case ';':
+    // Already terminated. Also the idempotency guard.
+    return
+  case ',':
+    // TypeScript accepts `,` as a member separator and the parser folds
+    // it into the member exactly as it folds a `;`. Prettier rewrites
+    // such a separator to `;`, but that normalization belongs to whoever
+    // owns the separator rather than to the terminator rule; appending
+    // here would emit `a: number,;`.
+    return
+  }
+  if !memberEndsItsLine(src, end) {
+    return
+  }
+  // Anchored on the member's last character for the same reason the
+  // statement branch is: the banner underlines "the place a semicolon
+  // should follow", while the fix stays zero-width at End().
+  ctx.ReportRangeFix(
+    end-1,
+    end,
+    "Missing semicolon.",
+    TextEdit{Pos: end, End: end, Text: ";"},
+  )
+}
+
+// memberTakesSemicolonTerminator reports whether Prettier terminates
+// `node` with a `;` at all. It decides on the member's own shape and on
+// the member list holding it, not on its kind, because one kind spells
+// members of both a `;`-separated and a `,`-separated list:
+//
+//   - A member carrying a body ends in `}`, and Prettier never follows a
+//     braced member with a terminator. The reachable case is an accessor:
+//     GetAccessor and SetAccessor spell both a bodiless interface
+//     accessor and a class accessor with a body.
+//   - Interface and type-literal bodies are `;`-separated. So is a class
+//     body, whose index signatures and bodiless (`declare` / `abstract`)
+//     accessors take the same terminator as their type-member spellings,
+//     and are broken onto their own lines by the same format/indent pass.
+//   - An object literal is `,`-separated. Its accessors arrive here as
+//     the same two kinds, and a `;` after one is a syntax error.
+func memberTakesSemicolonTerminator(node *shimast.Node) bool {
+  if node.Body() != nil {
+    return false
+  }
+  parent := node.Parent
+  if parent == nil {
+    return false
+  }
+  switch parent.Kind {
+  case shimast.KindInterfaceDeclaration,
+    shimast.KindTypeLiteral,
+    shimast.KindClassDeclaration,
+    shimast.KindClassExpression:
+    return true
+  }
+  return false
+}
+
+// memberEndsItsLine reports whether the next significant byte after a
+// member ending at `end` sits on a later physical line, i.e. the member
+// list is written broken at this boundary. Trivia is crossed with
+// scanPastTrivia, so a trailing line comment and a block comment carrying
+// a line terminator both count as the break ECMA-262 says they are, and
+// both scanners keep one notion of "a line was crossed".
+//
+// Reaching end of input means the body has no closing `}`. That source is
+// too broken to reason about, so abstain.
+func memberEndsItsLine(src string, end int) bool {
+  next, sawNewline := scanPastTrivia(src, end)
+  if next >= len(src) {
+    return false
+  }
+  return sawNewline
 }
 
 func init() {

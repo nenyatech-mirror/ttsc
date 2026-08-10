@@ -130,7 +130,7 @@ Each `format` key controls one behavior:
 | Config key | Effect |
 | --- | --- |
 | `severity` (default `"off"`) | Check-time diagnostic level for formatting. Does not gate `ttsc format`. |
-| `semi` | Insert trailing semicolons on ASI-terminated statements. |
+| `semi` | Insert trailing semicolons on ASI-terminated statements, and on the members of an interface, type-literal, or class body written across lines. |
 | `singleQuote` | Convert quoted strings to the preferred quote style. |
 | `arrowParens` | Add or remove parens around a single arrow parameter. |
 | `bracketSpacing` | Spaces inside object and named-import/export braces. |
