@@ -4,27 +4,106 @@ import path from "node:path";
 
 // Two modes:
 //
-//   default — used by `pnpm package:tgz` for release rehearsals. Builds every
-//             workspace tarball + every platform tarball (~15-20 min on CI).
+//   default — used by `pnpm package:tgz` for release rehearsals. Packs every
+//             publishable package under `packages/` — the same set
+//             `pnpm run package:latest:publish` pushes — plus every platform
+//             tarball (~15-20 min on CI).
 //
 //   --current / TTSC_TARBALLS_CURRENT=1 — used by PR CI (typia.yml today, plus
 //             any future workflow that just needs ttsc + the local platform
 //             tarball). Calls `pnpm run build:current` instead of the full
 //             `pnpm run build`, and only packs the current-platform package.
 //             Drops typical CI time from ~20 min to ~3 min.
+//
+// `--print-plan` reports the two package plans below as JSON and packs
+// nothing.
 
 const CURRENT_ONLY =
   process.argv.includes("--current") ||
   process.env.TTSC_TARBALLS_CURRENT === "1";
+const PRINT_PLAN = process.argv.includes("--print-plan");
+
+/**
+ * Non-platform packages the release rehearsal packs, by directory name.
+ *
+ * Full mode is the rehearsal for `pnpm run package:latest:publish`, so this is
+ * the whole publishable set of `packages/*`: every one of them reaches a
+ * consumer through the registry, and a `files` gap, a missing `exports`
+ * target, or an unbuilt `lib` only shows up in a real `pnpm pack`. Platform
+ * packages are not listed here — `listTargets` discovers them from disk.
+ */
+const FULL_PACKAGES = [
+  "ttsc",
+  "banner",
+  "evidence",
+  "factory",
+  "graph",
+  "lint",
+  "metro",
+  "paths",
+  "playground",
+  "strip",
+  "unplugin",
+  "vscode",
+  "wasm",
+];
+
+/**
+ * Publishable packages full mode deliberately does not pack, keyed by
+ * published name, with the reason as the value.
+ *
+ * Empty on purpose: nothing published is currently held back from the
+ * rehearsal. An entry here is a decision, not a gap, so the reason has to say
+ * why the registry consumer of that package can live without a rehearsed
+ * tarball. `scripts/ci/factory-package.test.cjs` reads this file through
+ * `--print-plan` and fails when a publishable package appears in neither list,
+ * so a newly published package cannot skip the rehearsal in silence.
+ */
+const FULL_EXCLUSIONS: Record<string, string> = {};
+
+/**
+ * The deliberately narrow current-platform set, by directory name.
+ *
+ * PR CI installs only ttsc, the utility plugins and the local platform
+ * tarball, so everything an integration workflow never installs stays out. In
+ * particular `@ttsc/wasm` is intentionally skipped — its only PR-CI consumer
+ * would be a website build, and the website is not part of the typia / bun
+ * smoke flow. Full mode packs everything (release).
+ */
+const CURRENT_PACKAGES = [
+  "ttsc",
+  "banner",
+  "lint",
+  "paths",
+  "strip",
+  "unplugin",
+];
 
 const root = path.resolve(import.meta.dirname, "../..");
 const outputDir = import.meta.dirname;
 const platformKey = `${process.platform}-${process.arch}`;
-const targets = listTargets(path.join(root, "packages"));
 
-preparePackages();
-clearOutputDirectory();
-for (const target of targets) build(target);
+if (PRINT_PLAN) {
+  printPlan();
+} else {
+  const targets = listTargets(path.join(root, "packages"));
+  preparePackages();
+  clearOutputDirectory();
+  for (const target of targets) build(target);
+}
+
+function printPlan() {
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        full: { packages: FULL_PACKAGES, exclusions: FULL_EXCLUSIONS },
+        current: { packages: CURRENT_PACKAGES },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
 
 function preparePackages() {
   const script = CURRENT_ONLY ? "build:current" : "build";
@@ -113,21 +192,7 @@ function listTargets(baseDir: string) {
       `Unsupported current-only platform: no packages/ttsc-${platformKey} directory`,
     );
   }
-  // In current-only mode `@ttsc/wasm` is intentionally skipped — its only
-  // PR-CI consumer would be a website build, and the website is not part of
-  // the typia / bun smoke flow. Full mode packs everything (release).
-  const corePackages = CURRENT_ONLY
-    ? ["ttsc", "banner", "lint", "paths", "strip", "unplugin"]
-    : [
-        "ttsc",
-        "banner",
-        "lint",
-        "paths",
-        "strip",
-        "unplugin",
-        "vscode",
-        "wasm",
-      ];
+  const corePackages = CURRENT_ONLY ? CURRENT_PACKAGES : FULL_PACKAGES;
   const names = [...corePackages, ...selectedPlatforms];
   return names.map((name) => {
     const dir = path.join(baseDir, name);
