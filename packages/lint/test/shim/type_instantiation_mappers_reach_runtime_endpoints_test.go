@@ -4,15 +4,17 @@ import (
   "path/filepath"
   "testing"
 
+  shimast "github.com/microsoft/typescript-go/shim/ast"
   shimchecker "github.com/microsoft/typescript-go/shim/checker"
 )
 
-// TestTypeInstantiationMappersReachRuntimeEndpoints is a shim-completeness
-// probe, not a lint test: it runs a real Checker over a ttsc-owned fixture and
-// asserts the newly exposed type-instantiation surface
+// Verifies type-instantiation mappers reach real checker endpoints at runtime.
+//
+// This is a shim-completeness probe, not a lint test: it runs a real Checker
+// over a ttsc-owned fixture and asserts the newly exposed instantiation surface
 // (Checker_instantiateType, Checker_newSimpleTypeMapper,
-// Checker_combineTypeMappers) actually substitutes a generic class's type
-// parameters at runtime.
+// Checker_combineTypeMappers) substitutes a generic class's constructor
+// parameter types at runtime.
 //
 // The closure auditor (tools/shim_audit) and the compile-time guards can only
 // see whether a symbol is NAMEABLE or whether a composition COMPILES — never
@@ -25,11 +27,11 @@ import (
 //
 //  1. Compile a fixture with a generic class `Box<T>` and a reference
 //     `Box<string>`.
-//  2. Obtain the construct signature's type parameter and the reference's type
-//     argument through the exposed shim surface.
-//  3. Build a simple mapper, instantiate the constructor's return type, and
-//     assert the type parameter is substituted for the concrete argument.
-//  4. Combine two mappers and assert the merged mapper substitutes both pairs.
+//  2. Obtain the declaration's type parameters and the reference's concrete
+//     arguments through the exposed shim surface.
+//  3. Build a simple mapper and assert `T[]` becomes `string[]`.
+//  4. Compose two mappers and assert `[A, B]` becomes `[number, boolean]`.
+//  5. Assert the wrappers' nil-input boundaries preserve upstream behavior.
 func TestTypeInstantiationMappersReachRuntimeEndpoints(t *testing.T) {
   root := t.TempDir()
   writeFile(t, filepath.Join(root, "tsconfig.json"), `{
@@ -44,11 +46,10 @@ func TestTypeInstantiationMappersReachRuntimeEndpoints(t *testing.T) {
 }
 `)
   writeFile(t, filepath.Join(root, "src", "main.ts"), `export class Box<T> {
-  value!: T;
+  constructor(value: T[]) { void value; }
 }
 export class Pair<A, B> {
-  first!: A;
-  second!: B;
+  constructor(value: [A, B]) { void value; }
 }
 export class Holder {
   box!: Box<string>;
@@ -75,7 +76,8 @@ export class Holder {
   // Construct signatures live on the static (constructor) side of the class
   // symbol, so obtain them through getTypeOfSymbol, matching the existing
   // signature-introspection probe.
-  boxType := shimchecker.Checker_getTypeOfSymbol(prog.checker, classSymbol(t, prog, "Box"))
+  boxSymbol := classSymbol(t, prog, "Box")
+  boxType := shimchecker.Checker_getTypeOfSymbol(prog.checker, boxSymbol)
   if boxType == nil {
     t.Fatal("Checker_getTypeOfSymbol returned nil for the Box class symbol")
   }
@@ -83,7 +85,7 @@ export class Holder {
   if len(boxCtor) != 1 {
     t.Fatalf("Box construct signatures = %d, want 1", len(boxCtor))
   }
-  boxParams := boxCtor[0].TypeParameters()
+  boxParams := declaredClassTypeParameters(t, prog.checker, boxSymbol)
   if len(boxParams) != 1 {
     t.Fatalf("Box type parameters = %d, want 1", len(boxParams))
   }
@@ -106,23 +108,27 @@ export class Holder {
     t.Fatalf("simple mapper kind = %v, want TypeMapperKindSimple", mapper.Kind())
   }
 
-  // Instantiate the constructor's return type (Box<T>) and assert T -> string.
-  boxCtorReturn := shimchecker.Checker_getReturnTypeOfSignature(prog.checker, boxCtor[0])
-  instantiated := shimchecker.Checker_instantiateType(prog.checker, boxCtorReturn, mapper)
+  boxCtorParams := shimchecker.Signature_parameters(boxCtor[0])
+  if len(boxCtorParams) != 1 {
+    t.Fatalf("Box constructor parameters = %d, want 1", len(boxCtorParams))
+  }
+  boxCtorParamType := shimchecker.Checker_getTypeOfSymbol(prog.checker, boxCtorParams[0])
+  instantiated := shimchecker.Checker_instantiateType(prog.checker, boxCtorParamType, mapper)
   if instantiated == nil {
     t.Fatal("Checker_instantiateType returned nil for a valid mapper")
   }
-  if got := prog.checker.TypeToString(instantiated); got != "Box<string>" {
-    t.Fatalf("instantiated Box<T> = %q, want %q", got, "Box<string>")
+  if got := prog.checker.TypeToString(instantiated); got != "string[]" {
+    t.Fatalf("instantiated T[] = %q, want %q", got, "string[]")
   }
 
   // --- Combined mapper: Pair<A, B> instantiated with number and boolean ---
-  pairType := shimchecker.Checker_getTypeOfSymbol(prog.checker, classSymbol(t, prog, "Pair"))
+  pairSymbol := classSymbol(t, prog, "Pair")
+  pairType := shimchecker.Checker_getTypeOfSymbol(prog.checker, pairSymbol)
   pairCtor := shimchecker.Checker_getSignaturesOfType(prog.checker, pairType, shimchecker.SignatureKindConstruct)
   if len(pairCtor) != 1 {
     t.Fatalf("Pair construct signatures = %d, want 1", len(pairCtor))
   }
-  pairParams := pairCtor[0].TypeParameters()
+  pairParams := declaredClassTypeParameters(t, prog.checker, pairSymbol)
   if len(pairParams) != 2 {
     t.Fatalf("Pair type parameters = %d, want 2", len(pairParams))
   }
@@ -134,20 +140,78 @@ export class Holder {
 
   m1 := shimchecker.Checker_newSimpleTypeMapper(pairParams[0], pairArgs[0])
   m2 := shimchecker.Checker_newSimpleTypeMapper(pairParams[1], pairArgs[1])
-  merged := shimchecker.Checker_combineTypeMappers(prog.checker, m1, m2)
-  if merged == nil {
+  composed := shimchecker.Checker_combineTypeMappers(prog.checker, m1, m2)
+  if composed == nil {
     t.Fatal("Checker_combineTypeMappers returned nil for two valid mappers")
   }
   // combineTypeMappers builds a CompositeTypeMapper, whose Kind() reports
   // TypeMapperKindUnknown; the observable contract is that it substitutes both
   // pairs, which the instantiation below asserts.
 
-  pairCtorReturn := shimchecker.Checker_getReturnTypeOfSignature(prog.checker, pairCtor[0])
-  instantiatedPair := shimchecker.Checker_instantiateType(prog.checker, pairCtorReturn, merged)
+  pairCtorParams := shimchecker.Signature_parameters(pairCtor[0])
+  if len(pairCtorParams) != 1 {
+    t.Fatalf("Pair constructor parameters = %d, want 1", len(pairCtorParams))
+  }
+  pairCtorParamType := shimchecker.Checker_getTypeOfSymbol(prog.checker, pairCtorParams[0])
+  instantiatedPair := shimchecker.Checker_instantiateType(prog.checker, pairCtorParamType, composed)
   if instantiatedPair == nil {
-    t.Fatal("Checker_instantiateType returned nil for the merged mapper")
+    t.Fatal("Checker_instantiateType returned nil for the composed mapper")
   }
-  if got := prog.checker.TypeToString(instantiatedPair); got != "Pair<number, boolean>" {
-    t.Fatalf("instantiated Pair<A, B> = %q, want %q", got, "Pair<number, boolean>")
+  if got := prog.checker.TypeToString(instantiatedPair); got != "[number, boolean]" {
+    t.Fatalf("instantiated [A, B] = %q, want %q", got, "[number, boolean]")
   }
+
+  if got := shimchecker.Checker_instantiateType(prog.checker, boxCtorParamType, nil); got != boxCtorParamType {
+    t.Fatal("Checker_instantiateType with a nil mapper did not preserve the original type")
+  }
+  if got := shimchecker.Checker_combineTypeMappers(nil, nil, mapper); got != mapper {
+    t.Fatal("Checker_combineTypeMappers with a nil first mapper did not return the second mapper")
+  }
+  if got := shimchecker.Checker_combineTypeMappers(nil, mapper, m2); got != nil {
+    t.Fatal("Checker_combineTypeMappers composed two mappers without a checker")
+  }
+  if got := shimchecker.Checker_combineTypeMappers(prog.checker, mapper, nil); got != nil {
+    t.Fatal("Checker_combineTypeMappers accepted a nil second mapper")
+  }
+  if got := shimchecker.Checker_newSimpleTypeMapper(nil, boxArgs[0]); got != nil {
+    t.Fatal("Checker_newSimpleTypeMapper accepted a nil source")
+  }
+  if got := shimchecker.Checker_newSimpleTypeMapper(boxParams[0], nil); got != nil {
+    t.Fatal("Checker_newSimpleTypeMapper accepted a nil target")
+  }
+  if got := shimchecker.Checker_instantiateType(nil, boxCtorParamType, mapper); got != nil {
+    t.Fatal("Checker_instantiateType accepted a nil checker")
+  }
+  if got := shimchecker.Checker_instantiateType(prog.checker, nil, mapper); got != nil {
+    t.Fatal("Checker_instantiateType accepted a nil type")
+  }
+}
+
+func declaredClassTypeParameters(
+  t *testing.T,
+  checker *shimchecker.Checker,
+  symbol *shimast.Symbol,
+) []*shimchecker.Type {
+  t.Helper()
+  for _, declaration := range symbol.Declarations {
+    if declaration == nil ||
+      (declaration.Kind != shimast.KindClassDeclaration && declaration.Kind != shimast.KindClassExpression) {
+      continue
+    }
+    nodes := declaration.TypeParameters()
+    result := make([]*shimchecker.Type, 0, len(nodes))
+    for _, node := range nodes {
+      if node == nil {
+        continue
+      }
+      typ := checker.GetTypeAtLocation(node)
+      if typ == nil {
+        t.Fatalf("GetTypeAtLocation returned nil for a type parameter of %s", symbol.Name)
+      }
+      result = append(result, typ)
+    }
+    return result
+  }
+  t.Fatalf("class declaration for %q not found", symbol.Name)
+  return nil
 }

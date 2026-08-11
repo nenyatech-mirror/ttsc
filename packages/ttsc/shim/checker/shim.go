@@ -637,11 +637,16 @@ func Checker_newSimpleTypeMapper(source *innerchecker.Type, target *innerchecker
 //go:linkname checkerCombineTypeMappers github.com/microsoft/typescript-go/internal/checker.(*Checker).combineTypeMappers
 func checkerCombineTypeMappers(recv *innerchecker.Checker, m1 *innerchecker.TypeMapper, m2 *innerchecker.TypeMapper) *innerchecker.TypeMapper
 
-// Checker_combineTypeMappers merges two type mappers into one, so a plugin can
-// build a multi-pair mapper for instantiating a generic class's constructor
-// type with several type arguments. Returns m2 when m1 is nil.
+// Checker_combineTypeMappers composes two type mappers, so a plugin can build a
+// mapper for instantiating a generic class's constructor type with several type
+// arguments. Returns m2 when m1 is nil, including when recv is nil. Returns nil
+// when m1 is non-nil and recv or m2 is nil, because both are required to build
+// a usable composite mapper.
 func Checker_combineTypeMappers(recv *innerchecker.Checker, m1 *innerchecker.TypeMapper, m2 *innerchecker.TypeMapper) *innerchecker.TypeMapper {
-  if recv == nil {
+  if m1 == nil {
+    return m2
+  }
+  if recv == nil || m2 == nil {
     return nil
   }
   return checkerCombineTypeMappers(recv, m1, m2)
