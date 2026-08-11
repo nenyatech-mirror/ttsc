@@ -19,9 +19,10 @@ import (
 //
 // Interface, type-literal, and class members do not take the statement
 // path. Both directions route through member-specific code
-// (stripMemberSemicolon, insertMemberSemicolon) that keys on the written
-// line structure rather than on the member kind, because Prettier prints
-// a member's `;` only where that member list broke.
+// (stripMemberSemicolon, insertMemberSemicolon) that reads the written
+// line structure and the list's own wrap rather than the member kind,
+// because Prettier prints a member's `;` between two members in either
+// layout and after the last one only where the list breaks.
 //
 // One consequence is worth stating rather than leaving to be inferred: a
 // type member of a body still written on one line is never terminated, so
