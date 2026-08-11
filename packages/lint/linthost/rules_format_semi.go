@@ -2,6 +2,7 @@ package linthost
 
 import (
   shimast "github.com/microsoft/typescript-go/shim/ast"
+  shimscanner "github.com/microsoft/typescript-go/shim/scanner"
 )
 
 // formatSemi controls trailing-semicolon style on ASI statements.
@@ -418,15 +419,24 @@ func memberSemicolonRedundant(src string, after int, isClassField bool) bool {
   return true
 }
 
-// insertMemberSemicolon appends the terminator Prettier prints after an
+// insertMemberSemicolon appends the `;` Prettier prints after an
 // interface, type-literal, or class member that ends its physical line.
 //
-// Prettier emits the member separator inside an `ifBreak`: a member list
-// laid out across lines terminates every member, its last one included,
-// while a list still written on one line separates its members with `;`
-// and leaves the last one bare (`type T = { a: number }` is Prettier's
-// own output for that input). Read off the source, that condition is
-// "the next significant byte sits on a later line".
+// A member's `;` plays two roles in Prettier's object printer, and the
+// insert answers them separately:
+//
+//   - BETWEEN two members it is a separator, printed in both layouts. So
+//     a member with another member below it takes the `;` whether or not
+//     the list ends up broken.
+//   - AFTER the last member it is a trailing terminator, printed inside
+//     an `ifBreak` and therefore only when the list breaks. That is why
+//     `type T = { a: number }` is Prettier's own output for that input,
+//     and why memberListBreaks decides this case rather than the line
+//     structure at the member itself.
+//
+// Both roles need the member to end its line: a `;` the author did not
+// write between two same-line members is one Prettier would print only
+// after inserting the line break this rule never inserts.
 //
 // memberSemicolonRedundant reads the same oracle rule from the other end,
 // which is why the two are complementary rather than opposite: a `;`
@@ -434,21 +444,14 @@ func memberSemicolonRedundant(src string, after int, isClassField bool) bool {
 // trailing separator at all, so the strip drops it and this never adds
 // one back.
 //
-// Keying on the written line structure is also what reproduces Prettier's
-// object-wrap preservation without a second layout model. An interface
-// body always breaks, so once format/indent has broken it out this asks
-// for the terminator on the next cascade pass; an inline type literal,
-// which no pass breaks, never reaches the condition and keeps the shape
-// its author wrote.
-//
 // The edit is a zero-width insertion at the member's End(), so it stays
 // disjoint from the format/statement-split, format/indent, and
 // format/print-width edits that may land on the same lines; the applier
 // keeps one finding per contested range, so an overlap would cost a whole
-// cascade pass. It cannot change the parse either: the
-// parser already ended the member at that offset (parseTypeMemberSemicolon
-// runs before finishNode), so the inserted `;` only spells out a boundary
-// the parse had already made.
+// cascade pass. It cannot change the parse either: the parser already
+// ended the member at that offset (parseTypeMemberSemicolon runs before
+// finishNode), so the inserted `;` only spells out a boundary the parse
+// had already made.
 //
 // Idempotent: a re-parse folds the inserted `;` into the member's range,
 // so the next pass reads it at End()-1 and abstains.
@@ -468,7 +471,19 @@ func insertMemberSemicolon(ctx *Context, src string, node *shimast.Node, end int
     // here would emit `a: number,;`.
     return
   }
-  if !memberEndsItsLine(src, end) {
+  // Trivia is crossed with scanPastTrivia, so a trailing line comment and
+  // a block comment carrying a line terminator both count as the break
+  // ECMA-262 says they are, and both member scanners keep one notion of
+  // "a line was crossed". Reaching end of input means the body has no
+  // closing `}`; that source is too broken to reason about, so abstain.
+  next, sawNewline := scanPastTrivia(src, end)
+  if next >= len(src) || !sawNewline {
+    return
+  }
+  // The list's `}` is the only thing that can follow the last member, so
+  // this is the trailing-terminator case and the list has to be one
+  // Prettier breaks.
+  if src[next] == '}' && !memberListBreaks(src, node.Parent) {
     return
   }
   // Anchored on the member's last character for the same reason the
@@ -515,20 +530,42 @@ func memberTakesSemicolonTerminator(node *shimast.Node) bool {
   return false
 }
 
-// memberEndsItsLine reports whether the next significant byte after a
-// member ending at `end` sits on a later physical line, i.e. the member
-// list is written broken at this boundary. Trivia is crossed with
-// scanPastTrivia, so a trailing line comment and a block comment carrying
-// a line terminator both count as the break ECMA-262 says they are, and
-// both scanners keep one notion of "a line was crossed".
+// memberListBreaks reports whether Prettier lays `parent`'s member list
+// out across lines. Only the last member has to ask: its `;` is the
+// trailing terminator Prettier prints inside an `ifBreak`, while the `;`
+// between two members is printed in either layout.
 //
-// Reaching end of input means the body has no closing `}`. That source is
-// too broken to reason about, so abstain.
-func memberEndsItsLine(src string, end int) bool {
-  next, sawNewline := scanPastTrivia(src, end)
-  if next >= len(src) {
+// The caller has already narrowed `parent` to the four `;`-separated
+// owners. Three of them are an interface body or a class body, which
+// always break once they hold a member, so the source's own line structure
+// does not enter into it.
+//
+// An object type is the exception: it preserves the author's wrap
+// (Prettier's `objectWrap: "preserve"`), breaking when a line terminator
+// separates its `{` from the first member and otherwise staying on one
+// line however the source placed the closing `}`. Prettier 3.8.3 returns
+// `type T = { a: number\n};` as the one-line `type T = { a: number };`,
+// with nothing after `number`, so reading where the `}` landed would
+// insert a `;` the oracle never prints.
+//
+// The width half of Prettier's break decision (a flat list that overflows
+// its budget breaks) is deliberately absent: no ttsc pass reflows an
+// object type, so a flat one stays flat and a trailing terminator would be
+// one this formatter's own output never justifies. A pass that ever breaks
+// them writes the line terminator this reads.
+func memberListBreaks(src string, parent *shimast.Node) bool {
+  if parent == nil {
     return false
   }
+  if parent.Kind != shimast.KindTypeLiteral {
+    return true
+  }
+  open := shimscanner.SkipTrivia(src, parent.Pos())
+  if open < 0 || open >= len(src) || src[open] != '{' {
+    // Not the shape this reads. Keep the author's bytes.
+    return false
+  }
+  _, sawNewline := scanPastTrivia(src, open+1)
   return sawNewline
 }
 
