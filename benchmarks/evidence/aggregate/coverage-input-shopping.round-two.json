@@ -3,18 +3,19 @@
   "subject": "shopping",
   "arm": "plain",
   "runId": "d8a3e4a6-f559-4148-8199-749581292fd0",
-  "state": "partial",
+  "state": "counted, with two edges withheld",
   "method": {
-    "read": "The completed Plain workspace, read-only. No requirement identifier appears anywhere in it, so every reach is decided by one artifact naming another.",
-    "counted": "The same edges counted for todo and reddit, by the same scripts.",
-    "uncounted": "The six requirement-rooted edges, and `modelToDto`, whose two derivations disagree."
+    "read": "The completed Plain workspace, read-only. No requirement identifier appears anywhere in it, so every reach is decided by an artifact carrying an obligation, never by a tag.",
+    "requirementRooted": "Each of the six was counted twice and the lower rate kept. The broad pass called an anchor eligible if satisfying it depends on that artifact kind at all, over all 427 anchors; the narrow pass only when the anchor names that artifact kind's own obligation.",
+    "populations": "427 requirement anchors, being 73 `##` and 354 `###` headings across the five frozen documents — the largest corpus in the cohort."
   },
   "populations": {
-    "accessors": 114,
-    "hooks": 39,
-    "screens": 25,
+    "requirementAnchors": 427,
     "models": 29,
     "scalarColumns": 231,
+    "accessors": 114,
+    "hooks": 39,
+    "screens": 27,
     "backendTestFunctions": 12,
     "journeyCases": 7
   },
@@ -23,32 +24,60 @@
       "model": "gpt-5.6-luna",
       "subject": "shopping",
       "edges": {
-        "requirementToModel": null,
-        "requirementToOperation": null,
-        "requirementToDto": null,
-        "requirementToTest": null,
-        "requirementToScreen": null,
-        "requirementToJourney": null,
+        "requirementToModel": { "eligible": 310, "reached": 310 },
+        "requirementToOperation": { "eligible": 427, "reached": 426 },
+        "requirementToDto": { "eligible": 215, "reached": 212 },
+        "requirementToTest": { "eligible": 354, "reached": 240 },
+        "requirementToScreen": { "eligible": 427, "reached": 416 },
+        "requirementToJourney": { "eligible": 427, "reached": 59 },
         "modelToOperation": { "eligible": 29, "reached": 29 },
-        "modelToDto": null,
+        "modelToDto": { "eligible": 29, "reached": 28 },
         "accessorToTest": { "eligible": 114, "reached": 113 },
         "accessorToHook": { "eligible": 114, "reached": 114 },
-        "hookToScreen": { "eligible": 39, "reached": 25 },
-        "screenToJourney": { "eligible": 25, "reached": 13 },
-        "columnToProperty": { "eligible": 231, "reached": 67 }
+        "hookToScreen": { "eligible": 39, "reached": 38 },
+        "screenToJourney": null,
+        "columnToProperty": null
       }
     }
   ],
-  "readWithTheEdge": {
-    "accessorToTest": "113 of 114 accessors are named inside a test, and the whole suite is twelve exported test functions across four files. The edge asks whether an accessor is reached, and it is; what twelve functions can prove about a hundred and fourteen operations is the question its review verdicts answer, and all fifteen of them failed.",
-    "screenToJourney": "Thirteen of twenty-five screens are walked by one of the seven journey cases. This is the widest screen population in the cohort and the smallest fraction of it driven.",
-    "columnToProperty": "Sixty-seven of two hundred and thirty-one scalar columns reach a published property."
-  },
-  "disagreements": {
-    "modelToDto": {
-      "reading": null,
-      "nameStem": { "eligible": 29, "reached": 17 },
-      "why": "The name-stem rule reports twelve models unreached, and the reading that would settle each of them has not been done for this subject. For todo and reddit the same rule undercounted, because a workspace publishes a session as an authorization and a recovery proof as a recovery request. One derivation alone is not a measurement here, so nothing is published for this edge yet."
+  "withheld": {
+    "columnToProperty": {
+      "reading": { "eligible": 231, "reached": 142 },
+      "script": { "eligible": 231, "reached": 67 },
+      "why": "The two derivations differ by seventy-five columns. The reading credits a column when its value arrives on the published surface, allowing an obvious rename or a denormalized copy — `login_state` as `state`, a wishlist's `created_at` as `savedAt`, a session's `customer_id` through an authorization's actor id. The script credits only a name equal under snake or camel spelling. The same two derivations agreed exactly on todo and reddit, so the gap is this subject's shape rather than either rule being wrong, and neither figure is published until it is understood."
+    },
+    "screenToJourney": {
+      "reading": { "eligible": 27, "reached": 21 },
+      "script": { "eligible": 25, "reached": 13 },
+      "why": "The populations differ because the reading counts distinct exported page components while the script counts files, and two files here hold eight and five page components between them. The numerators differ by eight, which the population difference does not explain. Six of the reading's unreached members are unrouted duplicate components — AdminPage, and CartPage, OrderPage, AddressesPage, SellerProductsPage, SellerApplicationsPage — that App.tsx never routes, which is a finding in itself. Neither figure is published until the numerators are reconciled."
     }
+  },
+  "unreached": {
+    "requirementToOperation": [
+      "REQ-ADMIN-GOVERNANCE-POLICIES-5: the initial super administrator is provisioned by a setup wizard in the backend, not by any published operation"
+    ],
+    "requirementToDto": [
+      "REQ-INVENTORY-DOMAIN-5, REQ-INVENTORY-FUNCTIONS-3, and REQ-SELLER-ACCOUNT-FUNCTIONS-3: their response rows are declared as anonymous inline types on the controller rather than in the published structures"
+    ],
+    "requirementToTest": [
+      "114 of 354. Whole families are unproven: the order lifecycle, wishlist and cart domains, shipment and review domains, and sixty-two of the business-rule anchors. The suite is twelve exported test functions across four files, carrying 78 concrete outcome assertions and 16 refusal checks"
+    ],
+    "requirementToScreen": [
+      "11 of 427, including both session-continuation anchors, which live in a lib module and App.tsx rather than in any component"
+    ],
+    "requirementToJourney": [
+      "368 of 427. The seven cases reach registration, login, logout, session restore, profile and address management, the administrator application, the seller desk, and a set of empty-state renders. Nothing in checkout, payment, shipping, delivery, cancellation, refund, review publication, category curation, inventory, variants, images, wishlist mutation, bans, or grades is walked; all fifteen non-functional anchors and all but four of the hundred and eleven business-rule anchors are unreached"
+    ],
+    "modelToDto": [
+      "shopping_checkout_holds: nothing published carries a hold"
+    ],
+    "accessorToTest": ["adminReviewSnapshots"],
+    "hookToScreen": ["useAdminOrder, defined and called nowhere"]
+  },
+  "unsettled": {
+    "accessorToHook": "114/114 rests on one aggregator, `useShoppingOperations`, which binds every accessor as a deferred closure; only 38 accessors also have a dedicated query hook. If a call had to be an immediate invocation the figure would be 38/114. The bind was counted as a call.",
+    "accessorToTest": "The edge counts naming, not proof, which is its definition — and it is why this reads 113/114 while requirementToTest reads 240/354.",
+    "modelToDto": "shopping_payment_transactions is the borderline call: its payment rows reach an order's payment input type, its refund rows reach no published type. It was counted reached.",
+    "narrowDenominators": "For model, operation, DTO, and screen the narrow pass judged eligibility by section rather than by anchor. Only the test edge's narrow denominator, all 354 `###` anchors, is exact. Two of those four kept the broad pass anyway."
   }
 }
