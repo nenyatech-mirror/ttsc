@@ -5,19 +5,25 @@
 // tsgo's Program.Emit has no hook to inject a custom transformer, so ttsc's
 // driver assembles the per-file emit pipeline by hand (see GetSourceFilesToEmit
 // / GetScriptTransformers / GetOutputPathsFor). That hand-assembly must also
-// reproduce the two steps the emitter would otherwise run: building the
-// printer's options from the compiler options, and the source-map branch a bare
-// printer.Write with a nil generator drops entirely. This file ports
+// reproduce every step the emitter would otherwise run: building the printer's
+// options from the compiler options, the source-map branch a bare printer.Write
+// with a nil generator drops entirely, the `emitBOM` byte-order mark, and the
+// `WriteFileData` the emitter hands its writeFile callback. This file ports
 // internal/compiler/emitter.go's `emitJSFile` PrinterOptions construction and
-// its `printSourceFile` source-map branch so a build that goes through a plugin
+// the whole of its `printSourceFile` so a build that goes through a plugin
 // transform honors the same compiler options — and produces the same map (and
-// `//# sourceMappingURL=` trailer) — a plain build does.
+// `//# sourceMappingURL=` trailer, and the same first bytes) — a plain build
+// does.
 //
 // Keep it in sync with that emitter source when the pin is bumped. Anything
 // `emitJSFile` sets and this file omits takes the Go zero value, which silently
-// turns the option off for every project that emits through a plugin transform.
+// turns the option off for every project that emits through a plugin transform,
+// and anything `printSourceFile` does around the printer that this file omits
+// is missing from the plugin lane's output even when the option set matches.
 // `printer_options_field_set_matches_pinned_emitter_test.go` fails when the pin
-// changes the PrinterOptions field set, and
+// changes the PrinterOptions field set,
+// `write_file_data_field_set_matches_pinned_emitter_test.go` fails when it
+// changes the WriteFileData field set, and
 // `emit_plugin_transform_matches_plain_emit_for_printer_options_test.go` fails
 // when a forwarded option stops matching the plain emit.
 package compiler
@@ -34,13 +40,26 @@ import (
 
 // PrintedFile is the rendered output of one source file in the plugin-transform
 // emit path. JS is the JavaScript text, already carrying a trailing
-// `//# sourceMappingURL=` comment when a map was produced. MapText/MapPath are
-// the external source-map file and its path; both are empty when no external map
-// is written (source maps disabled, or an inline map encoded into the JS).
+// `//# sourceMappingURL=` comment when a map was produced and a leading UTF-8
+// byte order mark when `emitBOM` is on. MapText/MapPath are the external
+// source-map file and its path; both are empty when no external map is written
+// (source maps disabled, or an inline map encoded into the JS).
 type PrintedFile struct {
   JS      string
   MapText string
   MapPath string
+  // SourceMapUrlPos is the offset of the `//# sourceMappingURL=` trailer in JS,
+  // or -1 when no trailer was written — the value tsgo's emitter reports as
+  // WriteFileData.SourceMapUrlPos so a caller can locate and rewrite the
+  // trailer without re-scanning the text. Like the emitter's, it is the printer
+  // writer's text position, taken BEFORE the `emitBOM` mark is prepended, so a
+  // BOM build's offset is three bytes short of the trailer's position in the
+  // written file. That is the pinned emitter's own behavior
+  // (internal/compiler/emitter.go::printSourceFile computes sourceMapUrlPos
+  // from the writer and only then calls AddUTF8ByteOrderMark), and this lane
+  // exists to match it: "correcting" the offset here would make a plugin build
+  // disagree with the plain build of the same project.
+  SourceMapUrlPos int
 }
 
 // PrintFileWithSourceMap renders sourceFile through a printer built from options
@@ -51,9 +70,13 @@ type PrintedFile struct {
 // `inlineSourceMap`, `inlineSources`, and `target`. When
 // `sourceMap`/`inlineSourceMap` is enabled (and the file is not JSON) it builds a
 // sourcemap.Generator, feeds it to the printer so positions are recorded,
-// appends the sourceMappingURL trailer, and returns the external map text/path
-// (or encodes the map inline). host supplies the same directory/casing context
-// tsgo's emitter reads.
+// appends the sourceMappingURL trailer, records its offset, and returns the
+// external map text/path (or encodes the map inline). `emitBOM` prepends the
+// UTF-8 byte order mark to the JavaScript afterwards, exactly where
+// printSourceFile does it — outside PrinterOptions, which is why forwarding the
+// whole options struct never reached it. The external map is written without a
+// mark, matching the emitter's own `writeText(sourceMapFilePath, ..., nil)`.
+// host supplies the same directory/casing context tsgo's emitter reads.
 func PrintFileWithSourceMap(
   emitContext *innerprinter.EmitContext,
   node *innerast.Node,
@@ -92,7 +115,7 @@ func PrintFileWithSourceMap(
 
   printer.Write(node, sourceFile, writer, generator)
 
-  result := PrintedFile{}
+  result := PrintedFile{SourceMapUrlPos: -1}
   if generator != nil {
     url := sourceMappingURL(options, generator, host, jsFilePath, sourceMapFilePath, sourceFile)
     if len(url) > 0 {
@@ -103,6 +126,7 @@ func PrintFileWithSourceMap(
           writer.RawWrite("\n")
         }
       }
+      result.SourceMapUrlPos = writer.GetTextPos()
       writer.WriteComment("//# sourceMappingURL=")
       writer.WriteComment(url)
     }
@@ -114,6 +138,9 @@ func PrintFileWithSourceMap(
     writer.WriteLine()
   }
   result.JS = writer.String()
+  if options.EmitBOM.IsTrue() {
+    result.JS = innerstringutil.AddUTF8ByteOrderMark(result.JS)
+  }
   return result
 }
 

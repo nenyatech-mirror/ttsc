@@ -30,9 +30,10 @@ export interface ITtscLintFormat {
   severity?: TtscLintSeverity;
 
   /**
-   * Insert trailing semicolons on ASI-terminated statements. Mirrors Prettier's
-   * `semi`. `false` flips the rule to require _no_ trailing semicolon (rare;
-   * matches prettier's `semi: false`).
+   * Insert trailing semicolons on ASI-terminated statements, and on the
+   * interface, type-literal, and class members that carry no body. Mirrors
+   * Prettier's `semi`. `false` flips the rule to require _no_ trailing
+   * semicolon (rare; matches prettier's `semi: false`).
    *
    * @default true
    */

@@ -33,7 +33,7 @@ func TestJSONConfigLoader(t *testing.T) {
   }
 
   // Dispatcher routes .json to the JSON loader.
-  raw, err = bannerLoadBannerConfigFile(objectConfig)
+  raw, err = bannerLoadBannerConfigFile(objectConfig, root)
   if err != nil {
     t.Fatal(err)
   }

@@ -82,6 +82,13 @@ func TestFormatPrettierConformance(t *testing.T) {
     {"format/quotes", "single-quote", "const value = \"text\";\n", map[string]any{"singleQuote": true}, false},
     {"format/quotes", "double-quote", "const value = 'text';\n", nil, false},
     {"format/semi", "all-asi-terminators", "import value from \"value\"\nimport required = require(\"required\")\nexport * from \"all\"\nexport = value\nlet count = 1\ntype Count = number\nclass Value {\n  field = 1;\n  get value(): number {\n    return this.field;\n  }\n  set value(next: number) {\n    this.field = next;\n  }\n}\ninterface Shape {\n  value: string;\n  method(): void;\n  [key: string]: string;\n  (): void;\n  new (): Shape;\n}\nJSON.stringify(count)\nfunction loop() {\n  do {} while (false)\n  for (;;) {\n    break\n  }\n  for (;;) {\n    continue\n  }\n  return 1\n  throw 1\n}\ndebugger\n", nil, false},
+    // Every member spelling of a body written across lines, measured
+    // against the oracle rather than assumed symmetric with its siblings:
+    // the seven type-member kinds and a class index signature and ambient
+    // accessor take the terminator, while the inline object type, the
+    // braced class accessor, and the comma-separated object-literal
+    // accessor must come back untouched.
+    {"format/semi", "broken-member-terminators", "interface Shape {\n  value: string\n  method(): void\n  [key: string]: string\n  (): void\n  new (): Shape\n  get first(): string\n  set first(next: string)\n}\ntype Broken = {\n  name: string\n};\ntype Inline = { name: string };\ndeclare class Ambient {\n  get first(): string\n}\nclass Value {\n  [key: string]: string\n  get first(): string {\n    return \"first\";\n  }\n}\nconst holder = {\n  get first(): string {\n    return \"first\";\n  },\n};\n", nil, false},
     {"format/semi", "disabled", "const value = 1;\n", map[string]any{"semi": false}, false},
     {"format/sort-imports", "extension-canonical", "import { alpha, beta } from \"module\";\n", map[string]any{"sortImports": true}, true},
     {"format/statement-split", "same-line-statements", "const first = 1; const second = 2;\n", nil, false},

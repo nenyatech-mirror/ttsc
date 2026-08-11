@@ -1,14 +1,9 @@
 package driver_test
 
 import (
-  "path/filepath"
   "slices"
   "strings"
   "testing"
-
-  shimcompiler "github.com/microsoft/typescript-go/shim/compiler"
-
-  "github.com/samchon/ttsc/packages/ttsc/driver"
 )
 
 // printerOptionCase is one compiler-option setting and the observable property
@@ -22,6 +17,10 @@ type printerOptionCase struct {
   file string
   want []string
   deny []string
+  // wantPrefix is a witness the artifact must begin with, for properties that
+  // are about position rather than presence — `emitBOM`'s mark is only correct
+  // as the file's first bytes.
+  wantPrefix string
   // denyFiles are artifacts the option set must NOT produce.
   denyFiles []string
 }
@@ -42,7 +41,8 @@ export class Widget {
 
 // TestEmitPluginTransformMatchesPlainEmitForPrinterOptions verifies that the
 // plugin-transform emit lane honors every compiler option the pinned tsgo
-// emitter forwards to its printer, and emits the same bytes as a plain build.
+// emitter applies while printing a file, and emits the same bytes as a plain
+// build.
 //
 // `EmitWithPluginTransformers` hand-assembles tsgo's JavaScript emit because
 // `Program.Emit` has no transformer hook, and prints through the shim's
@@ -55,6 +55,12 @@ export class Widget {
 // `sourceMap` alone. Comparing the two lanes per field, rather than asserting
 // one lane's output in isolation, is what makes the next omission fail here: a
 // wrong-but-consistent emit cannot pass, because the plain lane is the oracle.
+//
+// `emitBOM` belongs in the same table even though it is not a `PrinterOptions`
+// field: `printSourceFile` applies it to the printed text, outside the struct,
+// which is why forwarding the whole struct never reached it and why the emitted
+// bytes are still the thing that proves it. Its witness is a prefix, not a
+// substring — a mark anywhere but first is not a byte order mark.
 //
 //  1. For each option set, materialize one project and compile it twice: once
 //     through `EmitAllRaw` (plain tsgo emit) and once through
@@ -177,6 +183,57 @@ func TestEmitPluginTransformMatchesPlainEmitForPrinterOptions(t *testing.T) {
       deny:      []string{"//# sourceMappingURL="},
       denyFiles: []string{"index.js.map"},
     },
+    {
+      name:    "emit_bom_marks_the_emitted_javascript",
+      options: `"target": "es2020", "emitBOM": true`,
+      source:  printerOptionComment,
+      file:    "index.js",
+      // The mark is the file's first bytes and nothing else moves; the authored
+      // comment still follows it, so the option cannot be faked by emitting a
+      // mark instead of the program.
+      wantPrefix: utf8BOM,
+      want:       []string{"TTSC_PRINTER_OPTIONS_COMMENT"},
+    },
+    {
+      name:    "no_emit_bom_leaves_the_javascript_unmarked",
+      options: `"target": "es2020"`,
+      source:  printerOptionComment,
+      file:    "index.js",
+      deny:    []string{utf8BOM},
+    },
+    {
+      name: "emit_bom_precedes_the_source_map_trailer",
+      // The mark is applied after the whole printed text, trailer included, so
+      // both must be present and the mark must still be first.
+      options:    `"target": "es2020", "sourceMap": true, "emitBOM": true`,
+      source:     printerOptionComment,
+      file:       "index.js",
+      wantPrefix: utf8BOM,
+      want:       []string{"//# sourceMappingURL=index.js.map"},
+    },
+    {
+      name: "emit_bom_leaves_the_external_source_map_unmarked",
+      // printSourceFile writes the map through `writeText(sourceMapFilePath,
+      // sourceMap, nil)` before the mark is applied to the JavaScript, so
+      // `emitBOM` never reaches the `.js.map` — a mark there would also make it
+      // unparseable to a strict JSON reader.
+      options: `"target": "es2020", "sourceMap": true, "emitBOM": true`,
+      source:  printerOptionComment,
+      file:    "index.js.map",
+      deny:    []string{utf8BOM},
+    },
+    {
+      name: "emit_bom_marks_the_javascript_carrying_an_inline_map",
+      // The inline map is base64 inside the JavaScript, so the mark and the map
+      // share one artifact: the boundary where applying the mark to the wrong
+      // string would corrupt the trailer.
+      options:    `"target": "es2020", "inlineSourceMap": true, "emitBOM": true`,
+      source:     printerOptionComment,
+      file:       "index.js",
+      wantPrefix: utf8BOM,
+      want:       []string{"//# sourceMappingURL=data:application/json;base64,"},
+      denyFiles:  []string{"index.js.map"},
+    },
   }
 
   for _, testCase := range cases {
@@ -194,21 +251,25 @@ func TestEmitPluginTransformMatchesPlainEmitForPrinterOptions(t *testing.T) {
 `)
       writeProjectFile(t, root, "index.ts", testCase.source)
 
-      plain := emitPrinterOptionFixture(t, root, false)
-      plugin := emitPrinterOptionFixture(t, root, true)
+      plain := emitFixtureArtifacts(t, root, false)
+      plugin := emitFixtureArtifacts(t, root, true)
 
-      text, ok := plugin[testCase.file]
+      artifact, ok := plugin[testCase.file]
       if !ok {
         t.Fatalf("plugin lane did not emit %s; got %v", testCase.file, sortedKeys(plugin))
       }
+      text := artifact.text
+      if testCase.wantPrefix != "" && !strings.HasPrefix(text, testCase.wantPrefix) {
+        t.Fatalf("plugin lane %s does not begin with %q; the option was not applied to the printed text:\n%q", testCase.file, testCase.wantPrefix, text)
+      }
       for _, want := range testCase.want {
         if !strings.Contains(text, want) {
-          t.Fatalf("plugin lane %s is missing %q; the compiler option was not forwarded to the printer:\n%s", testCase.file, want, text)
+          t.Fatalf("plugin lane %s is missing %q; the compiler option did not reach the emitted text:\n%q", testCase.file, want, text)
         }
       }
       for _, deny := range testCase.deny {
         if strings.Contains(text, deny) {
-          t.Fatalf("plugin lane %s still contains %q; the compiler option was not forwarded to the printer:\n%s", testCase.file, deny, text)
+          t.Fatalf("plugin lane %s still contains %q; the compiler option did not reach the emitted text:\n%q", testCase.file, deny, text)
         }
       }
       for _, denied := range testCase.denyFiles {
@@ -222,63 +283,11 @@ func TestEmitPluginTransformMatchesPlainEmitForPrinterOptions(t *testing.T) {
       if got, want := sortedKeys(plugin), sortedKeys(plain); !slices.Equal(got, want) {
         t.Fatalf("emitted artifact sets differ: plugin lane %v, plain lane %v", got, want)
       }
-      for name, plainText := range plain {
-        if plugin[name] != plainText {
-          t.Fatalf("plugin lane %s diverges from the plain tsgo emit\nplain:\n%s\nplugin:\n%s", name, plainText, plugin[name])
+      for name, plainArtifact := range plain {
+        if plugin[name].text != plainArtifact.text {
+          t.Fatalf("plugin lane %s diverges from the plain tsgo emit\nplain:\n%q\nplugin:\n%q", name, plainArtifact.text, plugin[name].text)
         }
       }
     })
   }
-}
-
-// emitPrinterOptionFixture compiles the project at root and returns its emitted
-// artifacts by base name, through the plain tsgo emit or through the
-// hand-assembled plugin-transform lane. Each call builds its own Program so the
-// two lanes never observe each other's per-node emit state.
-func emitPrinterOptionFixture(t *testing.T, root string, viaPluginLane bool) map[string]string {
-  t.Helper()
-  resetLinkedPluginRegistry()
-  prog, diags, err := driver.LoadProgram(root, "tsconfig.json", driver.LoadProgramOptions{ForceEmit: true})
-  if err != nil {
-    t.Fatal(err)
-  }
-  if len(diags) != 0 {
-    t.Fatalf("unexpected config diagnostics: %#v", diags)
-  }
-  defer prog.Close()
-
-  emitted := map[string]string{}
-  write := func(fileName, text string, _ *shimcompiler.WriteFileData) error {
-    emitted[filepath.Base(fileName)] = text
-    return nil
-  }
-  if viaPluginLane {
-    emitDiags, err := prog.EmitLinkedTransforms(write)
-    if err != nil {
-      t.Fatal(err)
-    }
-    if len(emitDiags) != 0 {
-      t.Fatalf("unexpected emit diagnostics: %#v", emitDiags)
-    }
-    return emitted
-  }
-  _, emitDiags, err := prog.EmitAllRaw(write)
-  if err != nil {
-    t.Fatal(err)
-  }
-  if len(emitDiags) != 0 {
-    t.Fatalf("unexpected emit diagnostics: %#v", emitDiags)
-  }
-  return emitted
-}
-
-// sortedKeys returns a map's keys in a deterministic order for comparison and
-// failure messages.
-func sortedKeys(m map[string]string) []string {
-  out := make([]string, 0, len(m))
-  for key := range m {
-    out = append(out, key)
-  }
-  slices.Sort(out)
-  return out
 }

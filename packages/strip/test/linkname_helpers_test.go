@@ -5,6 +5,9 @@
 package strip_test
 
 import (
+  "context"
+  "os/exec"
+
   shimast "github.com/microsoft/typescript-go/shim/ast"
 
   _ "github.com/samchon/ttsc/packages/strip/driver"
@@ -65,3 +68,30 @@ func stripLoaderTempBase(location, systemTemp string) string
 
 //go:linkname stripFindNearestNodeModules github.com/samchon/ttsc/packages/strip/driver.stripFindNearestNodeModules
 func stripFindNearestNodeModules(start string) string
+
+//go:linkname stripLoadStripConfigFile github.com/samchon/ttsc/packages/strip/driver.loadStripConfigFile
+func stripLoadStripConfigFile(location, resolutionRoot string) (any, error)
+
+//go:linkname stripConfigToolAnchors github.com/samchon/ttsc/packages/strip/driver.stripConfigToolAnchors
+func stripConfigToolAnchors(configPath, resolutionRoot string) []string
+
+//go:linkname stripResolveConfigTsgo github.com/samchon/ttsc/packages/strip/driver.stripResolveConfigTsgo
+func stripResolveConfigTsgo(anchors []string) string
+
+//go:linkname stripResolveTtsxLauncher github.com/samchon/ttsc/packages/strip/driver.stripResolveTtsxLauncher
+func stripResolveTtsxLauncher(anchors []string) string
+
+//go:linkname stripNodePackageManifestFrom github.com/samchon/ttsc/packages/strip/driver.stripNodePackageManifestFrom
+func stripNodePackageManifestFrom(anchor, pkg string) string
+
+//go:linkname stripNodePlatformPair github.com/samchon/ttsc/packages/strip/driver.stripNodePlatformPair
+func stripNodePlatformPair() (string, string)
+
+//go:linkname stripNodePlatformPairFor github.com/samchon/ttsc/packages/strip/driver.stripNodePlatformPairFor
+func stripNodePlatformPairFor(goos, goarch string) (string, string)
+
+//go:linkname stripRealpathIfPossible github.com/samchon/ttsc/packages/strip/driver.stripRealpathIfPossible
+func stripRealpathIfPossible(location string) string
+
+//go:linkname stripTtsxCommandContext github.com/samchon/ttsc/packages/strip/driver.stripTtsxCommandContext
+func stripTtsxCommandContext(ctx context.Context, anchors []string, args ...string) *exec.Cmd
