@@ -40,7 +40,8 @@
     "requests": 1729,
     "shortContextRequests": 1729,
     "longContextRequests": 0,
-    "longContextThresholdTokens": 272000
+    "longContextThresholdTokens": 272000,
+    "replayedUpdates": 0
   },
   "suspendedMs": 0,
   "suspensions": [],
