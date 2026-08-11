@@ -13,6 +13,10 @@ import "testing"
 // the reverse-order applier) and the `;` lands on the trimmed line, in one
 // pass and with neither edit dropped.
 //
+// The settled shape is also Prettier 3.8.3's own output for this input, so
+// the two passes together land on the oracle rather than on a merely
+// self-consistent result.
+//
 //  1. Seed an interface member padded with trailing spaces and missing its
 //     terminator.
 //  2. Run `ttsc format`.

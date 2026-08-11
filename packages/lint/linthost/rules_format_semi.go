@@ -61,11 +61,10 @@ func (formatSemi) Visits() []shimast.Kind {
     shimast.KindPropertyDeclaration,
     shimast.KindTypeAliasDeclaration,
     // Interface / type-literal members, plus the class-member spellings
-    // the accessor and index-signature kinds share. Prettier terminates
-    // a member of a body laid out across lines and leaves a one-line
-    // body's last member bare, so both directions read the written line
-    // structure; see stripMemberSemicolon and insertMemberSemicolon for
-    // the per-direction hazard rules.
+    // the accessor and index-signature kinds share. Prettier's `;` here
+    // is a separator between two members and a trailing terminator only
+    // where the list breaks; see stripMemberSemicolon and
+    // insertMemberSemicolon for the per-direction rules.
     shimast.KindPropertySignature,
     shimast.KindMethodSignature,
     shimast.KindIndexSignature,
