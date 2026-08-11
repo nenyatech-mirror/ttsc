@@ -27,6 +27,7 @@ import {
 import type { ITtscProjectInputSnapshot } from "../../structures/internal/ITtscProjectInputSnapshot";
 import type { TtscBuildOptions } from "../../structures/internal/TtscBuildOptions";
 import type { TtscSingleFileEmitOptions } from "../../structures/internal/TtscSingleFileEmitOptions";
+import { assertNoSolutionBuild } from "./assertNoSolutionBuild";
 import { getCompilerVersionText } from "./getCompilerVersionText";
 import { resolveCacheDir } from "./resolveCacheDir";
 import { resolveSingleFileOutput } from "./singleFileOutput";
@@ -441,6 +442,7 @@ function parseBuildArgs(argv: readonly string[]) {
     isPositional: looksLikeInputFile,
     subcommand: "build",
   });
+  assertNoSolutionBuild(result, "ttsc:");
   // Defaults: pinned by the previous hand-parser. `quiet` defaults true,
   // `--verbose` flips it to false; `emit` defaults `undefined` so the resolved
   // project controls ordinary build mode. `runCompatibleBuild` applies the
