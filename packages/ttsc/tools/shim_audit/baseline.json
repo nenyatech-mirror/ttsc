@@ -29,7 +29,6 @@
     "ESCAPE|checker|TupleType",
     "ESCAPE|checker|TypeFormatFlags",
     "ESCAPE|checker|TypeId",
-    "ESCAPE|checker|TypeMapper",
     "ESCAPE|checker|TypeParameter",
     "ESCAPE|checker|TypePredicate",
     "ESCAPE|checker|TypeReference",

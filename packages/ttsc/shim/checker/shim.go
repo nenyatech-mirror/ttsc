@@ -23,6 +23,7 @@ type Signature = innerchecker.Signature
 type SignatureKind = innerchecker.SignatureKind
 type Type = innerchecker.Type
 type TypeMapper = innerchecker.TypeMapper
+type TypeMapperKind = innerchecker.TypeMapperKind
 type TypeFlags = innerchecker.TypeFlags
 type ObjectFlags = innerchecker.ObjectFlags
 type ElementFlags = innerchecker.ElementFlags
@@ -216,6 +217,11 @@ func Checker_isSymbolAccessibleAsValue(recv *innerchecker.Checker, symbol *inner
 
 const (
   SignatureKindCall = innerchecker.SignatureKindCall
+
+  TypeMapperKindUnknown = innerchecker.TypeMapperKindUnknown
+  TypeMapperKindSimple  = innerchecker.TypeMapperKindSimple
+  TypeMapperKindArray   = innerchecker.TypeMapperKindArray
+  TypeMapperKindMerged  = innerchecker.TypeMapperKindMerged
 
   TypeFlagsAny             = innerchecker.TypeFlagsAny
   TypeFlagsUnknown         = innerchecker.TypeFlagsUnknown
