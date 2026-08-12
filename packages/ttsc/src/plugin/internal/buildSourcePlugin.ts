@@ -2,6 +2,7 @@ import {
   type SpawnSyncOptionsWithStringEncoding,
   type SpawnSyncReturns,
   type StdioOptions,
+  spawn,
   spawnSync,
 } from "node:child_process";
 import crypto from "node:crypto";
@@ -162,6 +163,8 @@ const GO_BUILD_CACHE_GC_MARKER_FILE = ".ttsc-gc";
 const GO_BUILD_CACHE_LEASE_DIR = ".ttsc-build-leases";
 const GO_BUILD_CACHE_MAINTENANCE_DIR = ".ttsc-maintenance";
 const GO_BUILD_CACHE_COORDINATION_STALE_MS = 60 * 60 * 1000;
+const GO_BUILD_CACHE_MAINTENANCE_STALE_MS = 60 * 1000;
+const GO_BUILD_CACHE_COORDINATION_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const GO_BUILD_CACHE_COORDINATION_HEARTBEAT_MS = 5_000;
 const GO_BUILD_CACHE_COORDINATION_POLL_MS = 25;
 // Go amortizes cache-hit mtime writes over one hour. An object used inside
@@ -216,8 +219,9 @@ export function buildSourcePlugin(opts: {
   const { dir, entry, source } = resolveSourceBuildTarget(opts);
   const overlayDirs = [...(opts.overlayDirs ?? findTtscOverlayDirs())].sort();
   const contributors = opts.contributors ?? [];
-  const goBinary = resolveGoToolForBuild(resolveGoCompiler(env), env, dir);
-  ensureExecutableGoToolchain(goBinary, !env.TTSC_GO_BINARY);
+  const compiler = resolveGoCompiler(env);
+  const goBinary = resolveGoToolForBuild(compiler.binary, env, dir);
+  ensureExecutableGoToolchain(goBinary, compiler.bundled);
   const key = computeCacheKey({
     contributors,
     dir,
@@ -258,6 +262,7 @@ export function buildSourcePlugin(opts: {
         entry,
         env,
         goBinary,
+        normalizeGoToolPermissions: compiler.bundled,
         key,
         label,
         goBuildCacheRoot: paths.goBuildRoot,
@@ -281,6 +286,7 @@ function compileSourcePlugin(opts: {
   goBinary: string;
   goBuildCacheRoot: string;
   manageGoBuildCache: boolean;
+  normalizeGoToolPermissions: boolean;
   key: string;
   label: string;
   overlayDirs: readonly string[];
@@ -330,22 +336,33 @@ function compileSourcePlugin(opts: {
     );
     const scratchBinaryName =
       process.platform === "win32" ? ".ttsc-plugin.exe" : ".ttsc-plugin";
-    withGoBuildCacheLease(opts.goBuildCacheRoot, opts.manageGoBuildCache, () =>
-      runGoBuild(
-        scratchDir,
-        opts.entry,
-        scratchBinaryName,
-        opts.pluginName,
-        opts.goBinary,
+    let attemptedGoBuild = false;
+    try {
+      withGoBuildCacheLease(
         opts.goBuildCacheRoot,
-        opts.env,
-      ),
-    );
-    if (opts.manageGoBuildCache) {
-      // The daily pre-build pass cannot see objects the build is about to add.
-      // Enforce the size policy after every actual cold build so churn cannot
-      // grow the cache unchecked behind a fresh daily marker.
-      pruneGoBuildCacheRoot(opts.goBuildCacheRoot, { force: true });
+        opts.manageGoBuildCache,
+        () => {
+          attemptedGoBuild = true;
+          runGoBuild(
+            scratchDir,
+            opts.entry,
+            scratchBinaryName,
+            opts.pluginName,
+            opts.goBinary,
+            opts.goBuildCacheRoot,
+            opts.env,
+            opts.normalizeGoToolPermissions,
+          );
+        },
+      );
+    } finally {
+      if (opts.manageGoBuildCache && attemptedGoBuild) {
+        // The daily pre-build pass cannot see objects the build is about to
+        // add, including objects left behind by a failed compile. Enforce the
+        // size policy after every actual cold-build attempt so churn cannot
+        // grow the cache unchecked behind a fresh daily marker.
+        pruneGoBuildCacheRoot(opts.goBuildCacheRoot, { force: true });
+      }
     }
     const builtBinary = path.join(scratchDir, scratchBinaryName);
     publishBuiltBinary(builtBinary, opts.binaryPath);
@@ -1767,8 +1784,9 @@ function runGoBuild(
   goBinary: string,
   goBuildCacheRoot: string,
   env: NodeJS.ProcessEnv,
+  normalizeGoToolPermissions: boolean,
 ): void {
-  ensureExecutableGoToolchain(goBinary, !env.TTSC_GO_BINARY);
+  ensureExecutableGoToolchain(goBinary, normalizeGoToolPermissions);
   const result = spawnGoTool(goBinary, ["build", "-o", binaryName, entry], {
     cwd,
     encoding: "utf8",
@@ -1942,7 +1960,7 @@ function inferGoRoot(goBinary: string): string | null {
   return fs.existsSync(path.join(goRoot, "src", "runtime")) ? goRoot : null;
 }
 
-function ensureExecutableGoToolchain(
+export function ensureExecutableGoToolchain(
   goBinary: string,
   normalizeBundledPermissions: boolean,
 ): void {
@@ -2319,14 +2337,22 @@ export function isPathWithin(child: string, parent: string): boolean {
   );
 }
 
-function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
+function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): {
+  binary: string;
+  bundled: boolean;
+} {
   const explicit = env.TTSC_GO_BINARY;
-  if (explicit && explicit.length > 0) return explicit;
+  if (explicit && explicit.length > 0) {
+    return { binary: explicit, bundled: false };
+  }
 
   try {
-    return createRequire(__filename).resolve(
-      `@ttsc/${process.platform}-${process.arch}/bin/go/bin/${process.platform === "win32" ? "go.exe" : "go"}`,
-    );
+    return {
+      binary: createRequire(__filename).resolve(
+        `@ttsc/${process.platform}-${process.arch}/bin/go/bin/${process.platform === "win32" ? "go.exe" : "go"}`,
+      ),
+      bundled: true,
+    };
   } catch {
     /* fall through */
   }
@@ -2343,7 +2369,9 @@ function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
     "bin",
     process.platform === "win32" ? "go.exe" : "go",
   );
-  if (fs.existsSync(platformPackage)) return platformPackage;
+  if (fs.existsSync(platformPackage)) {
+    return { binary: platformPackage, bundled: true };
+  }
 
   const local = path.resolve(
     __dirname,
@@ -2356,7 +2384,7 @@ function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
     "bin",
     process.platform === "win32" ? "go.exe" : "go",
   );
-  if (fs.existsSync(local)) return local;
+  if (fs.existsSync(local)) return { binary: local, bundled: true };
 
   const homeSdk = path.join(
     env.HOME ?? "",
@@ -2365,9 +2393,9 @@ function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
     "bin",
     process.platform === "win32" ? "go.exe" : "go",
   );
-  if (fs.existsSync(homeSdk)) return homeSdk;
+  if (fs.existsSync(homeSdk)) return { binary: homeSdk, bundled: false };
 
-  return "go";
+  return { binary: "go", bundled: false };
 }
 
 /**
@@ -3165,7 +3193,12 @@ export function pruneGoBuildCacheRoot(
       root,
       GO_BUILD_CACHE_MAINTENANCE_DIR,
     );
-    intent.startHeartbeat();
+    if (!intent.startHeartbeat()) {
+      // Maintenance is opportunistic. Without an independent heartbeat a
+      // synchronous scan could look abandoned while it is still deleting, so
+      // yield instead of weakening the build/maintenance exclusion.
+      return;
+    }
     if (
       collectLiveGoBuildCacheCoordinationRecords(
         root,
@@ -3196,12 +3229,7 @@ export function pruneGoBuildCacheRoot(
   } catch {
     // Go-cache GC is opportunistic; builds still proceed when it fails.
   } finally {
-    if (intent !== undefined) {
-      intent.stopHeartbeat();
-      try {
-        fs.rmSync(intent.file, { force: true });
-      } catch {}
-    }
+    intent?.finish();
   }
 }
 
@@ -3233,19 +3261,18 @@ export function withGoBuildCacheLease<T>(
       Date.now(),
     );
     if (maintenance.length === 0) {
-      lease.startHeartbeat();
       try {
+        if (!lease.startHeartbeat()) {
+          throw new Error(
+            `ttsc: unable to start Go build cache lease heartbeat at ${root}`,
+          );
+        }
         return callback();
       } finally {
-        lease.stopHeartbeat();
-        try {
-          fs.rmSync(lease.file, { force: true });
-        } catch {}
+        lease.finish();
       }
     }
-    try {
-      fs.rmSync(lease.file, { force: true });
-    } catch {}
+    lease.finish();
     if (Date.now() - started > PLUGIN_BUILD_LOCK_STEAL_MS) {
       throw new Error(
         `ttsc: timed out waiting for Go build cache maintenance at ${root}`,
@@ -3352,8 +3379,8 @@ function collectGoBuildCacheObjects(root: string): GoBuildCacheObject[] {
 
 interface GoBuildCacheCoordinationRecord {
   file: string;
-  startHeartbeat: () => void;
-  stopHeartbeat: () => void;
+  finish: () => void;
+  startHeartbeat: () => boolean;
 }
 
 function createGoBuildCacheCoordinationRecord(
@@ -3366,26 +3393,50 @@ function createGoBuildCacheCoordinationRecord(
     directory,
     `${process.pid}-${crypto.randomBytes(16).toString("hex")}.json`,
   );
-  fs.writeFileSync(
-    record,
-    `${JSON.stringify({
-      hostname: os.hostname(),
-      pid: process.pid,
-      startedAt: Date.now(),
-    })}\n`,
-    "utf8",
-  );
+  const metadata = {
+    directoryName,
+    hostname: os.hostname(),
+    pid: process.pid,
+    startedAt: Date.now(),
+  };
+  writeGoBuildCacheCoordinationRecord(record, metadata, "active");
   let heartbeat: GoBuildCacheHeartbeat | undefined;
   return {
     file: record,
-    startHeartbeat: () => {
-      heartbeat ??= startGoBuildCacheHeartbeat(record);
-    },
-    stopHeartbeat: () => {
+    finish: () => {
       heartbeat?.stop();
       heartbeat = undefined;
+      // A failed unlink must not leave a completed task looking active until
+      // its stale timeout. Persist completion first; collectors discard it.
+      try {
+        writeGoBuildCacheCoordinationRecord(record, metadata, "complete");
+      } catch {}
+      try {
+        fs.rmSync(record, { force: true });
+      } catch {}
+    },
+    startHeartbeat: () => {
+      heartbeat ??= startGoBuildCacheHeartbeat(record);
+      return heartbeat !== undefined;
     },
   };
+}
+
+function writeGoBuildCacheCoordinationRecord(
+  file: string,
+  metadata: {
+    directoryName: string;
+    hostname: string;
+    pid: number;
+    startedAt: number;
+  },
+  status: "active" | "complete",
+): void {
+  fs.writeFileSync(
+    file,
+    `${JSON.stringify({ ...metadata, status, version: 1 })}\n`,
+    "utf8",
+  );
 }
 
 interface GoBuildCacheHeartbeat {
@@ -3393,40 +3444,87 @@ interface GoBuildCacheHeartbeat {
 }
 
 /** Refresh one synchronous cache task's record from a background worker. */
-function startGoBuildCacheHeartbeat(file: string): GoBuildCacheHeartbeat {
+function startGoBuildCacheHeartbeat(
+  file: string,
+): GoBuildCacheHeartbeat | undefined {
   const control = new SharedArrayBuffer(4);
   const state = new Int32Array(control);
-  const worker = new Worker(
-    [
-      'const fs = process.getBuiltinModule("node:fs");',
-      'const { workerData } = process.getBuiltinModule("node:worker_threads");',
-      "const state = new Int32Array(workerData.control);",
-      "for (;;) {",
-      "  const result = Atomics.wait(state, 0, 0, workerData.interval);",
-      '  if (result !== "timed-out" || Atomics.load(state, 0) !== 0) break;',
-      "  try {",
-      "    const now = new Date();",
-      "    fs.utimesSync(workerData.file, now, now);",
-      "  } catch {}",
-      "}",
-    ].join("\n"),
-    {
-      eval: true,
-      workerData: {
-        control,
-        file,
-        interval: GO_BUILD_CACHE_COORDINATION_HEARTBEAT_MS,
+  try {
+    const worker = new Worker(
+      [
+        'const fs = process.getBuiltinModule("node:fs");',
+        'const { workerData } = process.getBuiltinModule("node:worker_threads");',
+        "const state = new Int32Array(workerData.control);",
+        "for (;;) {",
+        "  const result = Atomics.wait(state, 0, 0, workerData.interval);",
+        '  if (result !== "timed-out" || Atomics.load(state, 0) !== 0) break;',
+        "  try {",
+        "    const now = new Date();",
+        "    fs.utimesSync(workerData.file, now, now);",
+        "  } catch {}",
+        "}",
+      ].join("\n"),
+      {
+        eval: true,
+        workerData: {
+          control,
+          file,
+          interval: GO_BUILD_CACHE_COORDINATION_HEARTBEAT_MS,
+        },
       },
-    },
-  );
-  worker.unref();
-  return {
-    stop: () => {
-      Atomics.store(state, 0, 1);
-      Atomics.notify(state, 0);
-      void worker.terminate();
-    },
-  };
+    );
+    worker.unref();
+    return {
+      stop: () => {
+        Atomics.store(state, 0, 1);
+        Atomics.notify(state, 0);
+        void worker.terminate();
+      },
+    };
+  } catch {}
+
+  // Node's permission model can deny Worker construction while still allowing
+  // the child process required for `go build`. An IPC-bound helper provides
+  // the same independent heartbeat and exits automatically if its parent dies.
+  try {
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          'const fs = require("node:fs");',
+          "const file = process.argv[1];",
+          "const interval = Number(process.argv[2]);",
+          "const timer = setInterval(() => {",
+          "  try {",
+          "    const now = new Date();",
+          "    fs.utimesSync(file, now, now);",
+          "  } catch {}",
+          "}, interval);",
+          'process.on("disconnect", () => {',
+          "  clearInterval(timer);",
+          "  process.exit(0);",
+          "});",
+        ].join("\n"),
+        file,
+        String(GO_BUILD_CACHE_COORDINATION_HEARTBEAT_MS),
+      ],
+      {
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+        windowsHide: true,
+      },
+    );
+    child.unref();
+    child.channel?.unref();
+    return {
+      stop: () => {
+        if (child.connected) child.disconnect();
+        child.kill();
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function collectLiveGoBuildCacheCoordinationRecords(
@@ -3447,7 +3545,7 @@ function collectLiveGoBuildCacheCoordinationRecords(
       continue;
     }
     const file = path.join(directory, record.name);
-    if (goBuildCacheCoordinationRecordIsLive(file, now)) {
+    if (goBuildCacheCoordinationRecordIsLive(file, directoryName, now)) {
       live.push(file);
       continue;
     }
@@ -3460,6 +3558,7 @@ function collectLiveGoBuildCacheCoordinationRecords(
 
 function goBuildCacheCoordinationRecordIsLive(
   file: string,
+  directoryName: string,
   now: number,
 ): boolean {
   try {
@@ -3467,6 +3566,7 @@ function goBuildCacheCoordinationRecordIsLive(
       string,
       unknown
     >;
+    if (parsed.status === "complete") return false;
     // Parse valid records for forward compatibility, but do not equate a PID's
     // lifetime with one task. A failed unlink can leave a record owned by a
     // still-running Vite process, while a dead Node parent can leave its
@@ -3474,9 +3574,13 @@ function goBuildCacheCoordinationRecordIsLive(
     void parsed;
   } catch {}
   try {
-    return (
-      now - fs.statSync(file).mtimeMs <= GO_BUILD_CACHE_COORDINATION_STALE_MS
-    );
+    const age = now - fs.statSync(file).mtimeMs;
+    if (age < -GO_BUILD_CACHE_COORDINATION_CLOCK_SKEW_MS) return false;
+    const staleMs =
+      directoryName === GO_BUILD_CACHE_MAINTENANCE_DIR
+        ? GO_BUILD_CACHE_MAINTENANCE_STALE_MS
+        : GO_BUILD_CACHE_COORDINATION_STALE_MS;
+    return age <= staleMs;
   } catch {
     return false;
   }

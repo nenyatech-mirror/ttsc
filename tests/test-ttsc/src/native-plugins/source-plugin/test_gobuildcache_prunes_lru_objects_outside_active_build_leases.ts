@@ -2,6 +2,7 @@ import { TestProject } from "@ttsc/testing";
 
 import {
   assert,
+  child_process,
   fs,
   path,
   pruneGoBuildCacheRoot,
@@ -20,10 +21,12 @@ import {
  * 2. Release the lease, prune toward one object, and assert the newest survives.
  * 3. Seed four recent objects and assert the newest target-sized cohort is
  *    protected.
- * 4. Prove stale intents cannot poison a live process and fresh orphan leases
- *    retain their conservative grace before reclamation.
- * 5. Resolve user and explicitly named cache layouts and assert their objects and
- *    maintenance metadata remain untouched.
+ * 4. Prove completed, stale, and future-dated intents cannot poison a live process
+ *    while fresh orphan leases retain their conservative grace.
+ * 5. Deny Worker permission and prove the IPC heartbeat fallback cleans up its
+ *    lease after running the callback.
+ * 6. Resolve user and explicitly named cache layouts and assert their objects and
+ *    maintenance metadata remain untouched at the exact resolved roots.
  */
 export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
   () => {
@@ -86,6 +89,63 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
     assert.equal(staleIntentYielded, true);
     assert.equal(fs.existsSync(staleIntent), false);
 
+    const completedCache = path.join(root, "completed-maintenance");
+    const originalRm = fs.rmSync;
+    (fs as { rmSync: typeof fs.rmSync }).rmSync = function (
+      this: unknown,
+      ...args: Parameters<typeof fs.rmSync>
+    ) {
+      const target = String(args[0]);
+      if (
+        path.basename(path.dirname(target)) === ".ttsc-maintenance" &&
+        target.endsWith(".json")
+      ) {
+        const error = new Error("synthetic maintenance unlink failure");
+        (error as NodeJS.ErrnoException).code = "EPERM";
+        throw error;
+      }
+      return originalRm.apply(this, args as never);
+    } as typeof fs.rmSync;
+    try {
+      pruneGoBuildCacheRoot(completedCache, {
+        force: true,
+        maxBytes: 0,
+        now,
+        protectedAgeMs: 0,
+        targetBytes: 0,
+      });
+    } finally {
+      (fs as { rmSync: typeof fs.rmSync }).rmSync = originalRm;
+    }
+    const completedIntent = fs
+      .readdirSync(path.join(completedCache, ".ttsc-maintenance"))
+      .map((entry) =>
+        path.join(completedCache, ".ttsc-maintenance", entry),
+      )[0]!;
+    assert.equal(
+      JSON.parse(fs.readFileSync(completedIntent, "utf8")).status,
+      "complete",
+    );
+    let completedIntentYielded = false;
+    withGoBuildCacheLease(completedCache, true, () => {
+      completedIntentYielded = true;
+    });
+    assert.equal(completedIntentYielded, true);
+    assert.equal(fs.existsSync(completedIntent), false);
+
+    const futureIntent = writeCoordinationRecord(
+      goCache,
+      ".ttsc-maintenance",
+      process.pid,
+      now + 24 * 60 * 60 * 1000,
+    );
+    let futureIntentYielded = false;
+    withGoBuildCacheLease(goCache, true, () => {
+      futureIntentYielded = true;
+    });
+    assert.equal(futureIntentYielded, true);
+    assert.equal(fs.existsSync(futureIntent), false);
+
     const orphanCache = path.join(root, "orphan-go-build");
     const orphanObject = writeObject(
       orphanCache,
@@ -118,6 +178,51 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
     });
     assert.equal(fs.existsSync(orphanObject), false);
 
+    if (process.allowedNodeEnvironmentFlags.has("--permission")) {
+      const permissionCache = path.join(root, "permission-heartbeat");
+      const permissionMarker = path.join(root, "permission-callback.txt");
+      const library = path.join(
+        TestProject.WORKSPACE_ROOT,
+        "packages",
+        "ttsc",
+        "lib",
+        "plugin",
+        "internal",
+        "buildSourcePlugin.js",
+      );
+      const permissionRun = child_process.spawnSync(
+        process.execPath,
+        [
+          "--permission",
+          "--allow-fs-read=*",
+          "--allow-fs-write=*",
+          "--allow-child-process",
+          "-e",
+          [
+            'const fs = require("node:fs");',
+            "const { withGoBuildCacheLease } = require(process.argv[1]);",
+            "withGoBuildCacheLease(process.argv[2], true, () => {",
+            '  fs.writeFileSync(process.argv[3], "ran\\n", "utf8");',
+            "});",
+          ].join("\n"),
+          library,
+          permissionCache,
+          permissionMarker,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(
+        permissionRun.status,
+        0,
+        `${permissionRun.stdout}\n${permissionRun.stderr}`,
+      );
+      assert.equal(fs.readFileSync(permissionMarker, "utf8"), "ran\n");
+      assert.deepEqual(
+        fs.readdirSync(path.join(permissionCache, ".ttsc-build-leases")),
+        [],
+      );
+    }
+
     const project = path.join(root, "project");
     fs.mkdirSync(path.join(project, "node_modules"), { recursive: true });
     const userCache = path.join(root, "user-gocache");
@@ -133,25 +238,25 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
     for (const layout of [
       {
         cacheDir: path.join(root, "explicit-cache-dir"),
-        cacheRoot: path.join(root, "explicit-cache-dir"),
+        goBuildRoot: path.join(root, "explicit-cache-dir", "go-build"),
         env: {},
         label: "cache-dir",
       },
       {
         cacheDir: undefined,
-        cacheRoot: path.join(root, "explicit-env-cache"),
+        goBuildRoot: path.join(root, "explicit-env-cache", "go-build"),
         env: { TTSC_CACHE_DIR: path.join(root, "explicit-env-cache") },
         label: "TTSC_CACHE_DIR",
       },
       {
         cacheDir: undefined,
-        cacheRoot: path.join(root, "explicit-go-cache"),
+        goBuildRoot: path.join(root, "explicit-go-cache"),
         env: { TTSC_GO_CACHE_DIR: path.join(root, "explicit-go-cache") },
         label: "TTSC_GO_CACHE_DIR",
       },
     ]) {
       const object = writeObject(
-        path.join(layout.cacheRoot, "go-build"),
+        layout.goBuildRoot,
         "04",
         layout.label,
         now - 30_000,
@@ -159,7 +264,7 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       resolvePluginCacheRoot(project, layout.cacheDir, layout.env);
       assert.equal(fs.existsSync(object), true);
       assert.equal(
-        fs.existsSync(path.join(layout.cacheRoot, "go-build", ".ttsc-gc")),
+        fs.existsSync(path.join(layout.goBuildRoot, ".ttsc-gc")),
         false,
       );
     }

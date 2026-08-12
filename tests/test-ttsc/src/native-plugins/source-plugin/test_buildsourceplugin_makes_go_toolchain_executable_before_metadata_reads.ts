@@ -4,6 +4,7 @@ import {
   assert,
   buildSourcePlugin,
   createFakeGoBinary,
+  ensureExecutableGoToolchain,
   fs,
   os,
   path,
@@ -20,9 +21,10 @@ import {
  *
  * 1. Create a plugin source tree with the required standard subdirectories.
  * 2. Write a fake `go` executable with unsafe writable permissions (mode 0o666).
- * 3. Call `buildSourcePlugin`; assert it succeeds and that only the required owner
- *    execute bit is added to the explicitly selected toolchain.
- * 4. Give that external tool a restrictive executable mode and assert a cache hit
+ * 3. Prove a bundled tool is normalized to 0o755, then call `buildSourcePlugin`
+ *    and assert only the required owner execute bit is added to the explicitly
+ *    selected toolchain.
+ * 4. Give the external tool a restrictive executable mode and assert a cache hit
  *    does not widen the user's permissions.
  */
 export const test_buildsourceplugin_makes_go_toolchain_executable_before_metadata_reads =
@@ -51,6 +53,9 @@ export const test_buildsourceplugin_makes_go_toolchain_executable_before_metadat
     }
 
     const fakeGo = createFakeGoBinary(root, { executable: false });
+    fs.chmodSync(fakeGo, 0o666);
+    ensureExecutableGoToolchain(fakeGo, true);
+    assert.equal(fs.statSync(fakeGo).mode & 0o7777, 0o755);
     fs.chmodSync(fakeGo, 0o666);
     const previousGo = process.env.TTSC_GO_BINARY;
     process.env.TTSC_GO_BINARY = fakeGo;
