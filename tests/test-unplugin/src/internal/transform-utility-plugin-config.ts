@@ -211,11 +211,11 @@ async function assertPersistentBannerConfigEditInvalidatesTransform() {
  * config loaders, even when those modules live outside the project walk.
  *
  * 1. Configure banner and strip through `.cjs` and `.ts` files that import an
- *    external helper and compile each project into a persistent cache.
- * 2. Edit only the external helper, leaving every descriptor, config, and
- *    TypeScript project file untouched.
- * 3. Assert the generation is replaced and the transformed output reflects the
- *    helper's new value for both plugins.
+ *    external helper or a bare package and compile into a persistent cache.
+ * 2. Edit only the helper, or create a nearer package-resolution candidate,
+ *    leaving descriptors, configs, and TypeScript project files untouched.
+ * 3. Assert the generation is replaced and output reflects the newly selected
+ *    helper or package for both plugins.
  */
 async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform() {
   const { createTtscTransformCache, resolveOptions, transformTtsc } =
@@ -245,8 +245,12 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
       "utf8",
     );
     const config = path.join(root, `${plugin}.config.${format}`);
+    const importedExternal =
+      format === "ts"
+        ? external.slice(0, -path.extname(external).length)
+        : external;
     const specifier = path
-      .relative(path.dirname(config), external)
+      .relative(path.dirname(config), importedExternal)
       .split(path.sep)
       .join("/");
     fs.writeFileSync(
@@ -295,6 +299,16 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
       ),
       `${plugin}.${format} omitted the package boundary used to resolve its config dependency`,
     );
+    if (format === "ts") {
+      assert.ok(
+        cached.result?.hostInputs?.some(
+          (input) =>
+            path.resolve(input) ===
+            path.resolve(external.replace(/\.ts$/, ".js")),
+        ),
+        `${plugin}.ts omitted a superseding extensionless-import candidate`,
+      );
+    }
     assert.equal(
       cached.result?.hostInputs?.some((input) =>
         /ttsc-(?:banner|strip)-config-/i.test(input),
@@ -327,6 +341,79 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
       assert.doesNotMatch(second.code, /console\.log\("kept"\)/);
     }
   }
+
+  // A resolved file alone is not the complete resolution input. A nearer
+  // package candidate can appear without changing the package that supplied
+  // the first generation, so pin that missing candidate before it exists.
+  const root = createUtilityPluginProject({
+    files: {
+      "config/banner.config.cjs": 'module.exports = require("selection");\n',
+    },
+    plugin: "banner",
+    pluginEntry: { configFile: "./config/banner.config.cjs" },
+    source: 'export const value: string = "kept";\n',
+  });
+  const rootPackage = path.join(root, "node_modules", "selection");
+  const nearerPackage = path.join(root, "config", "node_modules", "selection");
+  fs.mkdirSync(rootPackage, { recursive: true });
+  fs.mkdirSync(path.dirname(nearerPackage), { recursive: true });
+  fs.writeFileSync(
+    path.join(rootPackage, "package.json"),
+    JSON.stringify({ main: "index.cjs" }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootPackage, "index.cjs"),
+    'module.exports = { text: "OLD PACKAGE SHADOW" };\n',
+    "utf8",
+  );
+  const file = TestUnpluginProject.mainFile(root);
+  const source = TestUnpluginProject.mainSource(root);
+  const cache = createTtscTransformCache();
+  const first = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(first);
+  assert.match(first.code, /OLD PACKAGE SHADOW/);
+  const firstGeneration = [...cache.values()][0];
+  const cached = (await firstGeneration) as {
+    result?: { hostInputs?: string[] };
+  };
+  assert.ok(
+    cached.result?.hostInputs?.some(
+      (input) =>
+        path.resolve(input) ===
+        path.resolve(path.join(nearerPackage, "package.json")),
+    ),
+    "banner.cjs omitted the nearer unresolved package candidate",
+  );
+
+  fs.mkdirSync(nearerPackage, { recursive: true });
+  fs.writeFileSync(
+    path.join(nearerPackage, "package.json"),
+    JSON.stringify({ main: "index.cjs" }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(nearerPackage, "index.cjs"),
+    'module.exports = { text: "NEW PACKAGE SHADOW" };\n',
+    "utf8",
+  );
+  const second = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(second);
+  assert.notEqual([...cache.values()][0], firstGeneration);
+  assert.match(second.code, /NEW PACKAGE SHADOW/);
+  assert.doesNotMatch(second.code, /OLD PACKAGE SHADOW/);
 }
 
 /**

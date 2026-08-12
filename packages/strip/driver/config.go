@@ -215,7 +215,7 @@ func loadStripJSONConfigFile(location string) (any, error) {
 // loadStripScriptConfigFile to evaluate a .js/.cjs/.mjs strip config and
 // serialize the result to stdout as JSON.
 const stripScriptLoaderSource = `
-const { registerHooks } = require("node:module");
+const { isBuiltin, registerHooks } = require("node:module");
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
@@ -238,11 +238,69 @@ function recordFile(file) {
   }
 }
 
+const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"];
+function moduleCandidates(base) {
+  if (path.extname(base) !== "") return [base];
+  return [
+    base,
+    ...moduleProbeExtensions.map((extension) => base + extension),
+    path.join(base, "package.json"),
+    ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension)),
+  ];
+}
+function recordModuleCandidates(base) {
+  for (const candidate of moduleCandidates(base)) inputs.add(path.resolve(candidate));
+}
+function candidateSelected(base, resolvedFile) {
+  for (const candidate of moduleCandidates(base)) {
+    try {
+      const canonical = fs.realpathSync.native(candidate);
+      const relative = path.relative(canonical, resolvedFile);
+      if (relative === "" || (fs.statSync(canonical).isDirectory() && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))) return true;
+    } catch {}
+  }
+  return false;
+}
+function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
+  if (typeof parentURL !== "string" || !parentURL.startsWith("file:")) return;
+  const parentDirectory = path.dirname(fileURLToPath(parentURL));
+  let resolvedFile;
+  try {
+    resolvedFile = typeof resolvedURL === "string" && resolvedURL.startsWith("file:")
+      ? fs.realpathSync.native(fileURLToPath(resolvedURL))
+      : undefined;
+  } catch {}
+  if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {
+    try {
+      const base = specifier.startsWith("file:")
+        ? fileURLToPath(specifier)
+        : path.resolve(parentDirectory, specifier);
+      recordModuleCandidates(base);
+    } catch {}
+    return;
+  }
+  if (isBuiltin(specifier) || specifier.startsWith("#")) return;
+  const parts = specifier.split("/");
+  const packageParts = parts[0].startsWith("@") ? parts.slice(0, 2) : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) return;
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  for (let directory = parentDirectory;; directory = path.dirname(directory)) {
+    const packageDirectory = path.join(directory, "node_modules", packageName);
+    recordModuleCandidates(packageDirectory);
+    if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));
+    if (resolvedFile !== undefined && candidateSelected(packageDirectory, resolvedFile)) break;
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+  }
+}
+
 recordFile(process.argv[1]);
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved && resolved.url;
+    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
@@ -352,7 +410,7 @@ func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
 // `"./strip.config.ts"`) produced by json.Marshal.
 func stripTypeScriptLoaderSource(importLiteral string) string {
   return fmt.Sprintf(`// @ts-nocheck
-import { registerHooks } from "node:module";
+import { isBuiltin, registerHooks } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -376,10 +434,68 @@ function recordFile(file: string): void {
   }
 }
 
+const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"] as const;
+function moduleCandidates(base: string): string[] {
+  if (path.extname(base) !== "") return [base];
+  return [
+    base,
+    ...moduleProbeExtensions.map((extension) => base + extension),
+    path.join(base, "package.json"),
+    ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension)),
+  ];
+}
+function recordModuleCandidates(base: string): void {
+  for (const candidate of moduleCandidates(base)) inputs.add(path.resolve(candidate));
+}
+function candidateSelected(base: string, resolvedFile: string): boolean {
+  for (const candidate of moduleCandidates(base)) {
+    try {
+      const canonical = fs.realpathSync.native(candidate);
+      const relative = path.relative(canonical, resolvedFile);
+      if (relative === "" || (fs.statSync(canonical).isDirectory() && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))) return true;
+    } catch {}
+  }
+  return false;
+}
+function recordResolutionCandidates(specifier: string, parentURL: string | undefined, resolvedURL: string | undefined): void {
+  if (typeof parentURL !== "string" || !parentURL.startsWith("file:")) return;
+  const parentDirectory = path.dirname(fileURLToPath(parentURL));
+  let resolvedFile: string | undefined;
+  try {
+    resolvedFile = typeof resolvedURL === "string" && resolvedURL.startsWith("file:")
+      ? fs.realpathSync.native(fileURLToPath(resolvedURL))
+      : undefined;
+  } catch {}
+  if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {
+    try {
+      const base = specifier.startsWith("file:")
+        ? fileURLToPath(specifier)
+        : path.resolve(parentDirectory, specifier);
+      recordModuleCandidates(base);
+    } catch {}
+    return;
+  }
+  if (isBuiltin(specifier) || specifier.startsWith("#")) return;
+  const parts = specifier.split("/");
+  const packageParts = parts[0]!.startsWith("@") ? parts.slice(0, 2) : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) return;
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  for (let directory = parentDirectory;; directory = path.dirname(directory)) {
+    const packageDirectory = path.join(directory, "node_modules", packageName);
+    recordModuleCandidates(packageDirectory);
+    if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));
+    if (resolvedFile !== undefined && candidateSelected(packageDirectory, resolvedFile)) break;
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+  }
+}
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved?.url;
+    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
