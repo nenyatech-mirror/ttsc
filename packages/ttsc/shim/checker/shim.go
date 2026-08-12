@@ -22,6 +22,8 @@ type IndexInfo = innerchecker.IndexInfo
 type Signature = innerchecker.Signature
 type SignatureKind = innerchecker.SignatureKind
 type Type = innerchecker.Type
+type TypeMapper = innerchecker.TypeMapper
+type TypeMapperKind = innerchecker.TypeMapperKind
 type TypeFlags = innerchecker.TypeFlags
 type ObjectFlags = innerchecker.ObjectFlags
 type ElementFlags = innerchecker.ElementFlags
@@ -215,6 +217,11 @@ func Checker_isSymbolAccessibleAsValue(recv *innerchecker.Checker, symbol *inner
 
 const (
   SignatureKindCall = innerchecker.SignatureKindCall
+
+  TypeMapperKindUnknown = innerchecker.TypeMapperKindUnknown
+  TypeMapperKindSimple  = innerchecker.TypeMapperKindSimple
+  TypeMapperKindArray   = innerchecker.TypeMapperKindArray
+  TypeMapperKindMerged  = innerchecker.TypeMapperKindMerged
 
   TypeFlagsAny             = innerchecker.TypeFlagsAny
   TypeFlagsUnknown         = innerchecker.TypeFlagsUnknown
@@ -596,4 +603,72 @@ func Checker_getRestTypeOfSignature(recv *innerchecker.Checker, signature *inner
     return nil
   }
   return recv.GetRestTypeOfSignature(signature)
+}
+
+//go:linkname checkerInstantiateType github.com/microsoft/typescript-go/internal/checker.(*Checker).instantiateType
+func checkerInstantiateType(recv *innerchecker.Checker, t *innerchecker.Type, m *innerchecker.TypeMapper) *innerchecker.Type
+
+//go:linkname checkerNewSimpleTypeMapper github.com/microsoft/typescript-go/internal/checker.newSimpleTypeMapper
+func checkerNewSimpleTypeMapper(source *innerchecker.Type, target *innerchecker.Type) *innerchecker.TypeMapper
+
+//go:linkname checkerNewTypeMapper github.com/microsoft/typescript-go/internal/checker.newTypeMapper
+func checkerNewTypeMapper(sources []*innerchecker.Type, targets []*innerchecker.Type) *innerchecker.TypeMapper
+
+// Checker_instantiateType substitutes the type parameters of `t` with the
+// concrete types in `mapper`, returning the instantiated type. A type-transform
+// plugin uses it to instantiate a generic class's constructor type with the
+// reference's type arguments, so a type parameter nested inside a container
+// (`A[]`, `[A, B]`) is substituted for free. Returns nil if recv or t is nil.
+func Checker_instantiateType(recv *innerchecker.Checker, t *innerchecker.Type, mapper *innerchecker.TypeMapper) *innerchecker.Type {
+  if recv == nil || t == nil {
+    return nil
+  }
+  return checkerInstantiateType(recv, t, mapper)
+}
+
+// Checker_newSimpleTypeMapper builds a single-pair type mapper that substitutes
+// `source` with `target`. It is the building block for instantiating a generic
+// class's constructor type with its reference type arguments. Returns nil if
+// source or target is nil.
+func Checker_newSimpleTypeMapper(source *innerchecker.Type, target *innerchecker.Type) *innerchecker.TypeMapper {
+  if source == nil || target == nil {
+    return nil
+  }
+  return checkerNewSimpleTypeMapper(source, target)
+}
+
+// Checker_newTypeMapper builds a parallel type mapper from corresponding
+// source and target slices. Unlike Checker_combineTypeMappers, it does not feed
+// one substitution's target through later substitutions, so a mapping such as
+// `[A, B] -> [B, A]` preserves both target identities. Returns nil when the
+// slices are empty, differ in length, or contain nil types.
+func Checker_newTypeMapper(sources []*innerchecker.Type, targets []*innerchecker.Type) *innerchecker.TypeMapper {
+  if len(sources) == 0 || len(sources) != len(targets) {
+    return nil
+  }
+  for i := range sources {
+    if sources[i] == nil || targets[i] == nil {
+      return nil
+    }
+  }
+  return checkerNewTypeMapper(sources, targets)
+}
+
+//go:linkname checkerCombineTypeMappers github.com/microsoft/typescript-go/internal/checker.(*Checker).combineTypeMappers
+func checkerCombineTypeMappers(recv *innerchecker.Checker, m1 *innerchecker.TypeMapper, m2 *innerchecker.TypeMapper) *innerchecker.TypeMapper
+
+// Checker_combineTypeMappers composes two mapper stages. The first mapper's
+// substituted target is instantiated through the second mapper, so use
+// Checker_newTypeMapper instead when source and target slices are parallel
+// declaration-parameter mappings. Returns m2 when m1 is nil, including when
+// recv is nil. Returns nil when m1 is non-nil and recv or m2 is nil, because
+// both are required to build a usable composite mapper.
+func Checker_combineTypeMappers(recv *innerchecker.Checker, m1 *innerchecker.TypeMapper, m2 *innerchecker.TypeMapper) *innerchecker.TypeMapper {
+  if m1 == nil {
+    return m2
+  }
+  if recv == nil || m2 == nil {
+    return nil
+  }
+  return checkerCombineTypeMappers(recv, m1, m2)
 }

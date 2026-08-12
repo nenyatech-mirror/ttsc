@@ -454,12 +454,18 @@ When a tsgo method you need is *un*exported, the shim provides a `Checker_*` wra
 - `Checker_getTypeOfSymbolAtLocation(checker, symbol, node)`
 - `Checker_getTypeOfPropertyOfType(checker, typ, name)`
 - `Checker_getTypeArguments(checker, typ)`
+- `Checker_instantiateType(checker, typ, mapper)`
+- `Checker_newSimpleTypeMapper(source, target)`
+- `Checker_newTypeMapper(sources, targets)`
+- `Checker_combineTypeMappers(checker, first, second)`
 - `Checker_getIndexInfosOfType(checker, typ)`
 - `Checker_resolveEntityName(checker, name, meaning, ignoreErrors, dontResolveAlias, location)`
 - `Checker_getAliasedSymbol(checker, symbol)`
 - `Checker_isArrayType(checker, typ)`
 - `IsTupleType(typ)`
 - `Type_getTypeNameSymbol(typ)`
+
+Use `Checker_newTypeMapper` for parallel type-parameter and type-argument slices. `Checker_combineTypeMappers` composes sequential mapper stages and may map a target produced by the first stage again in the second stage.
 
 If you need an unexported method that is not yet shimmed, prefer the direct-method form on a related exported alternative; failing that, file a shim addition.
 
