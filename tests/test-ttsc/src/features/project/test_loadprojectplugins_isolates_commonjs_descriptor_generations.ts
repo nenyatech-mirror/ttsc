@@ -17,6 +17,7 @@ export const test_loadprojectplugins_isolates_commonjs_descriptor_generations =
     const root = TestProject.tmpdir("ttsc-cjs-descriptor-isolation-");
     const project = path.join(root, "project");
     const shared = path.join(root, "shared.cjs");
+    const getterSelection = path.join(root, "getter-selection.cjs");
     const descriptor = path.join(project, "plugin.cjs");
     const source = path.join(root, "plugin-go");
     fs.mkdirSync(project, { recursive: true });
@@ -53,12 +54,20 @@ export const test_loadprojectplugins_isolates_commonjs_descriptor_generations =
       "utf8",
     );
     fs.writeFileSync(
+      getterSelection,
+      `module.exports = ${JSON.stringify(source)};\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
       descriptor,
       [
         "module.exports = () => {",
         `  const shared = require(${JSON.stringify(shared)});`,
         "  if (shared.selection === 'bad') throw new Error('descriptor is bad');",
-        `  return { name: shared.selection, source: ${JSON.stringify(source)} };`,
+        "  return {",
+        "    name: shared.selection,",
+        `    get source() { return require(${JSON.stringify(getterSelection)}); },`,
+        "  };",
         "};",
         "",
       ].join("\n"),
@@ -91,6 +100,7 @@ export const test_loadprojectplugins_isolates_commonjs_descriptor_generations =
     );
     const first = load();
     assert.ok(first.hostInputs.includes(shared));
+    assert.ok(first.hostInputs.includes(getterSelection));
     assert.equal(first.nativePlugins[0]?.name, "good");
     const second = load();
     assert.equal(second.nativePlugins[0]?.name, "good");

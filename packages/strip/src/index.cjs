@@ -67,9 +67,18 @@ function stripConfigInputs(context) {
       path.join(directory, name),
     );
     inputs.push(...candidates);
-    if (candidates.some((file) => fs.existsSync(file))) break;
+    if (candidates.some(configCandidateExists)) break;
     const parent = path.dirname(directory);
     if (parent === directory) break;
   }
   return inputs;
+}
+
+/** Match the native discovery rule: a directory is never a config file. */
+function configCandidateExists(file) {
+  try {
+    return !fs.statSync(file).isDirectory();
+  } catch {
+    return false;
+  }
 }

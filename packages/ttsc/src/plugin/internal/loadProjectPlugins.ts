@@ -745,9 +745,13 @@ function loadPluginDescriptor(
   effectiveEnv: NodeJS.ProcessEnv,
 ): IsolatedPluginDescriptor {
   try {
-    return loadCommonJsDescriptor(request, context);
+    return loadCommonJsDescriptor(request, context, effectiveEnv);
   } catch (error) {
-    if (!TS_SOURCE_PATTERN.test(request)) {
+    if (
+      !TS_SOURCE_PATTERN.test(request) ||
+      !(error instanceof CommonJsDescriptorLoadError) ||
+      !error.retryWithTtsx
+    ) {
       throw error;
     }
     const descriptor = loadDescriptorViaTtsx(request, context, effectiveEnv);
@@ -763,6 +767,16 @@ interface IsolatedPluginDescriptor {
   inputs: string[];
 }
 
+class CommonJsDescriptorLoadError extends Error {
+  public constructor(
+    message: string,
+    public readonly retryWithTtsx: boolean,
+  ) {
+    super(message);
+    this.name = "CommonJsDescriptorLoadError";
+  }
+}
+
 /**
  * Evaluate one CommonJS descriptor in a fresh Node module-cache generation.
  *
@@ -776,6 +790,7 @@ interface IsolatedPluginDescriptor {
 function loadCommonJsDescriptor(
   request: string,
   context: ITtscPluginFactoryContext,
+  effectiveEnv: NodeJS.ProcessEnv,
 ): IsolatedPluginDescriptor {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
   const out = path.join(dir, "descriptor.json");
@@ -799,22 +814,32 @@ function loadCommonJsDescriptor(
       {
         cwd: context.projectRoot,
         env: {
-          ...process.env,
+          ...effectiveEnv,
+          // `effectiveEnv` can be the instance snapshot taken before
+          // withPluginLoaderEnv supplied these host-owned locators.
+          TTSC_NODE_BINARY:
+            effectiveEnv.TTSC_NODE_BINARY ?? process.env.TTSC_NODE_BINARY,
+          TTSC_TTSX_BINARY:
+            effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY,
           TTSC_PLUGIN_CONTEXT: JSON.stringify(context),
           TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
           TTSC_PLUGIN_DESCRIPTOR_OUT: out,
           TTSC_PLUGIN_ENTRY: request,
         },
-        stdio: ["ignore", 1, 2],
+        // Descriptor output is never protocol output. Send both child streams
+        // to the parent's human channel so a console.log cannot corrupt CLI,
+        // API, LSP, or watch JSON written on stdout.
+        stdio: ["ignore", 2, 2],
         windowsHide: true,
       },
     );
     const failure = commonJsDescriptorProcessFailure(result, request);
     if (failure !== undefined) {
       const reason = pluginDescriptorFailureReason(out);
-      throw reason === ""
-        ? failure
-        : new Error(`${failure.message}\n${reason}`);
+      throw new CommonJsDescriptorLoadError(
+        reason === "" ? failure.message : `${failure.message}\n${reason}`,
+        commonJsDescriptorRetryWithTtsx(out),
+      );
     }
     if (!fs.existsSync(out)) {
       throw new Error(
@@ -871,6 +896,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `const Module = require("node:module");`,
   `const path = require("node:path");`,
   `const out = process.env.TTSC_PLUGIN_DESCRIPTOR_OUT;`,
+  `let retryWithTtsx = false;`,
   `try {`,
   `  const request = process.env.TTSC_PLUGIN_ENTRY;`,
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
@@ -883,21 +909,43 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    } catch {}`,
   `    return Reflect.apply(load, this, arguments);`,
   `  };`,
-  `  const mod = require(request);`,
+  `  let mod;`,
+  `  try {`,
+  `    mod = require(request);`,
+  `  } catch (error) {`,
+  `    retryWithTtsx = true;`,
+  `    throw error;`,
+  `  }`,
   `  const candidate = mod.createTtscPlugin ?? mod.default ?? mod.plugin ?? mod;`,
   `  const descriptor = typeof candidate === "function" ? candidate(context) : candidate;`,
   `  if (descriptor && typeof descriptor === "object" && ("transformSource" in descriptor || "transformOutput" in descriptor)) {`,
   `    throw new Error("ttsc: plugin descriptor declares unsupported JS transform functions; declare a native backend instead");`,
   `  }`,
-  `  fs.writeFileSync(out, JSON.stringify({ descriptor, inputs: [...inputs].sort() }));`,
+  // Serialize the descriptor while Module._load is still collecting. Getters
+  // are allowed by JavaScript's object model and can lazily require a config;
+  // snapshotting inputs first would silently omit that influence.
+  `  const serializedDescriptor = JSON.stringify(descriptor);`,
+  `  const payload = { inputs: [...inputs].sort() };`,
+  `  if (serializedDescriptor !== undefined) payload.descriptor = JSON.parse(serializedDescriptor);`,
+  `  fs.writeFileSync(out, JSON.stringify(payload));`,
   `} catch (error) {`,
   `  try {`,
-  `    fs.writeFileSync(out, JSON.stringify({ __ttscLoaderError: error instanceof Error && error.stack ? error.stack : String(error) }));`,
+  `    fs.writeFileSync(out, JSON.stringify({ __ttscLoaderError: error instanceof Error && error.stack ? error.stack : String(error), __ttscRetryWithTtsx: retryWithTtsx }));`,
   `  } catch {}`,
   `  process.exit(1);`,
   `}`,
   ``,
 ].join("\n");
+
+/** Read the isolated loader's explicit retry classification. */
+function commonJsDescriptorRetryWithTtsx(file: string): boolean {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isRecord(parsed) && parsed.__ttscRetryWithTtsx === true;
+  } catch {
+    return false;
+  }
+}
 
 function commonJsDescriptorProcessFailure(
   result: {

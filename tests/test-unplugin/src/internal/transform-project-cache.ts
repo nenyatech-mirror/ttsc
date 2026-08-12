@@ -444,6 +444,19 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   for (const probe of descriptorProbes.filter((_, index) => index % 2 === 0)) {
     fs.writeFileSync(probe, "{}\n", "utf8");
   }
+  const brokenTarget =
+    process.platform === "win32"
+      ? undefined
+      : path.join(
+          TestProject.tmpdir("ttsc-unplugin-broken-host-input-"),
+          "selection.json",
+        );
+  if (brokenTarget !== undefined) {
+    // Creating file symlinks requires elevated privileges on Windows. POSIX CI
+    // owns this broken-target edge while the shared test retains every other
+    // validation and performance assertion on all platforms.
+    fs.symlinkSync(brokenTarget, descriptorProbes[1]!, "file");
+  }
   fs.writeFileSync(descriptorSelection, 'module.exports = "go-plugin";\n');
   fs.writeFileSync(
     path.join(project.root, "plugin.cjs"),
@@ -554,6 +567,19 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     "an unclassified project asset must not replace the generation",
   );
 
+  let linkedGeneration = originalGeneration;
+  if (brokenTarget !== undefined) {
+    fs.writeFileSync(brokenTarget, "{}\n", "utf8");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(await deliver(main));
+    linkedGeneration = [...cache.values()][0];
+    assert.notEqual(
+      linkedGeneration,
+      originalGeneration,
+      "a broken host-input link whose remote target appears must replace the generation",
+    );
+  }
+
   fs.writeFileSync(
     path.join(project.root, "node_modules", "dep0", "index.d.ts"),
     "export declare const relevant: string;\n",
@@ -564,7 +590,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   const relevantGeneration = [...cache.values()][0];
   assert.notEqual(
     relevantGeneration,
-    originalGeneration,
+    linkedGeneration,
     "a reachable external edit must replace the file's generation",
   );
 

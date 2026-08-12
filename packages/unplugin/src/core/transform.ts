@@ -1241,9 +1241,10 @@ function captureUniversalHostInputValidation(
     identities: new Set(),
     missing: new Map(),
   };
-  for (const input of selectHostInputs({
+  for (const input of selectPersistentHostInputs({
     projectRoot: cached.projectRoot,
     result: cached.result,
+    temporaryTsconfig: cached.temporaryTsconfig,
   })) {
     const identity = derivationIdentity(state, input);
     if (validation.identities.has(identity)) continue;
@@ -1272,9 +1273,27 @@ function captureUniversalHostInputValidation(
 function inputMetadataSignature(file: string): string | undefined {
   try {
     const link = fs.lstatSync(file, { bigint: true });
-    const target = link.isSymbolicLink()
-      ? fs.statSync(file, { bigint: true })
-      : link;
+    let target = link;
+    if (link.isSymbolicLink()) {
+      try {
+        target = fs.statSync(file, { bigint: true });
+      } catch {
+        // Keep a broken link in the existing-input manifest. Its own metadata
+        // stays stable while the target is missing, and the first successful
+        // stat after the target appears changes this signature. Treating it as
+        // a plain missing path would watch/list only the link's parent, which
+        // cannot observe a target created in another directory.
+        return [
+          link.dev,
+          link.ino,
+          link.mode,
+          link.size,
+          link.mtimeNs,
+          link.ctimeNs,
+          "missing-target",
+        ].join(":");
+      }
+    }
     return [
       link.dev,
       link.ino,
