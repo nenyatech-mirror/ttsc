@@ -33,5 +33,8 @@ compiler/playground
 # Auto-generated blog RSS feed
 public/blog/rss.xml
 
+# Marp HTML compiled from src/slides by build/slides.cjs.
+public/slides-static/
+
 # PNG re-exports of benchmark charts for dev.to (build/svg-to-png.cjs)
 build/png-out/
