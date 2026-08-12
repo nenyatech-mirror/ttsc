@@ -736,6 +736,31 @@ export namespace EvidenceBenchmarkRunner {
               publish();
               return;
             }
+            // A session that died mid-turn leaves the record holding its Goal
+            // and no usage checkpoint. The runner writes the thread total and
+            // names the turn that carried it in one step, so a process killed
+            // between those two writes keeps the total and loses the name, and
+            // the retained boundary the checks above look for was never
+            // written. Equality with the durable total is the whole proof that
+            // nothing ran past it, the same proof the superseded boundary below
+            // rests on, so the replayed turn is adopted as this record's
+            // checkpoint rather than refused. Every field a checkpoint would
+            // have written is required absent, so this cannot adopt a replay
+            // over a boundary the runner did record.
+            const resumedMidTurn: boolean =
+              !currentHasCheckpoint &&
+              currentCanAdoptReplay &&
+              record.tokenUsageTurnId === null &&
+              record.terminalTurnId === null &&
+              !record.terminalTurnCompleted &&
+              record.tokenUsageEnd === null &&
+              sameUsage(usage, state.threadTokenUsage) &&
+              usageAdvanced(state.threadTokenUsage, record.tokenUsageStart);
+            if (resumedMidTurn) {
+              record.tokenUsageTurnId = params.turnId;
+              publish();
+              return;
+            }
             // A superseded Goal replays the interrupted turn the dropped record
             // named. Equality with the last durable write is the whole proof
             // that nothing ran past it, and the Goal snapshot that follows
