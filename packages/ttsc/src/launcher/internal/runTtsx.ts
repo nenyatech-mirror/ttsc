@@ -278,6 +278,8 @@ function runPreparedEntry(
         depCacheDir,
         emitDir: execution.emitDir,
         emittedFiles: execution.emittedFiles,
+        entryFile: execution.entryFile,
+        entrySource: execution.entrySource,
         moduleOptions: execution.moduleOptions,
         projectRoot: execution.projectRoot,
         rootDir: execution.rootDir,

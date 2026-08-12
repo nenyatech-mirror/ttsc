@@ -20,6 +20,8 @@ import { isOutsideRelativePath } from "./paths";
  * Returns `null` when no matching output file is found on disk.
  */
 export function resolveEmittedJavaScript(options: {
+  /** Skip trailing-stem recovery when exact source ownership is required. */
+  allowStemFallback?: boolean;
   /** Pre-computed list of emitted paths; when absent `outDir` is scanned. */
   emittedFiles?: readonly string[];
   outDir: string;
@@ -43,6 +45,10 @@ export function resolveEmittedJavaScript(options: {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
+  }
+
+  if (options.allowStemFallback === false) {
+    return null;
   }
 
   // Score the pre-computed emit list first (cheap). When it yields nothing —

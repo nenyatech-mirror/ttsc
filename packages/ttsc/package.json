@@ -18,6 +18,10 @@
       "types": "./src/internal/projectInputPathIdentity.ts",
       "default": "./lib/internal/projectInputPathIdentity.js"
     },
+    "./register": {
+      "types": "./src/register.ts",
+      "default": "./lib/register.js"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -31,6 +35,10 @@
       "./path-identity": {
         "types": "./lib/internal/projectInputPathIdentity.d.ts",
         "default": "./lib/internal/projectInputPathIdentity.js"
+      },
+      "./register": {
+        "types": "./lib/register.d.ts",
+        "default": "./lib/register.js"
       },
       "./package.json": "./package.json"
     }
@@ -69,7 +77,7 @@
     "@ttsc/win32-x64": "workspace:*",
     "@ttsc/win32-arm64": "workspace:*"
   },
-  "sideEffects": false,
+  "sideEffects": ["./lib/register.js", "./src/register.ts"],
   "files": [
     "README.md",
     "cmd",

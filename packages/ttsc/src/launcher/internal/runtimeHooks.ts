@@ -117,7 +117,7 @@ type NextLoad = (url: string, context: LoadContext) => LoadResult;
  * Runtime manifest written by `runTtsx` (the parent) and read once here. It
  * describes the already-built entry project so the hooks can serve its emit.
  */
-interface RuntimeManifest {
+export interface RuntimeManifest {
   /** Project root of the entry's owning tsconfig. */
   projectRoot: string;
   /** Source-tree root the emit mirrors (tsgo strips this prefix). */
@@ -126,6 +126,10 @@ interface RuntimeManifest {
   emitDir: string;
   /** Emitted file list from the entry build, for source→output matching. */
   emittedFiles?: readonly string[];
+  /** Physical TypeScript root whose checked preparation created this manifest. */
+  entrySource?: string;
+  /** Exact JavaScript emitted for `entrySource`. */
+  entryFile?: string;
   /**
    * The entry tsconfig's `module` and `target`, deciding emit CJS/ESM per file.
    * `target` is not decoration: an absent `module` makes tsgo derive the module
@@ -136,25 +140,34 @@ interface RuntimeManifest {
   depCacheDir: string;
 }
 
-let manifestCache: RuntimeManifest | null | undefined;
+let environmentManifestCache: RuntimeManifest | null | undefined;
+const registeredManifests: RuntimeManifest[] = [];
 
-function manifest(): RuntimeManifest | null {
-  if (manifestCache !== undefined) {
-    return manifestCache;
+function environmentManifest(): RuntimeManifest | null {
+  if (environmentManifestCache !== undefined) {
+    return environmentManifestCache;
   }
   const file = process.env.TTSX_RUNTIME_MANIFEST;
   if (file === undefined || file.length === 0) {
-    manifestCache = null;
-    return manifestCache;
+    environmentManifestCache = null;
+    return environmentManifestCache;
   }
   try {
-    manifestCache = JSON.parse(
+    environmentManifestCache = JSON.parse(
       fs.readFileSync(file, "utf8"),
     ) as RuntimeManifest;
   } catch {
-    manifestCache = null;
+    environmentManifestCache = null;
   }
-  return manifestCache;
+  return environmentManifestCache;
+}
+
+/** Every checked entry emit available to this runtime, in ownership order. */
+function runtimeManifests(): readonly RuntimeManifest[] {
+  const inherited = environmentManifest();
+  return inherited === null
+    ? registeredManifests
+    : [inherited, ...registeredManifests];
 }
 
 /**
@@ -235,6 +248,12 @@ function assertNodeRuntimeSupport(): void {
 }
 
 let installed = false;
+let prepareRuntimeEntry: ((filename: string) => RuntimeManifest) | undefined;
+
+export interface RuntimeHookOptions {
+  /** Prepare and type-check a TypeScript root discovered after registration. */
+  prepareEntry?: (filename: string) => RuntimeManifest;
+}
 
 /**
  * Install the source-loading hooks on the current (main) thread. Idempotent:
@@ -249,7 +268,10 @@ let installed = false;
  * graph goes through `Module._extensions` — the canonical loader extension
  * point `ts-node`/`tsx` use for the same reason.
  */
-export function installRuntimeHooks(): void {
+export function installRuntimeHooks(options: RuntimeHookOptions = {}): void {
+  if (options.prepareEntry !== undefined) {
+    prepareRuntimeEntry = options.prepareEntry;
+  }
   if (installed) {
     return;
   }
@@ -277,17 +299,31 @@ function installCommonJsHook(): void {
       _extensions: Record<
         string,
         (
-          module: { _compile(source: string, filename: string): void },
+          module: {
+            _compile(source: string, filename: string): void;
+            parent?: { filename?: string | null } | null;
+          },
           filename: string,
         ) => void
       >;
     }
   )._extensions;
   const compile = (
-    module: { _compile(source: string, filename: string): void },
+    module: {
+      _compile(source: string, filename: string): void;
+      parent?: { filename?: string | null } | null;
+    },
     filename: string,
   ): void => {
-    module._compile(resolveServedSource(filename).source, filename);
+    const parent = module.parent?.filename;
+    module._compile(
+      resolveServedSource(
+        filename,
+        pathToFileURL(filename).href,
+        typeof parent !== "string" || !isTypeScriptSource(parent),
+      ).source,
+      filename,
+    );
   };
   for (const extension of [".ts", ".tsx", ".cts"]) {
     extensions[extension] = compile;
@@ -301,14 +337,18 @@ function installCommonJsHook(): void {
  * `require` or an ESM `import`.
  */
 export function entryModuleFormat(entryFile: string): "module" | "commonjs" {
-  const m = manifest();
+  const real = realPath(entryFile);
+  const owner = findEntryEmit(real)?.manifest;
   return moduleFormat(
     entryFile,
-    m === null ? null : (m.moduleOptions ?? {}),
+    owner === undefined ? null : (owner.moduleOptions ?? {}),
   ) === "module"
     ? "module"
     : "commonjs";
 }
+
+/** TypeScript URLs resolved at a JavaScript-to-TypeScript entry boundary. */
+const runtimeEntryUrls = new Set<string>();
 
 /**
  * Rescue an extensionless or directory relative specifier that Node's resolver
@@ -322,10 +362,13 @@ function resolve(
   nextResolve: NextResolve,
 ): ResolveResult {
   try {
-    return rememberCommonJsNamedInterop(
-      restoreStrippedNodeBuiltinScheme(
-        specifier,
-        nextResolve(specifier, context),
+    return rememberRuntimeEntry(
+      rememberCommonJsNamedInterop(
+        restoreStrippedNodeBuiltinScheme(
+          specifier,
+          nextResolve(specifier, context),
+        ),
+        context,
       ),
       context,
     );
@@ -334,11 +377,31 @@ function resolve(
     if (rescued === null) {
       throw error;
     }
-    return rememberCommonJsNamedInterop(
-      { shortCircuit: true, url: rescued },
+    return rememberRuntimeEntry(
+      rememberCommonJsNamedInterop(
+        { shortCircuit: true, url: rescued },
+        context,
+      ),
       context,
     );
   }
+}
+
+/** Remember an ESM root until its synchronous load hook prepares the project. */
+function rememberRuntimeEntry(
+  result: ResolveResult,
+  context: ResolveContext,
+): ResolveResult {
+  if (
+    result.url.startsWith("file:") &&
+    isTypeScriptSource(fileURLToPath(result.url)) &&
+    (context.parentURL === undefined ||
+      !context.parentURL.startsWith("file:") ||
+      !isTypeScriptSource(fileURLToPath(context.parentURL)))
+  ) {
+    runtimeEntryUrls.add(result.url);
+  }
+  return result;
 }
 
 /**
@@ -386,7 +449,11 @@ function load(
   if (!isTypeScriptSource(filename)) {
     return nextLoad(url, context);
   }
-  const { format, source } = resolveRuntimeSource(filename, url);
+  const { format, source } = resolveRuntimeSource(
+    filename,
+    url,
+    runtimeEntryUrls.delete(url) || isProcessEntry(filename),
+  );
   return {
     format,
     shortCircuit: true,
@@ -397,8 +464,9 @@ function load(
 function resolveRuntimeSource(
   filename: string,
   url: string = pathToFileURL(filename).href,
+  prepareAsEntry: boolean = false,
 ): { format: string; source: string } {
-  const served = resolveServedSource(filename, url);
+  const served = resolveServedSource(filename, url, prepareAsEntry);
   const format = moduleFormat(filename, served.moduleOptions);
   return {
     format,
@@ -411,6 +479,16 @@ function resolveRuntimeSource(
           )
         : served.source,
   };
+}
+
+/** Whether `filename` is the TypeScript main module named on Node's argv. */
+function isProcessEntry(filename: string): boolean {
+  const entry = process.argv[1];
+  return (
+    entry !== undefined &&
+    isTypeScriptSource(entry) &&
+    realPath(path.resolve(entry)) === realPath(filename)
+  );
 }
 
 function rememberCommonJsNamedInterop(
@@ -467,9 +545,9 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
     return null;
   }
   const real = realPath(filename);
-  const m = manifest();
-  if (m !== null && entryEmitPath(m, real) !== null) {
-    return m.moduleOptions ?? {};
+  const owner = findEntryEmit(real)?.manifest;
+  if (owner !== undefined) {
+    return owner.moduleOptions ?? {};
   }
   const tsconfig = nearestTsconfig(real);
   if (tsconfig === null) {
@@ -522,10 +600,30 @@ export function projectModuleOptions(
 function resolveServedSource(
   filename: string,
   url: string = pathToFileURL(filename).href,
+  prepareAsEntry: boolean = false,
 ): ServedSource {
   const real = realPath(filename);
-  const served = serveEntryEmit(real);
+  // Only the public preload can prepare a newly discovered root. Direct ttsx
+  // has one pre-built manifest and historically relies on trailing-stem
+  // recovery when Windows presents the same source through its short and long
+  // temp-path spellings (the lint TypeScript-config loader is one such case).
+  // Treating that boundary as prepare-only would discard the existing emit and
+  // feed ESM source into CommonJS interop, producing ERR_REQUIRE_CYCLE_MODULE.
+  const prepareEntry = prepareAsEntry ? prepareRuntimeEntry : undefined;
+  // A JavaScript-to-TypeScript boundary is a new checked root unless an
+  // existing manifest proves exact ownership. Trailing-stem recovery is not
+  // ownership evidence: two out-of-include `index.ts` roots can otherwise map
+  // to the first manifest's `index.js`, skipping the second root's diagnostics.
+  let served = serveEntryEmit(real, prepareEntry === undefined);
   if (served !== null) {
+    return withInlineSourceMap(served);
+  }
+  if (prepareEntry !== undefined) {
+    registeredManifests.push(prepareEntry(real));
+    served = serveEntryEmit(real);
+    if (served === null) {
+      throw new Error(`ttsx: prepared entry emit not found for ${filename}`);
+    }
     return withInlineSourceMap(served);
   }
   const built = serveDependencyEmit(real);
@@ -1166,24 +1264,62 @@ function isIdentifierName(name: string): boolean {
  * `rootDir` cannot have a mirrored emit, so it falls through to the dependency
  * paths.
  */
-function serveEntryEmit(real: string): ServedSource | null {
-  const m = manifest();
-  if (m === null) {
+function serveEntryEmit(
+  real: string,
+  allowStemFallback: boolean = true,
+): ServedSource | null {
+  const owner = findEntryEmit(real, allowStemFallback);
+  if (owner === null) {
     return null;
   }
-  const emitted = entryEmitPath(m, real);
-  if (emitted === null) {
-    return null;
-  }
-  const source = readFileOrNull(emitted);
+  const source = readFileOrNull(owner.emittedFile);
   return source === null
     ? null
     : {
-        emittedFile: emitted,
-        moduleOptions: m.moduleOptions ?? {},
+        emittedFile: owner.emittedFile,
+        moduleOptions: owner.manifest.moduleOptions ?? {},
         source,
         sourceFile: real,
       };
+}
+
+/**
+ * Find the manifest that owns `real`. Explicit prepared roots win, followed by
+ * exact mirrored paths across every manifest. Only then may legacy stem
+ * recovery run, so one manifest's approximate match cannot shadow another's
+ * exact emit.
+ */
+function findEntryEmit(
+  real: string,
+  allowStemFallback: boolean = true,
+): { emittedFile: string; manifest: RuntimeManifest } | null {
+  const manifests = runtimeManifests();
+  for (const candidate of manifests) {
+    if (
+      candidate.entrySource !== undefined &&
+      candidate.entryFile !== undefined &&
+      realPath(candidate.entrySource) === real &&
+      fs.existsSync(candidate.entryFile)
+    ) {
+      return { emittedFile: candidate.entryFile, manifest: candidate };
+    }
+  }
+  for (const candidate of manifests) {
+    const emitted = entryEmitPath(candidate, real, false);
+    if (emitted !== null) {
+      return { emittedFile: emitted, manifest: candidate };
+    }
+  }
+  if (!allowStemFallback) {
+    return null;
+  }
+  for (const candidate of manifests) {
+    const emitted = entryEmitPath(candidate, real, true);
+    if (emitted !== null) {
+      return { emittedFile: emitted, manifest: candidate };
+    }
+  }
+  return null;
 }
 
 /**
@@ -1191,20 +1327,32 @@ function serveEntryEmit(real: string): ServedSource | null {
  * project did not emit it. Shared with `owningModuleOptions` so "the entry
  * project owns this file" means exactly one thing in both places.
  */
-function entryEmitPath(m: RuntimeManifest, real: string): string | null {
-  const cached = entryEmitPathCache.get(real);
-  if (cached !== undefined) {
-    return cached;
+function entryEmitPath(
+  m: RuntimeManifest,
+  real: string,
+  allowStemFallback: boolean = true,
+): string | null {
+  const cache = allowStemFallback
+    ? entryEmitPathCache
+    : exactEntryEmitPathCache;
+  let manifestCache = cache.get(m);
+  if (manifestCache === undefined) {
+    manifestCache = new Map<string, string | null>();
+    cache.set(m, manifestCache);
+  }
+  if (manifestCache.has(real)) {
+    return manifestCache.get(real) ?? null;
   }
   const resolved = isWithin(real, m.rootDir)
     ? resolveEmittedJavaScript({
+        allowStemFallback,
         emittedFiles: m.emittedFiles,
         outDir: m.emitDir,
         projectRoot: m.rootDir,
         sourceFile: real,
       })
     : null;
-  entryEmitPathCache.set(real, resolved);
+  manifestCache.set(real, resolved);
   return resolved;
 }
 
@@ -1212,10 +1360,18 @@ function entryEmitPath(m: RuntimeManifest, real: string): string | null {
  * Memo for `entryEmitPath`, because it is now on the `resolve` hook's path
  * through `owningModuleOptions` — once per import specifier — and a miss inside
  * `resolveEmittedJavaScript` walks the whole emit tree. The entry emit is
- * written once before the run starts and never changes under it, so one answer
- * per path is the only one there is.
+ * written once before the run starts and never changes under it. Registration
+ * can add several independent entry emits, so the manifest is part of the cache
+ * identity as well as the source path.
  */
-const entryEmitPathCache = new Map<string, string | null>();
+const entryEmitPathCache = new WeakMap<
+  RuntimeManifest,
+  Map<string, string | null>
+>();
+const exactEntryEmitPathCache = new WeakMap<
+  RuntimeManifest,
+  Map<string, string | null>
+>();
 
 /**
  * True when `real` is `directory` itself or sits beneath it. Handles a root
@@ -1613,9 +1769,11 @@ function publishDependencyMeta(
 }
 
 function dependencyCacheRoot(): string {
-  const m = manifest();
-  return m !== null && m.depCacheDir.length !== 0
-    ? m.depCacheDir
+  const owner = runtimeManifests().find(
+    (candidate) => candidate.depCacheDir.length !== 0,
+  );
+  return owner !== undefined
+    ? owner.depCacheDir
     : path.join(os.tmpdir(), "ttsx-dep");
 }
 
