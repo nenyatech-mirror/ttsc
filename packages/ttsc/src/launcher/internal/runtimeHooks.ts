@@ -126,6 +126,10 @@ export interface RuntimeManifest {
   emitDir: string;
   /** Emitted file list from the entry build, for source→output matching. */
   emittedFiles?: readonly string[];
+  /** Physical TypeScript root whose checked preparation created this manifest. */
+  entrySource?: string;
+  /** Exact JavaScript emitted for `entrySource`. */
+  entryFile?: string;
   /**
    * The entry tsconfig's `module` and `target`, deciding emit CJS/ESM per file.
    * `target` is not decoration: an absent `module` makes tsgo derive the module
@@ -334,9 +338,7 @@ function installCommonJsHook(): void {
  */
 export function entryModuleFormat(entryFile: string): "module" | "commonjs" {
   const real = realPath(entryFile);
-  const owner = runtimeManifests().find(
-    (candidate) => entryEmitPath(candidate, real) !== null,
-  );
+  const owner = findEntryEmit(real)?.manifest;
   return moduleFormat(
     entryFile,
     owner === undefined ? null : (owner.moduleOptions ?? {}),
@@ -543,10 +545,9 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
     return null;
   }
   const real = realPath(filename);
-  for (const candidate of runtimeManifests()) {
-    if (entryEmitPath(candidate, real) !== null) {
-      return candidate.moduleOptions ?? {};
-    }
+  const owner = findEntryEmit(real)?.manifest;
+  if (owner !== undefined) {
+    return owner.moduleOptions ?? {};
   }
   const tsconfig = nearestTsconfig(real);
   if (tsconfig === null) {
@@ -602,7 +603,11 @@ function resolveServedSource(
   prepareAsEntry: boolean = false,
 ): ServedSource {
   const real = realPath(filename);
-  let served = serveEntryEmit(real);
+  // A JavaScript-to-TypeScript boundary is a new checked root unless an
+  // existing manifest proves exact ownership. Trailing-stem recovery is not
+  // ownership evidence: two out-of-include `index.ts` roots can otherwise map
+  // to the first manifest's `index.js`, skipping the second root's diagnostics.
+  let served = serveEntryEmit(real, !prepareAsEntry);
   if (served !== null) {
     return withInlineSourceMap(served);
   }
@@ -1252,20 +1257,59 @@ function isIdentifierName(name: string): boolean {
  * `rootDir` cannot have a mirrored emit, so it falls through to the dependency
  * paths.
  */
-function serveEntryEmit(real: string): ServedSource | null {
-  for (const candidate of runtimeManifests()) {
-    const emitted = entryEmitPath(candidate, real);
-    if (emitted === null) {
-      continue;
-    }
-    const source = readFileOrNull(emitted);
-    if (source !== null) {
-      return {
-        emittedFile: emitted,
-        moduleOptions: candidate.moduleOptions ?? {},
+function serveEntryEmit(
+  real: string,
+  allowStemFallback: boolean = true,
+): ServedSource | null {
+  const owner = findEntryEmit(real, allowStemFallback);
+  if (owner === null) {
+    return null;
+  }
+  const source = readFileOrNull(owner.emittedFile);
+  return source === null
+    ? null
+    : {
+        emittedFile: owner.emittedFile,
+        moduleOptions: owner.manifest.moduleOptions ?? {},
         source,
         sourceFile: real,
       };
+}
+
+/**
+ * Find the manifest that owns `real`. Explicit prepared roots win, followed by
+ * exact mirrored paths across every manifest. Only then may legacy stem
+ * recovery run, so one manifest's approximate match cannot shadow another's
+ * exact emit.
+ */
+function findEntryEmit(
+  real: string,
+  allowStemFallback: boolean = true,
+): { emittedFile: string; manifest: RuntimeManifest } | null {
+  const manifests = runtimeManifests();
+  for (const candidate of manifests) {
+    if (
+      candidate.entrySource !== undefined &&
+      candidate.entryFile !== undefined &&
+      realPath(candidate.entrySource) === real &&
+      fs.existsSync(candidate.entryFile)
+    ) {
+      return { emittedFile: candidate.entryFile, manifest: candidate };
+    }
+  }
+  for (const candidate of manifests) {
+    const emitted = entryEmitPath(candidate, real, false);
+    if (emitted !== null) {
+      return { emittedFile: emitted, manifest: candidate };
+    }
+  }
+  if (!allowStemFallback) {
+    return null;
+  }
+  for (const candidate of manifests) {
+    const emitted = entryEmitPath(candidate, real, true);
+    if (emitted !== null) {
+      return { emittedFile: emitted, manifest: candidate };
     }
   }
   return null;
@@ -1276,17 +1320,25 @@ function serveEntryEmit(real: string): ServedSource | null {
  * project did not emit it. Shared with `owningModuleOptions` so "the entry
  * project owns this file" means exactly one thing in both places.
  */
-function entryEmitPath(m: RuntimeManifest, real: string): string | null {
-  let manifestCache = entryEmitPathCache.get(m);
+function entryEmitPath(
+  m: RuntimeManifest,
+  real: string,
+  allowStemFallback: boolean = true,
+): string | null {
+  const cache = allowStemFallback
+    ? entryEmitPathCache
+    : exactEntryEmitPathCache;
+  let manifestCache = cache.get(m);
   if (manifestCache === undefined) {
     manifestCache = new Map<string, string | null>();
-    entryEmitPathCache.set(m, manifestCache);
+    cache.set(m, manifestCache);
   }
   if (manifestCache.has(real)) {
     return manifestCache.get(real) ?? null;
   }
   const resolved = isWithin(real, m.rootDir)
     ? resolveEmittedJavaScript({
+        allowStemFallback,
         emittedFiles: m.emittedFiles,
         outDir: m.emitDir,
         projectRoot: m.rootDir,
@@ -1306,6 +1358,10 @@ function entryEmitPath(m: RuntimeManifest, real: string): string | null {
  * identity as well as the source path.
  */
 const entryEmitPathCache = new WeakMap<
+  RuntimeManifest,
+  Map<string, string | null>
+>();
+const exactEntryEmitPathCache = new WeakMap<
   RuntimeManifest,
   Map<string, string | null>
 >();

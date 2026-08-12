@@ -2,29 +2,55 @@ import { SHARED_PLUGIN_CACHE_DIR } from "../../internal/plugin-cache";
 import {
   assert,
   copyProject,
+  fs,
   goPath,
+  path,
   spawn,
 } from "../../internal/plugin-corpus";
-import { TTSX_REGISTER, linkTtscPackage } from "../../internal/ttsx-register";
+import {
+  MOCHA_BIN,
+  TTSX_REGISTER,
+  linkTtscPackage,
+} from "../../internal/ttsx-register";
 
 /**
  * Verifies plugin corpus: ttsx register executes source plugin output.
  *
  * Plain TypeScript execution cannot prove the preload reused ttsx's compiler
  * preparation. This fixture's Go-source transform rewrites the runtime value,
- * so its output pins the complete plugin build and transformed-emit path.
+ * while real Mocha loads that root from outside the project's `include`, so its
+ * output pins the complete fallback, plugin build, and transformed-emit path.
  *
- * 1. Copy the native Go-source plugin fixture and link the workspace package.
- * 2. Run its TypeScript entry with `node --require ttsc/register`.
+ * 1. Copy the native Go-source plugin fixture and add an excluded entry root.
+ * 2. Load it through real Mocha with `--require ttsc/register`.
  * 3. Assert the transformed uppercase value is the code that executes.
  */
 export const test_plugin_corpus_ttsx_register_executes_source_plugin_output_end_to_end =
   () => {
     const root = copyProject("go-source-plugin");
     linkTtscPackage(root);
+    const testDir = path.join(root, "test");
+    fs.mkdirSync(testDir);
+    fs.writeFileSync(
+      path.join(testDir, "main.ts"),
+      [
+        `export const value: string = goUpper("plugin");`,
+        `console.log(value);`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    makeFixtureReadSyntheticEntry(root);
     const result = spawn(
       process.execPath,
-      ["--require", TTSX_REGISTER, "src/main.ts"],
+      [
+        MOCHA_BIN,
+        "--require",
+        TTSX_REGISTER,
+        "--extension",
+        "ts",
+        "test/main.ts",
+      ],
       {
         cwd: root,
         env: {
@@ -34,5 +60,37 @@ export const test_plugin_corpus_ttsx_register_executes_source_plugin_output_end_
       },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), "PLUGIN");
+    assert.match(result.stdout, /^PLUGIN$/m);
   };
+
+/** Make the fixture host honor the synthetic entry config used by ttsx. */
+function makeFixtureReadSyntheticEntry(root: string): void {
+  const source = path.join(root, "go-plugin", "main.go");
+  const original = fs.readFileSync(source, "utf8");
+  const modified = original
+    .replace(
+      `_ = fs.String("tsconfig", "", "")`,
+      `tsconfig := fs.String("tsconfig", "", "")`,
+    )
+    .replace(
+      `source := filepath.Join(root, "src", "main.ts")`,
+      [
+        `source := filepath.Join(root, "src", "main.ts")`,
+        `  if strings.Contains(filepath.Base(*tsconfig), ".ttsx-entry.") {`,
+        `    raw, readErr := os.ReadFile(*tsconfig)`,
+        `    if readErr != nil {`,
+        `      fmt.Fprintln(os.Stderr, readErr)`,
+        `      return 2`,
+        `    }`,
+        `    var config struct { Files []string }`,
+        `    if jsonErr := json.Unmarshal(raw, &config); jsonErr != nil || len(config.Files) != 1 {`,
+        `      fmt.Fprintln(os.Stderr, "go-source-plugin: invalid entry config")`,
+        `      return 2`,
+        `    }`,
+        `    source = config.Files[0]`,
+        `  }`,
+      ].join("\n"),
+    );
+  assert.notEqual(modified, original);
+  fs.writeFileSync(source, modified, "utf8");
+}

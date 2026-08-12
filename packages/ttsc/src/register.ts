@@ -23,6 +23,8 @@ function prepareEntry(filename: string): RuntimeManifest {
     depCacheDir: path.join(execution.cleanupDir, "deps"),
     emitDir: execution.emitDir,
     emittedFiles: execution.emittedFiles,
+    entryFile: execution.entryFile,
+    entrySource: execution.entrySource,
     moduleOptions: execution.moduleOptions,
     projectRoot: execution.projectRoot,
     rootDir: execution.rootDir,

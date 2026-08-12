@@ -38,6 +38,7 @@ export function prepareExecution(
   emitDir: string;
   emittedFiles?: readonly string[];
   entryFile: string;
+  entrySource: string;
   moduleOptions: OwningModuleOptions;
   projectRoot: string;
   rootDir: string;
@@ -74,6 +75,7 @@ export function prepareExecution(
       emitDir: context.emitDir,
       emittedFiles: context.emittedFiles ?? undefined,
       entryFile: emittedEntry,
+      entrySource: entry,
       moduleOptions: context.moduleOptions,
       projectRoot: context.root,
       rootDir: context.runtimeRootDir,

@@ -30,11 +30,11 @@ export const test_ttsx_register_runs_multiple_out_of_include_mocha_roots =
       }),
       "one/tsconfig.json": projectConfig(),
       "one/src/value.ts": `export enum Value { One = "one" }\n`,
-      "one/test/first.ts": mochaTest("first", "one"),
-      "one/test/second.ts": mochaTest("second", "one"),
+      "one/test/first/index.ts": mochaTest("first", "one"),
+      "one/test/second/index.ts": mochaTest("second", "one"),
       "two/tsconfig.json": projectConfig(),
       "two/src/value.ts": `export enum Value { Two = "two" }\n`,
-      "two/test/third.ts": mochaTest("third", "two", true),
+      "two/test/third/index.ts": mochaTest("third", "two", true),
     });
     linkTtscPackage(root);
 
@@ -46,14 +46,17 @@ export const test_ttsx_register_runs_multiple_out_of_include_mocha_roots =
         TTSX_REGISTER,
         "--extension",
         "ts",
-        "one/test/first.ts",
-        "one/test/second.ts",
-        "two/test/third.ts",
+        "one/test/first/index.ts",
+        "one/test/second/index.ts",
+        "two/test/third/index.ts",
       ],
       { cwd: root },
     );
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /3 passing/);
+    for (const suite of ["first", "second", "third"]) {
+      assert.match(result.stdout, new RegExp(`\\b${suite}\\b`));
+    }
     for (const project of ["one", "two"]) {
       const runtimeRoot = path.join(
         root,
