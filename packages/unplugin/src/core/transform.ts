@@ -2091,7 +2091,9 @@ function createTransformScratchDirectory(projectRoot: string): string {
     canonicalCandidates.add(canonicalCandidate);
     let directory: string;
     try {
-      directory = fs.mkdtempSync(path.join(candidate, "ttsc-unplugin-"));
+      directory = fs.mkdtempSync(
+        path.join(canonicalCandidate, "ttsc-unplugin-"),
+      );
     } catch (error) {
       failure = error;
       continue;
@@ -2115,9 +2117,9 @@ function createTransformScratchDirectory(projectRoot: string): string {
     if (!pathIsWithin(canonicalDirectory, canonicalRoot)) {
       return canonicalDirectory;
     }
-    // A candidate can be replaced between the preflight realpath and mkdtemp.
-    // Refuse the result and synchronously remove only our empty random child.
-    fs.rmdirSync(directory);
+    // Refuse the result and synchronously remove only our empty random child
+    // through the identity that the postflight check just classified.
+    fs.rmdirSync(canonicalDirectory);
   }
   throw (
     failure ??
