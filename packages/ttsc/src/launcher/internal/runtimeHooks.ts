@@ -603,15 +603,22 @@ function resolveServedSource(
   prepareAsEntry: boolean = false,
 ): ServedSource {
   const real = realPath(filename);
+  // Only the public preload can prepare a newly discovered root. Direct ttsx
+  // has one pre-built manifest and historically relies on trailing-stem
+  // recovery when Windows presents the same source through its short and long
+  // temp-path spellings (the lint TypeScript-config loader is one such case).
+  // Treating that boundary as prepare-only would discard the existing emit and
+  // feed ESM source into CommonJS interop, producing ERR_REQUIRE_CYCLE_MODULE.
+  const shouldPrepare = prepareAsEntry && prepareRuntimeEntry !== undefined;
   // A JavaScript-to-TypeScript boundary is a new checked root unless an
   // existing manifest proves exact ownership. Trailing-stem recovery is not
   // ownership evidence: two out-of-include `index.ts` roots can otherwise map
   // to the first manifest's `index.js`, skipping the second root's diagnostics.
-  let served = serveEntryEmit(real, !prepareAsEntry);
+  let served = serveEntryEmit(real, !shouldPrepare);
   if (served !== null) {
     return withInlineSourceMap(served);
   }
-  if (prepareAsEntry && prepareRuntimeEntry !== undefined) {
+  if (shouldPrepare) {
     registeredManifests.push(prepareRuntimeEntry(real));
     served = serveEntryEmit(real);
     if (served === null) {
