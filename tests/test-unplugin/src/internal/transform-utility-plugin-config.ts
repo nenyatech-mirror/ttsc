@@ -210,12 +210,12 @@ async function assertPersistentBannerConfigEditInvalidatesTransform() {
  * Assert persistent generations include modules evaluated by native utility
  * config loaders, even when those modules live outside the project walk.
  *
- * 1. Configure banner and strip through `.cjs` and `.ts` files that import an
- *    external helper or a bare package and compile into a persistent cache.
- * 2. Edit only the helper, or create a nearer package-resolution candidate,
+ * 1. Configure banner and strip through `.cjs` and `.ts` files that exercise
+ *    external, extensionless, package-main, ancestor, and NODE_PATH
+ *    resolution.
+ * 2. Edit only a helper or create a superseding module-resolution candidate,
  *    leaving descriptors, configs, and TypeScript project files untouched.
- * 3. Assert the generation is replaced and output reflects the newly selected
- *    helper or package for both plugins.
+ * 3. Assert every candidate replaces the generation and selects new output.
  */
 async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform() {
   const { createTtscTransformCache, resolveOptions, transformTtsc } =
@@ -347,7 +347,12 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
   // the first generation, so pin that missing candidate before it exists.
   const root = createUtilityPluginProject({
     files: {
-      "config/banner.config.cjs": 'module.exports = require("selection");\n',
+      "config/banner.config.cjs": [
+        'const packageSelection = require("selection");',
+        'const dottedSelection = require("./selection.v1");',
+        "module.exports = { text: packageSelection.text + ' | ' + dottedSelection.text };",
+        "",
+      ].join("\n"),
     },
     plugin: "banner",
     pluginEntry: { configFile: "./config/banner.config.cjs" },
@@ -359,12 +364,17 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
   fs.mkdirSync(path.dirname(nearerPackage), { recursive: true });
   fs.writeFileSync(
     path.join(rootPackage, "package.json"),
-    JSON.stringify({ main: "index.cjs" }),
+    JSON.stringify({ main: "entry" }),
     "utf8",
   );
   fs.writeFileSync(
-    path.join(rootPackage, "index.cjs"),
-    'module.exports = { text: "OLD PACKAGE SHADOW" };\n',
+    path.join(rootPackage, "entry.json"),
+    JSON.stringify({ text: "OLD JSON MAIN" }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(root, "config", "selection.v1.json"),
+    JSON.stringify({ text: "OLD DOTTED JSON" }),
     "utf8",
   );
   const file = TestUnpluginProject.mainFile(root);
@@ -378,7 +388,7 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
     cache,
   );
   assert.ok(first);
-  assert.match(first.code, /OLD PACKAGE SHADOW/);
+  assert.match(first.code, /OLD JSON MAIN \| OLD DOTTED JSON/);
   const firstGeneration = [...cache.values()][0];
   const cached = (await firstGeneration) as {
     result?: { hostInputs?: string[] };
@@ -391,6 +401,56 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
     ),
     "banner.cjs omitted the nearer unresolved package candidate",
   );
+  assert.ok(
+    cached.result?.hostInputs?.some(
+      (input) =>
+        path.resolve(input) ===
+        path.resolve(path.join(rootPackage, "entry.js")),
+    ),
+    "banner.cjs omitted the package main extension candidate",
+  );
+  assert.ok(
+    cached.result?.hostInputs?.some(
+      (input) =>
+        path.resolve(input) ===
+        path.resolve(path.join(root, "config", "selection.v1.js")),
+    ),
+    "banner.cjs omitted the dotted CommonJS extension candidate",
+  );
+
+  fs.writeFileSync(
+    path.join(root, "config", "selection.v1.js"),
+    'module.exports = { text: "NEW DOTTED JS" };\n',
+    "utf8",
+  );
+  const dotted = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(dotted);
+  const dottedGeneration = [...cache.values()][0];
+  assert.notEqual(dottedGeneration, firstGeneration);
+  assert.match(dotted.code, /OLD JSON MAIN \| NEW DOTTED JS/);
+
+  fs.writeFileSync(
+    path.join(rootPackage, "entry.js"),
+    'module.exports = { text: "NEW JS MAIN" };\n',
+    "utf8",
+  );
+  const main = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(main);
+  const mainGeneration = [...cache.values()][0];
+  assert.notEqual(mainGeneration, dottedGeneration);
+  assert.match(main.code, /NEW JS MAIN \| NEW DOTTED JS/);
 
   fs.mkdirSync(nearerPackage, { recursive: true });
   fs.writeFileSync(
@@ -411,9 +471,86 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
     cache,
   );
   assert.ok(second);
-  assert.notEqual([...cache.values()][0], firstGeneration);
-  assert.match(second.code, /NEW PACKAGE SHADOW/);
-  assert.doesNotMatch(second.code, /OLD PACKAGE SHADOW/);
+  assert.notEqual([...cache.values()][0], mainGeneration);
+  assert.match(second.code, /NEW PACKAGE SHADOW \| NEW DOTTED JS/);
+  assert.doesNotMatch(second.code, /NEW JS MAIN/);
+
+  await assertNodePathPackageCandidateInvalidatesTransform();
+}
+
+/** Assert Node's inherited NODE_PATH ordering contributes missing candidates. */
+async function assertNodePathPackageCandidateInvalidatesTransform(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const root = createUtilityPluginProject({
+    files: {
+      "config/banner.config.cjs": 'module.exports = require("selection");\n',
+    },
+    plugin: "banner",
+    pluginEntry: { configFile: "./config/banner.config.cjs" },
+    source: 'export const value: string = "kept";\n',
+  });
+  const firstNodePath = TestProject.tmpdir("ttsc-node-path-first-");
+  const secondNodePath = TestProject.tmpdir("ttsc-node-path-second-");
+  const writePackage = (directory: string, text: string): void => {
+    const selected = path.join(directory, "selection");
+    fs.mkdirSync(selected, { recursive: true });
+    fs.writeFileSync(
+      path.join(selected, "package.json"),
+      JSON.stringify({ main: "index.cjs" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(selected, "index.cjs"),
+      `module.exports = { text: ${JSON.stringify(text)} };\n`,
+      "utf8",
+    );
+  };
+  writePackage(secondNodePath, "OLD NODE PATH");
+  const previousNodePath = process.env.NODE_PATH;
+  process.env.NODE_PATH = [firstNodePath, secondNodePath].join(path.delimiter);
+  try {
+    const file = TestUnpluginProject.mainFile(root);
+    const source = TestUnpluginProject.mainSource(root);
+    const cache = createTtscTransformCache();
+    const first = await transformTtsc(
+      file,
+      source,
+      resolveOptions(),
+      undefined,
+      cache,
+    );
+    assert.ok(first);
+    assert.match(first.code, /OLD NODE PATH/);
+    const firstGeneration = [...cache.values()][0];
+    const cached = (await firstGeneration) as {
+      result?: { hostInputs?: string[] };
+    };
+    assert.ok(
+      cached.result?.hostInputs?.some(
+        (input) =>
+          path.resolve(input) ===
+          path.resolve(path.join(firstNodePath, "selection", "package.json")),
+      ),
+      "banner.cjs omitted the preceding NODE_PATH package candidate",
+    );
+
+    writePackage(firstNodePath, "NEW NODE PATH");
+    const second = await transformTtsc(
+      file,
+      source,
+      resolveOptions(),
+      undefined,
+      cache,
+    );
+    assert.ok(second);
+    assert.notEqual([...cache.values()][0], firstGeneration);
+    assert.match(second.code, /NEW NODE PATH/);
+    assert.doesNotMatch(second.code, /OLD NODE PATH/);
+  } finally {
+    if (previousNodePath === undefined) delete process.env.NODE_PATH;
+    else process.env.NODE_PATH = previousNodePath;
+  }
 }
 
 /**

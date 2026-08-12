@@ -215,7 +215,7 @@ func loadStripJSONConfigFile(location string) (any, error) {
 // loadStripScriptConfigFile to evaluate a .js/.cjs/.mjs strip config and
 // serialize the result to stdout as JSON.
 const stripScriptLoaderSource = `
-const { isBuiltin, registerHooks } = require("node:module");
+const { createRequire, isBuiltin, registerHooks } = require("node:module");
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
@@ -240,7 +240,6 @@ function recordFile(file) {
 
 const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"];
 function moduleCandidates(base) {
-  if (path.extname(base) !== "") return [base];
   return [
     base,
     ...moduleProbeExtensions.map((extension) => base + extension),
@@ -248,8 +247,18 @@ function moduleCandidates(base) {
     ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension)),
   ];
 }
+const recordedModuleBases = new Set();
 function recordModuleCandidates(base) {
-  for (const candidate of moduleCandidates(base)) inputs.add(path.resolve(candidate));
+  const resolvedBase = path.resolve(base);
+  if (recordedModuleBases.has(resolvedBase)) return;
+  recordedModuleBases.add(resolvedBase);
+  for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8"));
+    if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
+      recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
+    }
+  } catch {}
 }
 function candidateSelected(base, resolvedFile) {
   for (const candidate of moduleCandidates(base)) {
@@ -285,13 +294,12 @@ function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
   if (packageParts.some((part) => part === undefined || part === "")) return;
   const packageName = packageParts.join("/");
   const subpath = parts.slice(packageParts.length);
-  for (let directory = parentDirectory;; directory = path.dirname(directory)) {
-    const packageDirectory = path.join(directory, "node_modules", packageName);
+  const searchPaths = createRequire(parentURL).resolve.paths(specifier) ?? [];
+  for (const searchPath of searchPaths) {
+    const packageDirectory = path.join(searchPath, packageName);
     recordModuleCandidates(packageDirectory);
     if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));
     if (resolvedFile !== undefined && candidateSelected(packageDirectory, resolvedFile)) break;
-    const parent = path.dirname(directory);
-    if (parent === directory) break;
   }
 }
 
@@ -410,7 +418,7 @@ func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
 // `"./strip.config.ts"`) produced by json.Marshal.
 func stripTypeScriptLoaderSource(importLiteral string) string {
   return fmt.Sprintf(`// @ts-nocheck
-import { isBuiltin, registerHooks } from "node:module";
+import { createRequire, isBuiltin, registerHooks } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -436,7 +444,6 @@ function recordFile(file: string): void {
 
 const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"] as const;
 function moduleCandidates(base: string): string[] {
-  if (path.extname(base) !== "") return [base];
   return [
     base,
     ...moduleProbeExtensions.map((extension) => base + extension),
@@ -444,8 +451,18 @@ function moduleCandidates(base: string): string[] {
     ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension)),
   ];
 }
+const recordedModuleBases = new Set<string>();
 function recordModuleCandidates(base: string): void {
-  for (const candidate of moduleCandidates(base)) inputs.add(path.resolve(candidate));
+  const resolvedBase = path.resolve(base);
+  if (recordedModuleBases.has(resolvedBase)) return;
+  recordedModuleBases.add(resolvedBase);
+  for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8"));
+    if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
+      recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
+    }
+  } catch {}
 }
 function candidateSelected(base: string, resolvedFile: string): boolean {
   for (const candidate of moduleCandidates(base)) {
@@ -481,13 +498,12 @@ function recordResolutionCandidates(specifier: string, parentURL: string | undef
   if (packageParts.some((part) => part === undefined || part === "")) return;
   const packageName = packageParts.join("/");
   const subpath = parts.slice(packageParts.length);
-  for (let directory = parentDirectory;; directory = path.dirname(directory)) {
-    const packageDirectory = path.join(directory, "node_modules", packageName);
+  const searchPaths = createRequire(parentURL).resolve.paths(specifier) ?? [];
+  for (const searchPath of searchPaths) {
+    const packageDirectory = path.join(searchPath, packageName);
     recordModuleCandidates(packageDirectory);
     if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));
     if (resolvedFile !== undefined && candidateSelected(packageDirectory, resolvedFile)) break;
-    const parent = path.dirname(directory);
-    if (parent === directory) break;
   }
 }
 
