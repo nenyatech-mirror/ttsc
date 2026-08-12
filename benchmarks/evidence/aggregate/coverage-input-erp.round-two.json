@@ -1,0 +1,90 @@
+{
+  "cohort": "round two, campaign/evidence-luna-0.26.0",
+  "subject": "erp",
+  "arm": "plain",
+  "runId": "0b9deae2-9926-49f4-9b6c-d454844a4470",
+  "state": "counted",
+  "method": {
+    "read": "A snapshot of the workspace taken at 15:55, copied without node_modules, build output, and logs. The cell was still running: a first attempt to count the live tree saw the schema grow from 133 to 135 models and the accessors from 441 to 445 mid-read, so the count was moved onto a frozen copy.",
+    "grouping": "The six requirement-rooted edges are counted per family, the 253 `##` anchors, not per requirement. A family shares one obligation, and the workspace's own screen-plan script rolls an H3 decision up to its H2.",
+    "requirementRooted": "Each of the six was counted twice in independent passes and the lower rate kept."
+  },
+  "populations": {
+    "requirementAnchors": 1487,
+    "requirementFamilies": 253,
+    "models": 135,
+    "scalarColumns": 1316,
+    "accessors": 445,
+    "publishedTypes": 349,
+    "hooks": 439,
+    "screens": 13,
+    "backendTests": 166,
+    "journeyCases": 3
+  },
+  "cells": [
+    {
+      "model": "gpt-5.6-luna",
+      "subject": "erp",
+      "runId": "0b9deae2-9926-49f4-9b6c-d454844a4470",
+      "edges": {
+        "requirementToModel": { "eligible": 101, "reached": 100 },
+        "requirementToOperation": { "eligible": 98, "reached": 97 },
+        "requirementToDto": { "eligible": 192, "reached": 189 },
+        "requirementToTest": { "eligible": 252, "reached": 236 },
+        "requirementToScreen": { "eligible": 98, "reached": 19 },
+        "requirementToJourney": { "eligible": 105, "reached": 8 },
+        "modelToOperation": { "eligible": 135, "reached": 135 },
+        "modelToDto": { "eligible": 135, "reached": 133 },
+        "accessorToTest": { "eligible": 445, "reached": 432 },
+        "accessorToHook": { "eligible": 445, "reached": 424 },
+        "hookToScreen": { "eligible": 439, "reached": 22 },
+        "screenToJourney": { "eligible": 13, "reached": 13 },
+        "columnToProperty": { "eligible": 1316, "reached": 928 }
+      }
+    }
+  ],
+  "eligibilityRules": {
+    "requirementToModel": "The family declares organizational state the system must persist.",
+    "requirementToOperation": "The family describes an action a principal performs or a result the system returns on request.",
+    "requirementToDto": "The family's information crosses the HTTP boundary as a request or response payload.",
+    "requirementToTest": "The family's obligation is decidable through the backend API. One family is outside it, asserting a delivery-process property no feature test settles.",
+    "requirementToScreen": "The family names a capability a human performs in the browser.",
+    "requirementToJourney": "The family owes a browser-observable flow."
+  },
+  "unreached": {
+    "requirementToModel": [
+      "REQ-DOM-ASSET-CATEGORY: no asset_categories model, no category column on assets, and the name appears nowhere under packages"
+    ],
+    "requirementToOperation": ["REQ-AUTH-PRINCIPAL"],
+    "requirementToDto": ["REQ-DOM-LOT", "REQ-DOM-SERIAL", "REQ-DOM-ASSET-CATEGORY"],
+    "requirementToTest": [
+      "16 of 252 families, among them REQ-NFR-TENANT, which no test can settle as written because no test creates a second organization, and REQ-RULE-CONCURRENCY, which no test can settle because the suite issues no concurrent request"
+    ],
+    "requirementToScreen": [
+      "79 of 98 families. The thirteen screens deliver authentication, the organization, accounts, journals, stock views, inventory adjustment, MRP and its recommendations, approvals, audit, and the seven report families. Procurement, sales, inventory master data, manufacturing, quality, service, projects, payroll, and every finance master family reach no screen"
+    ],
+    "requirementToJourney": [
+      "97 of 105 families. Three journey cases reach provisioning, the account, journals, the financial report, approvals, audit, and inventory adjustment. All seven REQ-JRN-* end-to-end families are unwalked"
+    ],
+    "modelToDto": [
+      "recovery_deliveries: the recovery request deliberately returns a random identifier so no column reaches a response",
+      "vendor_credit_refunds: written and never read back, while the credit-memo side publishes its refunds"
+    ],
+    "accessorToTest": [
+      "13 of 445, among them the whole credit-memo group, the three MRP recommendation decisions, two asset transitions, and both automation accessors"
+    ],
+    "accessorToHook": ["21 of 445"],
+    "hookToScreen": [
+      "417 of 439. All 17 authored hooks are called by a screen; of the generated per-accessor wrappers only 5 are"
+    ],
+    "columnToProperty": [
+      "388 of 1316: 116 created_at, 101 organization_id, 39 updated_at, and 132 domain columns. recovery_deliveries and sessions publish no column at all"
+    ]
+  },
+  "unsettled": {
+    "requirementToTest": "Both passes give 236 of 252 but name different families in four places; the union of both unreached sets is 234. The evidence read directly — no second organization anywhere in the suite, no concurrent request anywhere in the suite — supports the lower figure.",
+    "modelToDto": "lots and serials are counted reached on their keys alone: no ILot or ISerial exists, and only lots.id and serials.code escape, as lotId and serialCode on movement and quarantine types. A rule requiring non-key state to be published would make this 131.",
+    "screenToJourney": "13 of 13 is a source-level count. The journey's Operations step waits for text the screen does not render, so the case times out there and the last four screens never execute; the executable count is 9. The workspace's own verification note concedes the live suite was never run.",
+    "columnToProperty": "928 is a point estimate inside a band of 921 to 931, the ends being a strict leaf-type reading and a root-namespace-expanded one."
+  }
+}
