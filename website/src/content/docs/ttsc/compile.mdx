@@ -84,7 +84,15 @@ npx ttsc clean                      # drop the plugin cache
 
 Flag names are matched the way `tsc` matches them: case-insensitively, with one or two leading dashes. `--noEmit`, `--noemit`, and `-noEmit` all select the same flag, so a CI script or a shell that spells a flag differently still gets the flag it asked for instead of one `ttsc` forwards without recognizing.
 
-Any flag `ttsc` does not own is forwarded as-is to `tsc`, so classic `tsc` compilerOptions work on the command line too, `ttsc --strict src/main.ts`, `ttsc --target es2020`, `ttsc --listFiles`. The usual home for `target`, `module`, `strict`, `lib`, and friends is still `tsconfig.json`; the CLI form just overrides it for one run. On a project that configures a ttsc plugin, the forwarded flag still reaches the in-process compiler, though tsc's reporting flags (`--listFiles`, `--showConfig`, …) only print on a plain, plugin-free build.
+Any flag `ttsc` does not own is forwarded as-is to `tsc`, so classic `tsc` compilerOptions work on the command line too, `ttsc --strict src/main.ts`, `ttsc --target es2020`, `ttsc --listFiles`. The usual home for `target`, `module`, `strict`, `lib`, and friends is still `tsconfig.json`; the CLI form just overrides it for one run. On a project that configures a ttsc plugin, the forwarded flag still reaches the in-process compiler, though tsc's reporting flags (`--listFiles`, `--showConfig`, …) only print on a plain, plugin-free build. A plugin build receives the flags through the environment rather than its command line, so a sidecar with a strict flag parser is never handed an option it does not know; see [Plugin protocol → Environment](/docs/development/concepts/protocol#environment).
+
+## Build information
+
+`incremental` and `composite` make `tsc` write a `.tsbuildinfo` next to the tsconfig, or wherever `tsBuildInfoFile` points. `ttsc` writes the same file, in the same format and at the same path, on both lanes: a plain build, and a build a ttsc plugin owns.
+
+What `ttsc` does not do is read one back to skip work. A plugin's output is not a function of the source text alone, and a `.tsbuildinfo` records only what `tsc` knows about: file versions, resolved options, and signatures. It has no room for the plugin binary, its config file, or its contributors, so reusing a previous run's record could serve output produced by a plugin that has since changed. Every `ttsc` build therefore emits every file, and the build information it leaves behind is a record for other consumers — a CI cache key, a later `tsc` run that should treat the outputs as current — rather than an input to the next `ttsc` run.
+
+One consequence is worth knowing if you inspect the file: on a build where the plugin assembled the JavaScript itself, the record marks the JavaScript emit of each file as still pending, because `tsc`'s own emitter never ran for it. The error is one-directional — a consumer can only decide to emit again, never to skip a file the plugin actually transformed.
 
 ## Exit codes
 
