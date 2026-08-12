@@ -48,11 +48,13 @@ export const test_ttsc_cache_paths_json_reports_source_build_cache_roots =
     const parsed = JSON.parse(result.stdout) as {
       cacheRoot: string;
       cacheableRoots: string[];
+      acceleratorRoots: string[];
       cwd: string;
       goBuildCacheRoot: string;
       goBuildCacheSource: string;
       pluginCacheRoot: string;
       projectRoot: string;
+      requiredRoots: string[];
     };
     const cacheRoot = path.join(root, ".ci", "ttsc");
     assert.equal(parsed.cwd, root);
@@ -62,4 +64,6 @@ export const test_ttsc_cache_paths_json_reports_source_build_cache_roots =
     assert.equal(parsed.goBuildCacheRoot, goBuildCache);
     assert.equal(parsed.goBuildCacheSource, "TTSC_GO_CACHE_DIR");
     assert.deepEqual(parsed.cacheableRoots, [cacheRoot, goBuildCache]);
+    assert.deepEqual(parsed.requiredRoots, [path.join(cacheRoot, "plugins")]);
+    assert.deepEqual(parsed.acceleratorRoots, [goBuildCache]);
   };

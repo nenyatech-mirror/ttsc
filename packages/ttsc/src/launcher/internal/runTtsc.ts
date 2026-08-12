@@ -269,24 +269,28 @@ function runCachePaths(argv: readonly string[]): number {
   const cacheDir = resolveCacheDir(cwd, options.cacheDir);
   const projectRoot = resolveCleanProjectRoot(cwd, options.tsconfig);
   const paths = resolveSourceBuildCachePaths(projectRoot, cacheDir);
-  // The minimal directory set a CI cache step must persist. The Go build cache
-  // is folded in only when it lives outside the ttsc cache root (an explicit
-  // GOCACHE / TTSC_GO_CACHE_DIR); by default it nests under `root`.
+  // Legacy combined roots retained for JSON compatibility. `requiredRoots`
+  // identifies the compiled binaries that skip cold builds;
+  // `acceleratorRoots` separately identifies the optional Go object cache.
   const cacheableRoots = [
     paths.root,
     ...(isPathWithin(paths.goBuildRoot, paths.root) ? [] : [paths.goBuildRoot]),
   ];
+  const requiredRoots = [paths.pluginRoot];
+  const acceleratorRoots = [paths.goBuildRoot];
   if (options.json) {
     process.stdout.write(
       `${JSON.stringify(
         {
           cacheRoot: paths.root,
+          acceleratorRoots,
           cacheableRoots,
           cwd,
           goBuildCacheRoot: paths.goBuildRoot,
           goBuildCacheSource: paths.goBuildRootSource,
           pluginCacheRoot: paths.pluginRoot,
           projectRoot,
+          requiredRoots,
         },
         null,
         2,
@@ -301,8 +305,10 @@ function runCachePaths(argv: readonly string[]): number {
       `  plugin binaries  ${paths.pluginRoot}`,
       `  go build cache   ${paths.goBuildRoot} (${paths.goBuildRootSource})`,
       "",
-      "Persist these between CI jobs to skip cold plugin rebuilds:",
-      ...cacheableRoots.map((root) => `  ${root}`),
+      "Persist this required cache to skip cold plugin rebuilds:",
+      ...requiredRoots.map((root) => `  ${root}`),
+      "Optionally persist this Go object accelerator for future cache misses:",
+      ...acceleratorRoots.map((root) => `  ${root}`),
       "",
     ].join("\n"),
   );

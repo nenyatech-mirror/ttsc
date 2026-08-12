@@ -149,6 +149,20 @@ const PLUGIN_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const PLUGIN_CACHE_TARGET_BYTES = Math.floor(PLUGIN_CACHE_MAX_BYTES * 0.8);
 const PLUGIN_CACHE_PROTECTED_AGE_MS = 60 * 60 * 1000;
 
+// Go's own object-cache trim is age-based and has no size ceiling. The default
+// ttsc-owned cache therefore keeps up to 8 GiB and trims oldest objects toward
+// 6 GiB. The newest target-sized set used within an hour remains protected so
+// crossing the ceiling cannot immediately force another cold build.
+const GO_BUILD_CACHE_GC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const GO_BUILD_CACHE_MAX_BYTES = 8 * 1024 * 1024 * 1024;
+const GO_BUILD_CACHE_TARGET_BYTES = 6 * 1024 * 1024 * 1024;
+const GO_BUILD_CACHE_PROTECTED_AGE_MS = 60 * 60 * 1000;
+const GO_BUILD_CACHE_GC_MARKER_FILE = ".ttsc-gc";
+const GO_BUILD_CACHE_LEASE_DIR = ".ttsc-build-leases";
+const GO_BUILD_CACHE_MAINTENANCE_DIR = ".ttsc-maintenance";
+const GO_BUILD_CACHE_COORDINATION_STALE_MS = 60 * 60 * 1000;
+const GO_BUILD_CACHE_COORDINATION_POLL_MS = 25;
+
 /** One contributor's resolved Go source plus its target sub-package name. */
 export interface ITtscBuildContributor {
   /** Sub-package suffix: scratch lands at `<host>/contrib/<name>/`. */
@@ -209,7 +223,12 @@ export function buildSourcePlugin(opts: {
     tsgoVersion: opts.tsgoVersion,
   });
   const paths = resolveSourceBuildCachePaths(opts.baseDir, opts.cacheDir, env);
-  maybePrunePluginCache(paths, opts.cacheDir, env);
+  const manageGoBuildCache = shouldManageSourceBuildCaches(
+    paths,
+    opts.cacheDir,
+    env,
+  );
+  maybePruneSourceBuildCaches(paths, opts.cacheDir, env);
   const cacheDir = path.join(paths.pluginRoot, key);
   const binaryName = process.platform === "win32" ? "plugin.exe" : "plugin";
   const binaryPath = path.join(cacheDir, binaryName);
@@ -236,6 +255,7 @@ export function buildSourcePlugin(opts: {
         key,
         label,
         goBuildCacheRoot: paths.goBuildRoot,
+        manageGoBuildCache,
         overlayDirs,
         pluginName: opts.pluginName,
         quiet,
@@ -254,6 +274,7 @@ function compileSourcePlugin(opts: {
   env: NodeJS.ProcessEnv;
   goBinary: string;
   goBuildCacheRoot: string;
+  manageGoBuildCache: boolean;
   key: string;
   label: string;
   overlayDirs: readonly string[];
@@ -303,14 +324,19 @@ function compileSourcePlugin(opts: {
     );
     const scratchBinaryName =
       process.platform === "win32" ? ".ttsc-plugin.exe" : ".ttsc-plugin";
-    runGoBuild(
-      scratchDir,
-      opts.entry,
-      scratchBinaryName,
-      opts.pluginName,
-      opts.goBinary,
+    withGoBuildCacheLease(
       opts.goBuildCacheRoot,
-      opts.env,
+      opts.manageGoBuildCache,
+      () =>
+        runGoBuild(
+          scratchDir,
+          opts.entry,
+          scratchBinaryName,
+          opts.pluginName,
+          opts.goBinary,
+          opts.goBuildCacheRoot,
+          opts.env,
+        ),
     );
     const builtBinary = path.join(scratchDir, scratchBinaryName);
     publishBuiltBinary(builtBinary, opts.binaryPath);
@@ -1995,7 +2021,7 @@ export function resolvePluginCacheRoot(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const paths = resolveSourceBuildCachePaths(projectRoot, cacheDir, env);
-  maybePrunePluginCache(paths, cacheDir, env);
+  maybePruneSourceBuildCaches(paths, cacheDir, env);
   return paths.pluginRoot;
 }
 
@@ -2158,7 +2184,7 @@ function resolveGoBuildCacheRoot(
   };
 }
 
-function maybePrunePluginCache(
+function maybePruneSourceBuildCaches(
   paths: ITtscSourceBuildCachePaths,
   cacheDir: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -2170,7 +2196,23 @@ function maybePrunePluginCache(
   // `context.env` is honored without leaning on the shared `process.env`.
   if (!cacheDir && !env.TTSC_CACHE_DIR) {
     prunePluginCacheRoot(paths.pluginRoot);
+    if (paths.goBuildRootSource === "ttsc-cache") {
+      pruneGoBuildCacheRoot(paths.goBuildRoot);
+    }
   }
+}
+
+/** Report whether this invocation owns and automatically maintains both caches. */
+function shouldManageSourceBuildCaches(
+  paths: ITtscSourceBuildCachePaths,
+  cacheDir: string | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return (
+    !cacheDir &&
+    !env.TTSC_CACHE_DIR &&
+    paths.goBuildRootSource === "ttsc-cache"
+  );
 }
 
 /**
@@ -2984,6 +3026,305 @@ function prunePluginCacheEntries(root: string, now: number): void {
     }
     removeCacheEntry(entry);
     total -= entry.size;
+  }
+}
+
+/** Test/internal controls for deterministic Go object-cache maintenance. */
+export interface IGoBuildCachePruneOptions {
+  /** Ignore the once-daily marker. */
+  force?: boolean;
+  /** Size that triggers LRU pruning. */
+  maxBytes?: number;
+  /** Size to prune toward once the ceiling is crossed. */
+  targetBytes?: number;
+  /** Injected clock for deterministic tests. */
+  now?: number;
+  /** Recent-file protection window. */
+  protectedAgeMs?: number;
+}
+
+/**
+ * Opportunistically bound one ttsc-owned Go object cache.
+ *
+ * A maintenance intent blocks new build leases. If any existing lease remains,
+ * maintenance yields without touching the cache; the next invocation retries.
+ * Only Go's two-hex object directories are scanned, so coordination metadata
+ * and Go's own trim marker remain outside the size policy.
+ */
+export function pruneGoBuildCacheRoot(
+  root: string,
+  options: IGoBuildCachePruneOptions = {},
+): void {
+  let intent: string | undefined;
+  try {
+    fs.mkdirSync(root, { recursive: true });
+    const marker = path.join(root, GO_BUILD_CACHE_GC_MARKER_FILE);
+    const now = options.now ?? Date.now();
+    const lastRun = readTimestamp(marker);
+    if (
+      options.force !== true &&
+      lastRun !== null &&
+      now - lastRun < GO_BUILD_CACHE_GC_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    intent = createGoBuildCacheCoordinationRecord(
+      root,
+      GO_BUILD_CACHE_MAINTENANCE_DIR,
+    );
+    if (
+      collectLiveGoBuildCacheCoordinationRecords(
+        root,
+        GO_BUILD_CACHE_LEASE_DIR,
+        now,
+      ).length !== 0
+    ) {
+      return;
+    }
+
+    const remainingBytes = pruneGoBuildCacheEntries(root, {
+      maxBytes: options.maxBytes ?? GO_BUILD_CACHE_MAX_BYTES,
+      now,
+      protectedAgeMs:
+        options.protectedAgeMs ?? GO_BUILD_CACHE_PROTECTED_AGE_MS,
+      targetBytes: options.targetBytes ?? GO_BUILD_CACHE_TARGET_BYTES,
+    });
+    // If recent protection or a transient delete failure left the cache above
+    // the ceiling, retry after the protection window instead of suppressing
+    // every maintenance attempt for a full day.
+    const maxBytes = options.maxBytes ?? GO_BUILD_CACHE_MAX_BYTES;
+    const protectedAgeMs =
+      options.protectedAgeMs ?? GO_BUILD_CACHE_PROTECTED_AGE_MS;
+    const markerTimestamp =
+      remainingBytes > maxBytes
+        ? now - GO_BUILD_CACHE_GC_INTERVAL_MS + protectedAgeMs
+        : now;
+    fs.writeFileSync(marker, `${markerTimestamp}\n`, "utf8");
+  } catch {
+    // Go-cache GC is opportunistic; builds still proceed when it fails.
+  } finally {
+    if (intent !== undefined) {
+      try {
+        fs.rmSync(intent, { force: true });
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Run one Go build under a cross-process cache lease when ttsc owns the cache.
+ *
+ * The lease is published before checking maintenance. A maintenance process
+ * that arrived first keeps its intent visible, so this builder withdraws and
+ * retries; one that arrives second sees the lease and yields. That ordering
+ * closes the scan/start race without serializing independent Go builds.
+ */
+export function withGoBuildCacheLease<T>(
+  root: string,
+  managed: boolean,
+  callback: () => T,
+): T {
+  if (!managed) {
+    return callback();
+  }
+  const started = Date.now();
+  for (;;) {
+    const lease = createGoBuildCacheCoordinationRecord(
+      root,
+      GO_BUILD_CACHE_LEASE_DIR,
+    );
+    const maintenance = collectLiveGoBuildCacheCoordinationRecords(
+      root,
+      GO_BUILD_CACHE_MAINTENANCE_DIR,
+      Date.now(),
+    );
+    if (maintenance.length === 0) {
+      try {
+        return callback();
+      } finally {
+        try {
+          fs.rmSync(lease, { force: true });
+        } catch {}
+      }
+    }
+    try {
+      fs.rmSync(lease, { force: true });
+    } catch {}
+    if (Date.now() - started > PLUGIN_BUILD_LOCK_STEAL_MS) {
+      throw new Error(
+        `ttsc: timed out waiting for Go build cache maintenance at ${root}`,
+      );
+    }
+    sleepSync(GO_BUILD_CACHE_COORDINATION_POLL_MS);
+  }
+}
+
+interface GoBuildCacheObject {
+  file: string;
+  lastUsedAt: number;
+  size: number;
+}
+
+/** Prune oldest Go cache objects to the requested deterministic size target. */
+function pruneGoBuildCacheEntries(
+  root: string,
+  options: {
+    maxBytes: number;
+    now: number;
+    protectedAgeMs: number;
+    targetBytes: number;
+  },
+): number {
+  const entries = collectGoBuildCacheObjects(root);
+  let total = entries.reduce((sum, entry) => sum + entry.size, 0);
+  if (total <= options.maxBytes) {
+    return total;
+  }
+  // Protect the newest recent objects only up to one target-sized cohort
+  // reserve. Protecting every object younger than an hour would let repeated
+  // 2.9 GiB cold builds grow without bound during that hour.
+  const protectedFiles = new Set<string>();
+  let protectedBytes = 0;
+  for (const entry of [...entries].sort((a, b) => b.lastUsedAt - a.lastUsedAt)) {
+    if (options.now - entry.lastUsedAt > options.protectedAgeMs) {
+      continue;
+    }
+    if (protectedBytes >= options.targetBytes) {
+      break;
+    }
+    protectedFiles.add(entry.file);
+    protectedBytes += entry.size;
+  }
+  for (const entry of entries.sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
+    if (total <= options.targetBytes) {
+      return total;
+    }
+    if (protectedFiles.has(entry.file)) {
+      continue;
+    }
+    try {
+      fs.rmSync(entry.file, { force: true });
+      total -= entry.size;
+    } catch {
+      // A concurrent antivirus/indexer can transiently hold a file on Windows.
+    }
+  }
+  return total;
+}
+
+function collectGoBuildCacheObjects(root: string): GoBuildCacheObject[] {
+  const output: GoBuildCacheObject[] = [];
+  let buckets: fs.Dirent[];
+  try {
+    buckets = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return output;
+  }
+  for (const bucket of buckets) {
+    if (!bucket.isDirectory() || !/^[0-9a-f]{2}$/.test(bucket.name)) {
+      continue;
+    }
+    const directory = path.join(root, bucket.name);
+    let files: fs.Dirent[];
+    try {
+      files = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.isFile()) {
+        continue;
+      }
+      const absolute = path.join(directory, file.name);
+      try {
+        const stats = fs.statSync(absolute);
+        output.push({
+          file: absolute,
+          lastUsedAt: stats.mtimeMs,
+          size: stats.size,
+        });
+      } catch {}
+    }
+  }
+  return output;
+}
+
+function createGoBuildCacheCoordinationRecord(
+  root: string,
+  directoryName: string,
+): string {
+  const directory = path.join(root, directoryName);
+  fs.mkdirSync(directory, { recursive: true });
+  const record = path.join(
+    directory,
+    `${process.pid}-${crypto.randomBytes(16).toString("hex")}.json`,
+  );
+  fs.writeFileSync(
+    record,
+    `${JSON.stringify({
+      hostname: os.hostname(),
+      pid: process.pid,
+      startedAt: Date.now(),
+    })}\n`,
+    "utf8",
+  );
+  return record;
+}
+
+function collectLiveGoBuildCacheCoordinationRecords(
+  root: string,
+  directoryName: string,
+  now: number,
+): string[] {
+  const directory = path.join(root, directoryName);
+  let records: fs.Dirent[];
+  try {
+    records = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const live: string[] = [];
+  for (const record of records) {
+    if (!record.isFile()) {
+      continue;
+    }
+    const file = path.join(directory, record.name);
+    if (goBuildCacheCoordinationRecordIsLive(file, now)) {
+      live.push(file);
+      continue;
+    }
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {}
+  }
+  return live;
+}
+
+function goBuildCacheCoordinationRecordIsLive(
+  file: string,
+  now: number,
+): boolean {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof parsed.hostname === "string" &&
+      typeof parsed.pid === "number" &&
+      Number.isInteger(parsed.pid) &&
+      parsed.pid > 0
+    ) {
+      if (isLocalHostName(parsed.hostname)) {
+        return isProcessAlive(parsed.pid);
+      }
+    }
+  } catch {}
+  try {
+    return now - fs.statSync(file).mtimeMs <= GO_BUILD_CACHE_COORDINATION_STALE_MS;
+  } catch {
+    return false;
   }
 }
 

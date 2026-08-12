@@ -20,11 +20,13 @@ import {
   formatDuration,
   formatGoWorkPath,
   inspectPluginBuildLock,
+  pruneGoBuildCacheRoot,
   reclaimPluginBuildLock,
   releasePluginBuildLock,
   resolvePluginCacheRoot,
   resolveSourceBuildCachePaths,
   waitForPluginBinary,
+  withGoBuildCacheLease,
 } from "../../../../packages/ttsc/lib/plugin/internal/buildSourcePlugin.js";
 
 /**
@@ -348,6 +350,7 @@ export {
   inspectPluginBuildLock,
   os,
   path,
+  pruneGoBuildCacheRoot,
   reclaimPluginBuildLock,
   releasePluginBuildLock,
   resolvePluginCacheRoot,
@@ -358,4 +361,5 @@ export {
   spawnSourcePluginWorker,
   waitForCondition,
   waitForPluginBinary,
+  withGoBuildCacheLease,
 };

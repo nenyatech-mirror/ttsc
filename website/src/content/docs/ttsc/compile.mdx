@@ -100,7 +100,7 @@ The plugin binary cache is **project-local**. By default it lives in the workspa
 
 Override the root with `--cache-dir` or `TTSC_CACHE_DIR` (relative `--cache-dir` resolves from `--cwd`, relative `TTSC_CACHE_DIR`/`TTSC_GO_CACHE_DIR` from the project root). Point these at a directory **dedicated to ttsc**: ttsc owns everything under the root and `ttsc clean` removes its `plugins/` and `go-build/` there, so do not set `TTSC_CACHE_DIR` to a shared cache such as `~/.cache`.
 
-The cache is safe to delete at any time (`ttsc clean`); binaries rebuild on next use, and the default cache prunes entries unused for 30 days automatically. `ttsc clean` also reclaims the machine-global cache left by pre-0.17 releases.
+The cache is safe to delete at any time (`ttsc clean`); binaries rebuild on next use. The default cache prunes plugin binaries unused for 30 days and bounds its Go object cache at 8 GiB, pruning toward 6 GiB outside active builds. Explicit cache roots and a user `GOCACHE` remain caller-owned. `ttsc clean` also reclaims the machine-global cache left by pre-0.17 releases.
 
 Every CI job and every container build starts from a clean filesystem, so a source plugin recompiles on each one unless the cache is carried across. [Build cache](/docs/ttsc/cache) covers that: what invalidates the cache, why a CI key has to separate architectures and not only operating systems, the `npm ci` ordering trap that silently disables the cache, and worked GitHub Actions and Docker recipes.
 

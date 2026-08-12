@@ -54,7 +54,7 @@ jobs:
       - run: npm ci
       - uses: actions/cache@v4
         with:
-          path: node_modules/.cache/ttsc
+          path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-ttsc-
@@ -64,9 +64,9 @@ jobs:
 
 ### Which paths to persist
 
-One path is usually enough, because the Go object cache nests under the cache root by default. It is not always enough: `TTSC_GO_CACHE_DIR`, or a user `GOCACHE` when that variable is unset, can put the object cache outside the root, and then a single cached directory silently leaves it behind.
+Persisting the compiled plugin binaries is sufficient to skip a cold source-plugin build. The Go object cache is a separate optional accelerator: it helps the next time a source change or dependency bump produces a plugin-binary cache miss, but it is not consulted when the compiled binary already matches.
 
-`npx ttsc cache paths --json` settles it. The `cacheableRoots` array is the minimal set a CI cache must persist under any layout, and it carries the Go object cache as a second entry whenever that cache sits outside the root. Read the paths from that command rather than hardcoding them. This works the same for npm, pnpm, yarn, and bun, and for workspaces under any of them.
+`npx ttsc cache paths --json` reports `requiredRoots` for compiled binaries and `acceleratorRoots` for Go objects. Persist `requiredRoots` by default. Add `acceleratorRoots` only when faster cold rebuilds justify its larger cache entry. The older `cacheableRoots` field remains as a compatibility union for existing scripts; it is not the minimal required set. This works the same for npm, pnpm, yarn, and bun, and for workspaces under any of them.
 
 ### Why the cache step goes after the install
 
@@ -86,7 +86,7 @@ Nothing breaks, because the internal key still refuses the mismatch. What happen
 key: ${{ runner.os }}-${{ runner.arch }}-ttsc-${{ hashFiles('package-lock.json') }}
 ```
 
-`restore-keys` is worth keeping. On a lockfile bump the primary key misses, but the previous entry still restores, so the Go object cache under `<root>/go-build` gives an incremental rebuild instead of a fully cold one, and the run then saves a fresh entry under the new key.
+`restore-keys` is worth keeping. On a lockfile bump the primary key misses, but the previous entry can still contain a compiled binary for an unchanged internal content key. If you also persist `acceleratorRoots`, the restored Go objects make a real binary miss incremental instead of fully cold.
 
 ### The cache saves only when the key misses
 
@@ -103,9 +103,9 @@ env:
   TTSC_CACHE_DIR: .ttsc-cache
 ```
 
-Then cache `.ttsc-cache`. That one path covers both the plugin binaries and the Go object cache, because the object cache nests under the root by default. Point it at a directory dedicated to `ttsc`: `ttsc` owns everything under that root, and `ttsc clean` removes its `plugins/` and `go-build/` there, so a shared location such as `~/.cache` is the wrong target.
+Then cache `.ttsc-cache/plugins` as the required artifact. Add `.ttsc-cache/go-build` only as the optional accelerator. Point the root at a directory dedicated to `ttsc`: `ttsc clean` removes its `plugins/` and `go-build/` there, so a shared location such as `~/.cache` is the wrong target.
 
-Relocating costs you automatic cleanup. `ttsc` prunes entries unused for 30 days and trims by least-recently-used order past a size budget, but only for the default project-local cache. A root named explicitly through `TTSC_CACHE_DIR` or `--cache-dir` is never garbage collected, on the assumption that a caller who named a path owns it. With `restore-keys` accumulating entries across dependency bumps, bound it yourself: drop `restore-keys`, or run `npx ttsc clean` before the save.
+Relocating costs you automatic cleanup. In the default project-local cache, `ttsc` prunes plugin binaries unused for 30 days with a 2 GiB LRU ceiling. It also scans the ttsc-owned Go object cache at most daily, pruning oldest objects from an 8 GiB ceiling toward 6 GiB while reserving the newest target-sized set used in the last hour. Active ttsc Go builds publish leases, so maintenance yields instead of deleting an object during compilation. A root named explicitly through `TTSC_CACHE_DIR` or `--cache-dir` is never garbage collected, on the assumption that a caller who named a path owns it. `TTSC_GO_CACHE_DIR` follows the same caller-owned lifetime, and an ambient user `GOCACHE` is never modified or removed by ttsc.
 
 ### pnpm
 
@@ -121,7 +121,7 @@ steps:
   - run: pnpm install --frozen-lockfile
   - uses: actions/cache@v4
     with:
-      path: node_modules/.cache/ttsc
+      path: node_modules/.cache/ttsc/plugins
       key: ${{ runner.os }}-${{ runner.arch }}-ttsc-${{ hashFiles('pnpm-lock.yaml') }}
       restore-keys: |
         ${{ runner.os }}-${{ runner.arch }}-ttsc-
@@ -174,7 +174,7 @@ ttsc: building source plugin ... this runs once per cache key
 
 On the second run of an unchanged workflow, or the second build of an unchanged image, that line must be absent. If it appears every time, the cache is restoring nothing useful.
 
-In CI, check that the cache step runs after the install, that the key includes `runner.arch`, and that the persisted paths match what `npx ttsc cache paths --json` reports. In a container build, check that the builder has a cache that outlives the build at all, and that `cache-to` is set to `mode=max` so the `ttsc prepare` layer is exported rather than only the final one.
+In CI, check that the cache step runs after the install, that the key includes `runner.arch`, and that the persisted paths match `requiredRoots` from `npx ttsc cache paths --json` (plus `acceleratorRoots` only when chosen). In a container build, check that the builder has a cache that outlives the build at all, and that `cache-to` is set to `mode=max` so the `ttsc prepare` layer is exported rather than only the final one.
 
 ## See also
 
