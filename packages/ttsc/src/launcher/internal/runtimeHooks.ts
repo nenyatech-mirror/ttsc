@@ -609,17 +609,17 @@ function resolveServedSource(
   // temp-path spellings (the lint TypeScript-config loader is one such case).
   // Treating that boundary as prepare-only would discard the existing emit and
   // feed ESM source into CommonJS interop, producing ERR_REQUIRE_CYCLE_MODULE.
-  const shouldPrepare = prepareAsEntry && prepareRuntimeEntry !== undefined;
+  const prepareEntry = prepareAsEntry ? prepareRuntimeEntry : undefined;
   // A JavaScript-to-TypeScript boundary is a new checked root unless an
   // existing manifest proves exact ownership. Trailing-stem recovery is not
   // ownership evidence: two out-of-include `index.ts` roots can otherwise map
   // to the first manifest's `index.js`, skipping the second root's diagnostics.
-  let served = serveEntryEmit(real, !shouldPrepare);
+  let served = serveEntryEmit(real, prepareEntry === undefined);
   if (served !== null) {
     return withInlineSourceMap(served);
   }
-  if (shouldPrepare) {
-    registeredManifests.push(prepareRuntimeEntry(real));
+  if (prepareEntry !== undefined) {
+    registeredManifests.push(prepareEntry(real));
     served = serveEntryEmit(real);
     if (served === null) {
       throw new Error(`ttsx: prepared entry emit not found for ${filename}`);
