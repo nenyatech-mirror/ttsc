@@ -317,6 +317,15 @@ export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promis
     aliasedProjectTemp,
     process.platform === "win32" ? "junction" : "dir",
   );
+  const canonicalTemp = fs.mkdtempSync(
+    path.join(os.tmpdir(), "ttsc-canonical-temp-"),
+  );
+  const canonicalTempAlias = path.join(aliasRoot, "canonical-temp");
+  fs.symlinkSync(
+    canonicalTemp,
+    canonicalTempAlias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
   const previousTemp = {
     TEMP: process.env.TEMP,
     TMP: process.env.TMP,
@@ -419,12 +428,35 @@ export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promis
     );
     assert.ok(passthroughAfter);
     assert.strictEqual(cacheEntry(passthroughCache), passthroughGeneration);
+
+    process.env.TEMP = canonicalTempAlias;
+    process.env.TMP = canonicalTempAlias;
+    process.env.TMPDIR = canonicalTempAlias;
+    const overlayCache = createTtscTransformCache();
+    const canonicalOverlay = await transformTtsc(
+      TestUnpluginProject.mainFile(root),
+      TestUnpluginProject.mainSource(root),
+      options,
+      undefined,
+      overlayCache,
+    );
+    assert.ok(canonicalOverlay);
+    const canonicalOverlayCached = (await cacheEntry(overlayCache)) as {
+      temporaryTsconfig?: string;
+    };
+    assert.ok(canonicalOverlayCached.temporaryTsconfig);
+    assert.strictEqual(
+      path.dirname(path.dirname(canonicalOverlayCached.temporaryTsconfig)),
+      fs.realpathSync.native(canonicalTemp),
+    );
   } finally {
     for (const [name, value] of Object.entries(previousTemp)) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
     fs.unlinkSync(aliasedProjectTemp);
+    fs.unlinkSync(canonicalTempAlias);
     fs.rmdirSync(aliasRoot);
+    fs.rmSync(canonicalTemp, { force: true, recursive: true });
   }
 }

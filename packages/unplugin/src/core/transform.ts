@@ -2108,7 +2108,13 @@ function createTransformScratchDirectory(projectRoot: string): string {
       failure = error;
       continue;
     }
-    if (!pathIsWithin(canonicalDirectory, canonicalRoot)) return directory;
+    // Use the postflight canonical spelling from this point onward. Returning
+    // the candidate-relative spelling would let another process retarget its
+    // parent symlink/junction after validation, redirecting compiler writes or
+    // the final recursive removal into the project.
+    if (!pathIsWithin(canonicalDirectory, canonicalRoot)) {
+      return canonicalDirectory;
+    }
     // A candidate can be replaced between the preflight realpath and mkdtemp.
     // Refuse the result and synchronously remove only our empty random child.
     fs.rmdirSync(directory);
