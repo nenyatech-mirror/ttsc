@@ -113,6 +113,22 @@ test("a waived advisory passes while an unwaived one beside it still fails", () 
   assert.doesNotMatch(alongsideReal.message, /blocking.*GHSA-w3rx-r6r6-pgpr/);
 });
 
+test("the unpatched website browser-downloader advisory is explicit", () => {
+  const outcome = evaluateAudit({
+    status: 1,
+    stdout: payload({
+      high: 1,
+      advisories: {
+        1: unfixable("GHSA-jmr9-qjv8-65gv"),
+      },
+    }),
+    stderr: "",
+  });
+  assert.equal(outcome.ok, true);
+  assert.match(outcome.message, /waived=1/);
+  assert.match(outcome.message, /GHSA-jmr9-qjv8-65gv/);
+});
+
 test("a waiver stops applying the moment upstream publishes a fix", () => {
   const outcome = evaluateAudit({
     status: 1,
