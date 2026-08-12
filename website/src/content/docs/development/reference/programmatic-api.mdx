@@ -102,6 +102,8 @@ if (t.type === "success") {
 
 When no transform-stage plugin is configured, the map contains the unmodified files as TypeScript-Go loaded them. With a transform plugin (e.g. typia's), the map contains the rewritten text.
 
+Successful and compiler-failure transformations may also carry `hostInputs`: the exact tsconfig ancestry, project manifest, JavaScript plugin descriptors, and explicit plugin config files the host loaded before native transformation. Paths are absolute. Bundler adapters treat them as universal watch and cache inputs; arbitrary unclassified project files are deliberately absent.
+
 ### `prepare()`
 
 Builds every configured Go source plugin into the cache up front. Use this in CI warmup steps so the first user-triggered compile doesn't pay the plugin build cost.

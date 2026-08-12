@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import {
+  collectProjectHostInputs,
   hasProjectPluginEntries,
   loadProjectPlugins,
 } from "../../plugin/internal/loadProjectPlugins";
@@ -44,6 +45,7 @@ export function transformProjectInMemory(options: ITtscCompilerContext): {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
@@ -80,6 +82,7 @@ function transformProjectWithNativeHost(
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
@@ -109,6 +112,7 @@ function transformProjectWithNativeHost(
   );
   return {
     ...envelopeSideChannels(output),
+    hostInputs: collectProjectHostInputs(project),
     result: {
       diagnostics: output.diagnostics,
       status: res.status ?? 1,
@@ -127,6 +131,7 @@ function transformProjectWithPlugins(
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
@@ -160,6 +165,7 @@ function transformProjectWithPlugins(
   );
   if (checked.status !== 0) {
     return {
+      hostInputs: loaded.hostInputs,
       result: checked,
       typescript: {},
     };
@@ -168,6 +174,7 @@ function transformProjectWithPlugins(
     const transformed = transformProjectWithNativeHost(options, project);
     return {
       ...envelopeSideChannels(transformed),
+      hostInputs: loaded.hostInputs,
       result: appendBuildOutput(checked, transformed.result),
       typescript: transformed.typescript,
     };
@@ -204,6 +211,7 @@ function transformProjectWithPlugins(
   };
   return {
     ...envelopeSideChannels(output),
+    hostInputs: loaded.hostInputs,
     result: appendBuildOutput(checked, result),
     typescript: output.typescript,
   };

@@ -25,6 +25,7 @@ interface ICacheProjectOptions {
   fileCount?: number;
   graphFanout?: number;
   partitionGraph?: boolean;
+  unrelatedDirectoryCount?: number;
 }
 
 // Build the Go fixture once per process; transformTtsc shells out to it.
@@ -404,6 +405,8 @@ async function assertSiblingDeliveriesDoNotReprobeGraph(): Promise<void> {
       ...Array.from({ length: graphFanout }, (_, index) =>
         path.join(project.root, "node_modules", `dep${index}`, "index.d.ts"),
       ),
+      path.join(project.root, "package.json"),
+      path.join(project.root, "plugin.cjs"),
       path.join(project.root, "tsconfig.json"),
     ].sort();
   for (const file of modules) {
@@ -429,6 +432,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     fileCount: count,
     graphFanout: count,
     partitionGraph: true,
+    unrelatedDirectoryCount: 48,
   });
   const modules = projectModules(project.root);
   const cache = createTtscTransformCache();
@@ -445,9 +449,12 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   for (const file of modules) {
     assert.ok(await deliver(file));
   }
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   const originalRead = fs.readFileSync;
+  const originalStat = fs.statSync;
   let reads = 0;
+  let stats = 0;
   (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (
     this: unknown,
     ...args: Parameters<typeof fs.readFileSync>
@@ -455,16 +462,28 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     reads += 1;
     return originalRead.apply(this, args as never);
   } as typeof fs.readFileSync;
+  (fs as { statSync: typeof fs.statSync }).statSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.statSync>
+  ) {
+    stats += 1;
+    return originalStat.apply(this, args as never);
+  } as typeof fs.statSync;
   try {
     for (const file of modules) {
       assert.ok(await deliver(file));
     }
   } finally {
     (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = originalRead;
+    (fs as { statSync: typeof fs.statSync }).statSync = originalStat;
   }
   assert.ok(
     reads / modules.length <= 12,
     `persistent validation read ${(reads / modules.length).toFixed(1)} files per module (bound: 12)`,
+  );
+  assert.ok(
+    stats / modules.length <= 12,
+    `persistent validation statted ${(stats / modules.length).toFixed(1)} paths per module (bound: 12)`,
   );
 
   const main = modules[0]!;
@@ -482,10 +501,23 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   );
 
   fs.writeFileSync(
+    path.join(project.root, "fixtures", "unused-0", "nested", "asset.txt"),
+    "changed unrelated fixture asset\n",
+    "utf8",
+  );
+  assert.ok(await deliver(main));
+  assert.equal(
+    [...cache.values()][0],
+    originalGeneration,
+    "an unclassified project asset must not replace the generation",
+  );
+
+  fs.writeFileSync(
     path.join(project.root, "node_modules", "dep0", "index.d.ts"),
     "export declare const relevant: string;\n",
     "utf8",
   );
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(await deliver(main));
   const relevantGeneration = [...cache.values()][0];
   assert.notEqual(
@@ -499,12 +531,94 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     "declare const newlyIncluded: string;\n",
     "utf8",
   );
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(await deliver(main));
   assert.notEqual(
     [...cache.values()][0],
     relevantGeneration,
     "a project-membership change must replace the generation",
   );
+
+  const membershipGeneration = [...cache.values()][0];
+  fs.appendFileSync(
+    path.join(project.root, "plugin.cjs"),
+    "\n// descriptor cache invalidation probe\n",
+    "utf8",
+  );
+  assert.ok(await deliver(main));
+  assert.notEqual(
+    [...cache.values()][0],
+    membershipGeneration,
+    "an exact host descriptor input edit must replace the generation",
+  );
+}
+
+/**
+ * Asserts a generation-time walk failure cannot bless a partial snapshot as a
+ * permanently valid narrow cache entry.
+ */
+async function assertIncompleteProjectSnapshotFallsBackAndRecovers(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const project = createCacheProject({ fileCount: 2, graphFanout: 2 });
+  const transientDirectory = path.join(project.root, "src", "transient");
+  fs.mkdirSync(transientDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(transientDirectory, "hidden.ts"),
+    "declare const hiddenDuringSnapshot: string;\n",
+    "utf8",
+  );
+  const cache = createTtscTransformCache();
+  const options = resolveOptions();
+  const main = path.join(project.root, "src", "mod0.ts");
+
+  const originalReaddir = fs.readdirSync;
+  let failed = false;
+  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.readdirSync>
+  ) {
+    if (
+      !failed &&
+      fs.existsSync(project.runLog) &&
+      path.resolve(String(args[0])) === transientDirectory
+    ) {
+      failed = true;
+      throw new Error("transient project snapshot failure");
+    }
+    return originalReaddir.apply(this, args as never);
+  } as typeof fs.readdirSync;
+  try {
+    assert.ok(
+      await transformTtsc(
+        main,
+        fs.readFileSync(main, "utf8"),
+        options,
+        undefined,
+        cache,
+      ),
+    );
+  } finally {
+    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = originalReaddir;
+  }
+  assert.equal(failed, true, "the generation walk must exercise the failure");
+  const incompleteGeneration = [...cache.values()][0];
+
+  assert.ok(
+    await transformTtsc(
+      main,
+      fs.readFileSync(main, "utf8"),
+      options,
+      undefined,
+      cache,
+    ),
+  );
+  assert.notEqual(
+    [...cache.values()][0],
+    incompleteGeneration,
+    "a recovered complete walk must replace the partial generation",
+  );
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
 }
 
 /**
@@ -694,6 +808,15 @@ function createCacheProject(options: ICacheProjectOptions): {
     JSON.stringify({ private: true, type: "commonjs" }, null, 2),
     "utf8",
   );
+  for (
+    let index = 0;
+    index < (options.unrelatedDirectoryCount ?? 0);
+    index += 1
+  ) {
+    const directory = path.join(root, "fixtures", `unused-${index}`, "nested");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "asset.txt"), "fixture\n", "utf8");
+  }
   fs.writeFileSync(
     path.join(root, "tsconfig.json"),
     JSON.stringify(
@@ -921,6 +1044,7 @@ export {
   assertConcurrentTransformsCompileOnce,
   assertFirstModuleDeliveriesDoNotRehashProject,
   assertHostExceptionTransformIsEvictedAndRecovers,
+  assertIncompleteProjectSnapshotFallsBackAndRecovers,
   assertPersistentCacheValidatesAnUnservedModule,
   assertPersistentValidationUsesPerFileInputs,
   assertRejectedTransformIsEvictedAndRecovers,

@@ -4,6 +4,13 @@ import path from "node:path";
 
 const { rollup } = TestUnpluginProject.REQUIRE_FROM_UNPLUGIN("rollup");
 
+/** Universal descriptor/config files loaded by the fixture host. */
+function fixtureHostInputs(root: string): string[] {
+  return ["package.json", "plugin.cjs", "tsconfig.json"].map((file) =>
+    path.join(root, file),
+  );
+}
+
 /**
  * Build the plugin descriptor list that routes the fixture plugin through the
  * `emit-dependencies` operation with the given dependency entries. Plugin
@@ -52,14 +59,21 @@ async function assertTransformForwardsDependenciesToWatchHook(): Promise<void> {
 
   assert.ok(result);
   assert.match(result.code, /"PLUGIN"/);
-  assert.deepEqual(watched, [path.join(root, "src", "types.d.ts"), absolute]);
+  assert.deepEqual(
+    [...watched].sort(),
+    [
+      path.join(root, "src", "types.d.ts"),
+      absolute,
+      ...fixtureHostInputs(root),
+    ].sort(),
+  );
 }
 
 /**
  * Asserts the negative twin: a transform whose plugin reports no `dependencies`
  * envelope field never invokes the watch hook.
  */
-async function assertTransformWithoutDependenciesAddsNoWatchFiles(): Promise<void> {
+async function assertTransformWithoutDependenciesAddsOnlyHostWatchFiles(): Promise<void> {
   const { resolveOptions, transformTtsc } =
     await TestUnpluginRuntime.loadUnpluginApi();
   const root = TestUnpluginProject.createProject({ plugins: [] });
@@ -83,7 +97,7 @@ async function assertTransformWithoutDependenciesAddsNoWatchFiles(): Promise<voi
   );
 
   assert.ok(result);
-  assert.deepEqual(watched, []);
+  assert.deepEqual([...watched].sort(), fixtureHostInputs(root).sort());
 }
 
 /**
@@ -99,7 +113,10 @@ async function assertCachedTransformStillNotifiesWatchFiles(): Promise<void> {
     plugins: emitDependenciesPlugins(["src/types.d.ts"]),
   });
   const cache = createTtscTransformCache();
-  const expected = [path.join(root, "src", "types.d.ts")];
+  const expected = [
+    path.join(root, "src", "types.d.ts"),
+    ...fixtureHostInputs(root),
+  ];
 
   const first: string[] = [];
   await transformTtsc(
@@ -110,7 +127,7 @@ async function assertCachedTransformStillNotifiesWatchFiles(): Promise<void> {
     cache,
     { addWatchFile: (file: string) => first.push(file) },
   );
-  assert.deepEqual(first, expected);
+  assert.deepEqual([...first].sort(), [...expected].sort());
 
   const second: string[] = [];
   const result = await transformTtsc(
@@ -122,7 +139,7 @@ async function assertCachedTransformStillNotifiesWatchFiles(): Promise<void> {
     { addWatchFile: (file: string) => second.push(file) },
   );
   assert.ok(result);
-  assert.deepEqual(second, expected);
+  assert.deepEqual([...second].sort(), [...expected].sort());
 }
 
 /**
@@ -159,5 +176,5 @@ export {
   assertCachedTransformStillNotifiesWatchFiles,
   assertRollupBuildRegistersDependencyWatchFiles,
   assertTransformForwardsDependenciesToWatchHook,
-  assertTransformWithoutDependenciesAddsNoWatchFiles,
+  assertTransformWithoutDependenciesAddsOnlyHostWatchFiles,
 };

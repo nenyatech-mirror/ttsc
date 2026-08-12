@@ -58,7 +58,7 @@ interface TtscProjectDirectorySnapshot {
  * input file. In a cache with an explicit build lifecycle, the first delivery
  * of each compiled module compares its supplied source with the generation
  * snapshot in constant time. Later graph-bearing deliveries validate only the
- * requested file's derived inputs plus unclassified project configuration;
+ * requested file's derived inputs plus exact host descriptor/config inputs;
  * graph-free envelopes retain complete-snapshot validation.
  */
 export interface TtscCachedProjectTransform {
@@ -90,9 +90,17 @@ export interface TtscCachedProjectTransform {
   /**
    * Metadata snapshot of every directory in the project walk. Persistent
    * validation uses it to detect file/directory creation, deletion, and rename
-   * without rereading every unchanged project file for every module delivery.
+   * once per event-loop turn, shared by all sibling module deliveries.
    */
   projectDirectories?: TtscProjectDirectorySnapshot[];
+  /** True after project membership was validated in the current event turn. */
+  projectMembershipValidated?: boolean;
+  /**
+   * Whether the generation-time project walk observed every directory and
+   * file it attempted to snapshot. An incomplete walk may never authorize
+   * narrow validation; a later complete walk must be allowed to replace it.
+   */
+  projectSnapshotComplete?: boolean;
   /** Absolute path to the directory that owns the tsconfig. */
   projectRoot: string;
   /** Raw compiler output returned by {@link TtscCompiler.transform}. */
@@ -456,13 +464,6 @@ interface TtscEnvelopeDerivation {
    * mirroring the historical scan). `undefined` until the first key miss.
    */
   dependencyIndex?: Map<string, unknown>;
-  /**
-   * Project-walk inputs that the compiler envelope cannot classify per file
-   * (plugin descriptors, package manifests, and plugin configuration files).
-   * These remain universal inputs while program and plugin dependency files
-   * are validated through each delivered file's derived watch-input set.
-   */
-  universalProjectInputs?: string[];
   /** Per-file memo of the final derived watch-input list. */
   readonly watchInputs: Map<string, string[]>;
 }
@@ -711,6 +712,7 @@ function deriveWatchInputs(
         declaresCompleteDependencies(state, props) &&
         !isVolatileFile(state, props),
     }),
+    ...selectHostInputs(props),
     ...selectResolutionCandidateInputs(graph, state, props),
   ]) {
     const identity = derivationIdentity(state, absolute);
@@ -721,6 +723,16 @@ function deriveWatchInputs(
     output.push(absolute);
   }
   return output;
+}
+
+/** Return exact host-wide descriptor/config inputs for every output file. */
+function selectHostInputs(props: {
+  projectRoot: string;
+  result: ITtscCompilerTransformation;
+}): string[] {
+  return props.result.type === "exception"
+    ? []
+    : selectListedFiles(props.projectRoot, props.result.hostInputs);
 }
 
 /**
@@ -1086,6 +1098,7 @@ function matchesCachedSource(
   if (
     cached.result.type !== "exception" &&
     cached.result.graph !== undefined &&
+    cached.projectSnapshotComplete === true &&
     cached.projectDirectories !== undefined
   ) {
     return matchesNarrowPersistentInputs(cached, file);
@@ -1095,27 +1108,23 @@ function matchesCachedSource(
 
 /**
  * Validate one graph-bearing cached output against only the inputs that can
- * affect that file, plus unclassified project-wide configuration inputs.
- * Directory metadata separately preserves project-membership freshness, so a
- * newly created ambient source or plugin config cannot hide outside the
- * generation's recorded file set.
+ * affect that file. Project membership is validated once per event-loop turn,
+ * so sibling module deliveries share one directory-metadata pass instead of
+ * multiplying it by module count.
  */
 function matchesNarrowPersistentInputs(
   cached: TtscCachedProjectTransform,
   file: string,
 ): boolean {
-  if (!matchesProjectDirectorySnapshot(cached.projectDirectories ?? [])) {
+  if (!matchesProjectMembership(cached)) {
     return false;
   }
-  const inputs = new Set([
-    ...selectWatchInputs({
-      file,
-      projectRoot: cached.projectRoot,
-      result: cached.result,
-      temporaryTsconfig: cached.temporaryTsconfig,
-    }),
-    ...selectUniversalProjectInputs(cached),
-  ]);
+  const inputs = selectWatchInputs({
+    file,
+    projectRoot: cached.projectRoot,
+    result: cached.result,
+    temporaryTsconfig: cached.temporaryTsconfig,
+  });
   for (const input of inputs) {
     if (!matchesRecordedInput(cached, input)) {
       return false;
@@ -1186,82 +1195,6 @@ function matchesRecordedInput(
   }
 }
 
-/**
- * Select in-project inputs that are not represented by a per-file compiler or
- * plugin dependency. Their generation hashes remain universal because the
- * envelope cannot prove a narrower owner for them.
- */
-function selectUniversalProjectInputs(
-  cached: TtscCachedProjectTransform,
-): string[] {
-  const state = envelopeDerivation(cached);
-  if (state.universalProjectInputs !== undefined) {
-    return state.universalProjectInputs;
-  }
-  const classified = collectEnvelopeInputIdentities(cached, state);
-  const universal: string[] = [];
-  for (const key of Object.keys(cached.inputHashes)) {
-    const absolute = path.resolve(cached.projectRoot, key);
-    if (!classified.has(derivationIdentity(state, absolute))) {
-      universal.push(absolute);
-    }
-  }
-  universal.sort();
-  state.universalProjectInputs = universal;
-  return universal;
-}
-
-/** Collect every envelope member whose ownership can be derived per file. */
-function collectEnvelopeInputIdentities(
-  cached: TtscCachedProjectTransform,
-  state: TtscEnvelopeDerivation,
-): Set<string> {
-  const output = new Set<string>();
-  const add = (entry: unknown) => {
-    if (typeof entry !== "string" || entry.length === 0) {
-      return;
-    }
-    output.add(
-      derivationIdentity(state, path.resolve(cached.projectRoot, entry)),
-    );
-  };
-  if (cached.result.type === "exception") {
-    return output;
-  }
-  for (const source of Object.keys(cached.result.typescript)) {
-    add(source);
-  }
-  for (const [source, targets] of Object.entries(
-    cached.result.graph?.edges ?? {},
-  )) {
-    add(source);
-    if (Array.isArray(targets)) {
-      targets.forEach(add);
-    }
-  }
-  for (const listed of [
-    cached.result.graph?.globals,
-    cached.result.graph?.configs,
-  ]) {
-    if (Array.isArray(listed)) {
-      listed.forEach(add);
-    }
-  }
-  for (const candidates of Object.values(
-    cached.result.graph?.candidates ?? {},
-  )) {
-    if (Array.isArray(candidates)) {
-      candidates.forEach(add);
-    }
-  }
-  for (const dependencies of Object.values(cached.result.dependencies ?? {})) {
-    if (Array.isArray(dependencies)) {
-      dependencies.forEach(add);
-    }
-  }
-  return output;
-}
-
 /** Record a successfully selected module as delivered by this generation. */
 function markCachedSourceServed(
   cached: TtscCachedProjectTransform,
@@ -1290,6 +1223,7 @@ function collectInputSnapshot(props: {
   currentSource: string;
   projectRoot: string;
 }): {
+  complete: boolean;
   hashes: Record<string, string>;
   projectDirectories: TtscProjectDirectorySnapshot[];
 } {
@@ -1321,11 +1255,13 @@ function collectProjectInputSnapshot(
   projectRoot: string,
   identities: FilesystemPathIdentityContext,
 ): {
+  complete: boolean;
   hashes: Record<string, string>;
   projectDirectories: TtscProjectDirectorySnapshot[];
 } {
   const hashes: Record<string, string> = {};
   const walked = walkProjectInputs(projectRoot);
+  let complete = walked.complete;
   for (const file of walked.files) {
     try {
       hashes[toProjectKey(projectRoot, file, identities)] = hashText(
@@ -1334,9 +1270,10 @@ function collectProjectInputSnapshot(
     } catch {
       // File watchers may observe a transform while another process is moving
       // or deleting files. The missing key invalidates older cache entries.
+      complete = false;
     }
   }
-  return { hashes, projectDirectories: walked.directories };
+  return { complete, hashes, projectDirectories: walked.directories };
 }
 
 /**
@@ -1348,9 +1285,11 @@ function collectProjectInputSnapshot(
  * that hash comparisons are deterministic across OS-level directory orderings.
  */
 function walkProjectInputs(root: string): {
+  complete: boolean;
   directories: TtscProjectDirectorySnapshot[];
   files: string[];
 } {
+  let complete = true;
   const directories: TtscProjectDirectorySnapshot[] = [];
   const files: string[] = [];
   const stack = [root];
@@ -1358,15 +1297,20 @@ function walkProjectInputs(root: string): {
     const current = stack.pop()!;
     const before = projectDirectorySignature(current);
     if (before === undefined) {
+      complete = false;
       continue;
     }
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {
+      complete = false;
       continue;
     }
     const after = projectDirectorySignature(current);
+    if (after === undefined || before !== after) {
+      complete = false;
+    }
     directories.push({
       path: current,
       // If membership moved during enumeration, force the next delivery to
@@ -1391,7 +1335,7 @@ function walkProjectInputs(root: string): {
   }
   directories.sort((left, right) => left.path.localeCompare(right.path));
   files.sort();
-  return { directories, files };
+  return { complete, directories, files };
 }
 
 /** Return a cheap identity for one directory's immediate membership. */
@@ -1422,6 +1366,21 @@ function matchesProjectDirectorySnapshot(
     (directory) =>
       projectDirectorySignature(directory.path) === directory.signature,
   );
+}
+
+/** Share one complete membership check across sibling deliveries in one turn. */
+function matchesProjectMembership(cached: TtscCachedProjectTransform): boolean {
+  if (cached.projectMembershipValidated === true) {
+    return true;
+  }
+  if (!matchesProjectDirectorySnapshot(cached.projectDirectories ?? [])) {
+    return false;
+  }
+  cached.projectMembershipValidated = true;
+  setImmediate(() => {
+    cached.projectMembershipValidated = false;
+  });
+  return true;
 }
 
 /**
@@ -1562,6 +1521,9 @@ function selectExternalInputPaths(props: {
       members.push(...entries);
     }
   }
+  if (Array.isArray(props.result.hostInputs)) {
+    members.push(...props.result.hostInputs);
+  }
   const excluded =
     props.temporaryTsconfig === undefined
       ? undefined
@@ -1671,6 +1633,7 @@ async function transformProject(props: {
       externalInputPaths,
       inputHashes: inputSnapshot.hashes,
       projectDirectories: inputSnapshot.projectDirectories,
+      projectSnapshotComplete: inputSnapshot.complete,
       projectRoot,
       result,
       servedFiles: new Set(),

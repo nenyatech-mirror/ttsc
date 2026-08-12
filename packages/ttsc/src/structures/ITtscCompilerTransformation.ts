@@ -141,6 +141,15 @@ export namespace ITtscCompilerTransformation {
     graph?: IReferenceGraph;
 
     /**
+     * Host-wide files consulted before the native transform starts, such as
+     * JavaScript plugin descriptors and explicitly selected plugin config
+     * files. Unlike {@link dependencies}, these affect every transformed file.
+     * Bundler adapters register and validate them as universal inputs without
+     * treating arbitrary unclassified project files as configuration.
+     */
+    hostInputs?: string[];
+
+    /**
      * Transformed files (keyed like {@link typescript}) whose output depends on
      * non-file inputs (environment, time, network) as declared by the transform
      * plugin via the envelope's optional `volatile` list. No file-dependency
@@ -187,6 +196,9 @@ export namespace ITtscCompilerTransformation {
      * from loading the program.
      */
     graph?: IReferenceGraph;
+
+    /** Host-wide transform inputs; same contract as {@link ISuccess.hostInputs}. */
+    hostInputs?: string[];
 
     /**
      * Volatile transformed files. Same shape and semantics as

@@ -81,9 +81,9 @@ async function main(): Promise<void> {
     "\nScenario D — graph envelope without a build boundary (Vite serve):",
   );
   console.log(
-    "  invariant: validation reads stay bounded by each module's graph inputs,",
+    "  invariant: validation reads and directory stats stay bounded per module,",
   );
-  console.log("  not the whole envelope's external-input union\n");
+  console.log("  not the whole input union or project directory count\n");
   recordFailure(
     failures,
     await measureServeValidation(adapter, {
@@ -91,6 +91,7 @@ async function main(): Promise<void> {
       emitExternalKey: false,
       graphFanout: 50,
       partitionExternalInputs: true,
+      unrelatedDirectoryCount: 100,
     }),
   );
 
@@ -172,6 +173,8 @@ interface MeasureOptions {
   graphFanout?: number;
   /** Give each module one disjoint external edge instead of the whole union. */
   partitionExternalInputs?: boolean;
+  /** Unrelated nested project directories used to gate membership-stat cost. */
+  unrelatedDirectoryCount?: number;
 }
 
 async function measure(
@@ -318,26 +321,34 @@ async function measureServeValidation(
   for (const id of modules) {
     await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
   }
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   const counter = instrumentReadFileSync();
+  const statCounter = instrumentStatSync();
   const started = process.hrtime.bigint();
   for (const id of modules) {
     await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
   }
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
   counter.restore();
+  statCounter.restore();
 
   console.log(
     `  N=${String(options.count).padStart(3)}  ` +
       `externals=${String(options.graphFanout ?? 0).padStart(4)}  ` +
       `reads=${String(counter.calls).padStart(8)}  ` +
       `reads/file=${(counter.calls / options.count).toFixed(1).padStart(8)}  ` +
+      `stats/file=${(statCounter.calls / options.count).toFixed(1).padStart(6)}  ` +
       `${elapsedMs.toFixed(0).padStart(7)}ms`,
   );
   const readsPerFile = counter.calls / options.count;
-  return readsPerFile <= 16
+  const statsPerFile = statCounter.calls / options.count;
+  if (readsPerFile > 16) {
+    return `scenario D N=${options.count} K=${options.graphFanout}: reads/file=${readsPerFile.toFixed(1)} exceeds the per-file validation budget of 16`;
+  }
+  return statsPerFile <= 8
     ? undefined
-    : `scenario D N=${options.count} K=${options.graphFanout}: reads/file=${readsPerFile.toFixed(1)} exceeds the per-file validation budget of 16`;
+    : `scenario D N=${options.count} dirs=${options.unrelatedDirectoryCount}: stats/file=${statsPerFile.toFixed(1)} exceeds the shared membership budget of 8`;
 }
 
 /**
@@ -430,6 +441,23 @@ function instrumentReadFileSync(): {
   return counter;
 }
 
+/** Wrap `fs.statSync` to gate directory-membership validation per module. */
+function instrumentStatSync(): { calls: number; restore: () => void } {
+  const original = fs.statSync;
+  const counter = { calls: 0, restore: () => undefined };
+  (fs as { statSync: typeof fs.statSync }).statSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.statSync>
+  ) {
+    counter.calls += 1;
+    return original.apply(this, args as never);
+  } as typeof fs.statSync;
+  counter.restore = () => {
+    (fs as { statSync: typeof fs.statSync }).statSync = original;
+  };
+  return counter;
+}
+
 function createProject(options: MeasureOptions): string {
   const project = fs.mkdtempSync(path.join(tmpRoot, "project-"));
   const srcDir = path.join(project, "src");
@@ -446,6 +474,15 @@ function createProject(options: MeasureOptions): string {
     JSON.stringify({ private: true, type: "commonjs" }, null, 2),
     "utf8",
   );
+  for (
+    let index = 0;
+    index < (options.unrelatedDirectoryCount ?? 0);
+    index += 1
+  ) {
+    const directory = path.join(project, "fixtures", `unused-${index}`, "nested");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "asset.txt"), "fixture\n", "utf8");
+  }
   fs.writeFileSync(
     path.join(project, "tsconfig.json"),
     JSON.stringify(

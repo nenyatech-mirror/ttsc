@@ -45,8 +45,8 @@ type PackageManifest = {
  * Reads the project config, discovers plugin entries (from tsconfig and package
  * auto-discovery), validates and composes their descriptors, then invokes
  * `buildSourcePlugin` to compile each Go source package into a cached binary.
- * Returns the ordered set of loaded native plugins alongside the parsed project
- * config.
+ * Returns the ordered native plugins, parsed project config, and exact
+ * JavaScript-host files that universally influence the loaded selection.
  *
  * @param options.binary - Absolute path to the ttsc native helper binary.
  * @param options.cacheDir - Override the plugin binary cache directory.
@@ -74,6 +74,7 @@ export function loadProjectPlugins(options: {
   projectRoot?: string;
   tsconfig?: string;
 }): {
+  hostInputs: string[];
   nativePlugins: ITtscLoadedNativePlugin[];
   project: ITtscParsedProjectConfig;
 } {
@@ -93,6 +94,7 @@ export function loadProjectPlugins(options: {
   if (entries.length === 0) {
     options.onWatchInputs?.([]);
     return {
+      hostInputs: collectHostInputs(project, {}, []),
       nativePlugins: [],
       project,
     };
@@ -108,16 +110,21 @@ export function loadProjectPlugins(options: {
     projectRoot: project.root,
     tsconfig: project.path,
   };
-  const plugins = composePluginSources(
-    entries,
-    entries.map((entry) =>
-      loadPluginEntry(
+  const loadedEntries = entries.map((entry) => {
+    const request = resolvePluginEntryRequest(entry.config, entry.baseDir);
+    return {
+      plugin: loadPluginEntry(
         entry.config,
         { ...context, plugin: entry.config },
-        entry.baseDir,
+        request,
         effectiveEnv,
       ),
-    ),
+      request,
+    };
+  });
+  const plugins = composePluginSources(
+    entries,
+    loadedEntries.map((entry) => entry.plugin),
   );
 
   const ttscVersion = readTtscVersion();
@@ -152,6 +159,7 @@ export function loadProjectPlugins(options: {
       name: plugin.name,
       reportsTypeScriptDiagnostics:
         plugin.reportsTypeScriptDiagnostics === true,
+      request: loadedEntries[index]!.request,
       source,
       stage,
     };
@@ -242,9 +250,70 @@ export function loadProjectPlugins(options: {
     };
   });
   return {
+    hostInputs: collectHostInputs(project, context, records),
     nativePlugins: orderNativePlugins(nativePlugins),
     project,
   };
+}
+
+/**
+ * Collect exact JavaScript-host files that universally influence the loaded
+ * transform. Program files belong to the native reference graph; this list is
+ * deliberately limited to config ancestry, descriptor entries, the project
+ * manifest controlling auto-discovery, and explicit plugin config files.
+ */
+function collectHostInputs(
+  project: ITtscParsedProjectConfig,
+  context: { pluginConfigDir?: string },
+  records: readonly {
+    config: ITtscProjectPluginConfig;
+    request: string;
+  }[],
+): string[] {
+  const inputs = new Set<string>(collectProjectHostInputs(project));
+  const configBase = context.pluginConfigDir ?? path.dirname(project.path);
+  for (const record of records) {
+    inputs.add(path.resolve(record.request));
+    const descriptorManifest = findNearestPackageJson(record.request);
+    if (descriptorManifest !== undefined) {
+      inputs.add(path.resolve(descriptorManifest));
+    }
+    const configFile = record.config.configFile;
+    if (typeof configFile === "string" && configFile.trim() !== "") {
+      inputs.add(
+        path.isAbsolute(configFile)
+          ? path.resolve(configFile)
+          : path.resolve(configBase, configFile),
+      );
+    }
+  }
+  return [...inputs].sort();
+}
+
+/** Return config ancestry and the manifest controlling package discovery. */
+export function collectProjectHostInputs(
+  project: ITtscParsedProjectConfig,
+): string[] {
+  const inputs = new Set<string>(
+    project.configPaths.map((file) => path.resolve(file)),
+  );
+  const manifest = findNearestPackageJson(project.root);
+  if (manifest !== undefined) {
+    inputs.add(path.resolve(manifest));
+  }
+  return [...inputs].sort();
+}
+
+/** Validate and resolve one configured descriptor module request. */
+function resolvePluginEntryRequest(
+  entry: ITtscProjectPluginConfig,
+  baseDir: string,
+): string {
+  const specifier = entry.transform;
+  if (typeof specifier !== "string" || specifier.length === 0) {
+    throw new Error(`ttsc: plugin entry is missing a string "transform" field`);
+  }
+  return resolvePluginRequest(specifier, baseDir);
 }
 
 function composePluginSources(
@@ -606,7 +675,7 @@ function orderNativePlugins(
 function loadPluginEntry(
   entry: ITtscProjectPluginConfig,
   base: Omit<ITtscPluginFactoryContext, "dirname" | "filename">,
-  baseDir: string,
+  request: string,
   effectiveEnv: NodeJS.ProcessEnv,
 ): ITtscPlugin {
   return withPluginLoaderEnv(() => {
@@ -617,7 +686,6 @@ function loadPluginEntry(
       );
     }
 
-    const request = resolvePluginRequest(specifier, baseDir);
     // `dirname`/`filename` are per-entry: each plugin entry resolves to its own
     // descriptor module, so they are derived here from the resolved `request`
     // rather than carried on the shared base context. They give factories a

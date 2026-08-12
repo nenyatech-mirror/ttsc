@@ -34,6 +34,13 @@ const GRAPH = {
   configs: ["tsconfig.json"],
 };
 
+/** Universal descriptor/config files loaded by the fixture host. */
+function fixtureHostInputs(root: string): string[] {
+  return ["package.json", "plugin.cjs", "tsconfig.json"].map((file) =>
+    member(root, file),
+  );
+}
+
 /** Plugin entry reporting `dependencies` for `src/main.ts`. */
 function reportDependencies(dependencies: string[]): unknown {
   return {
@@ -99,7 +106,7 @@ export async function assertCompleteFileNarrowsToDeclaredAndUniversalInputs(): P
     [
       member(root, "src/consulted.d.ts"),
       member(root, "src/only-declared.d.ts"),
-      member(root, "tsconfig.json"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
@@ -117,7 +124,7 @@ export async function assertCompleteFileWithoutDependenciesKeepsOnlyUniversalInp
     declareComplete(["src/main.ts"]),
   ]);
 
-  assert.deepEqual(watched, [member(root, "tsconfig.json")]);
+  assert.deepEqual(watched, fixtureHostInputs(root).sort());
 }
 
 /**
@@ -164,14 +171,14 @@ export async function assertMixedCompletenessEnvelopeComposesPerFile(): Promise<
 
   assert.deepEqual(
     await collect(TestUnpluginProject.mainFile(root)),
-    [member(root, "src/consulted.d.ts"), member(root, "tsconfig.json")].sort(),
+    [member(root, "src/consulted.d.ts"), ...fixtureHostInputs(root)].sort(),
   );
   assert.deepEqual(
     await collect(other),
     [
       member(root, "src/other-type.d.ts"),
       member(root, "src/ambient.d.ts"),
-      member(root, "tsconfig.json"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
@@ -203,7 +210,7 @@ export async function assertVolatileFileIgnoresItsCompletenessDeclaration(): Pro
       member(root, "src/unread.d.ts"),
       member(root, "src/deep.d.ts"),
       member(root, "src/ambient.d.ts"),
-      member(root, "tsconfig.json"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
