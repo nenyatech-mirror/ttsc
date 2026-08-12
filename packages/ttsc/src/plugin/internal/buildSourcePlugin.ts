@@ -217,7 +217,7 @@ export function buildSourcePlugin(opts: {
   const overlayDirs = [...(opts.overlayDirs ?? findTtscOverlayDirs())].sort();
   const contributors = opts.contributors ?? [];
   const goBinary = resolveGoToolForBuild(resolveGoCompiler(env), env, dir);
-  ensureExecutableGoToolchain(goBinary);
+  ensureExecutableGoToolchain(goBinary, !env.TTSC_GO_BINARY);
   const key = computeCacheKey({
     contributors,
     dir,
@@ -1768,7 +1768,7 @@ function runGoBuild(
   goBuildCacheRoot: string,
   env: NodeJS.ProcessEnv,
 ): void {
-  ensureExecutableGoToolchain(goBinary);
+  ensureExecutableGoToolchain(goBinary, !env.TTSC_GO_BINARY);
   const result = spawnGoTool(goBinary, ["build", "-o", binaryName, entry], {
     cwd,
     encoding: "utf8",
@@ -1942,29 +1942,41 @@ function inferGoRoot(goBinary: string): string | null {
   return fs.existsSync(path.join(goRoot, "src", "runtime")) ? goRoot : null;
 }
 
-function ensureExecutableGoToolchain(goBinary: string): void {
+function ensureExecutableGoToolchain(
+  goBinary: string,
+  normalizeBundledPermissions: boolean,
+): void {
   if (process.platform === "win32") return;
   if (!path.isAbsolute(goBinary) || !fs.existsSync(goBinary)) return;
   try {
-    ensureExecutableFile(goBinary);
+    ensureExecutableFile(goBinary, normalizeBundledPermissions);
     const goRoot = inferGoRoot(goBinary);
     if (!goRoot) return;
     const gofmt = path.join(path.dirname(goBinary), "gofmt");
-    if (fs.existsSync(gofmt)) ensureExecutableFile(gofmt);
+    if (fs.existsSync(gofmt)) {
+      ensureExecutableFile(gofmt, normalizeBundledPermissions);
+    }
     const toolDir = path.join(goRoot, "pkg", "tool");
     if (!fs.existsSync(toolDir)) return;
     for (const file of walkToolFiles(toolDir)) {
-      ensureExecutableFile(file);
+      ensureExecutableFile(file, normalizeBundledPermissions);
     }
   } catch {
     // Let the subsequent go build spawn fail with the real OS error.
   }
 }
 
-/** Normalize unsafe tool modes without rewriting already-correct metadata. */
-function ensureExecutableFile(file: string): void {
+/** Repair tool execution without widening an explicitly selected toolchain. */
+function ensureExecutableFile(
+  file: string,
+  normalizeBundledPermissions: boolean,
+): void {
   const mode = fs.statSync(file).mode & 0o7777;
-  if (mode !== 0o755) fs.chmodSync(file, 0o755);
+  if (normalizeBundledPermissions) {
+    if (mode !== 0o755) fs.chmodSync(file, 0o755);
+  } else if ((mode & 0o111) === 0) {
+    fs.chmodSync(file, mode | 0o100);
+  }
 }
 
 function walkToolFiles(dir: string): string[] {

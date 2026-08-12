@@ -20,8 +20,10 @@ import {
  *
  * 1. Create a plugin source tree with the required standard subdirectories.
  * 2. Write a fake `go` executable with unsafe writable permissions (mode 0o666).
- * 3. Call `buildSourcePlugin`; assert it succeeds and that the fake `go` binary is
- *    normalized to the package's exact 0o755 mode.
+ * 3. Call `buildSourcePlugin`; assert it succeeds and that only the required owner
+ *    execute bit is added to the explicitly selected toolchain.
+ * 4. Give that external tool a restrictive executable mode and assert a cache hit
+ *    does not widen the user's permissions.
  */
 export const test_buildsourceplugin_makes_go_toolchain_executable_before_metadata_reads =
   () => {
@@ -64,7 +66,19 @@ export const test_buildsourceplugin_makes_go_toolchain_executable_before_metadat
         tsgoVersion: "7.0.0-dev",
       });
       assert.equal(fs.existsSync(binary), true);
-      assert.equal(fs.statSync(fakeGo).mode & 0o7777, 0o755);
+      assert.equal(fs.statSync(fakeGo).mode & 0o7777, 0o766);
+      fs.chmodSync(fakeGo, 0o700);
+      buildSourcePlugin({
+        baseDir: root,
+        cacheDir: path.join(root, "cache"),
+        overlayDirs: [],
+        pluginName: "go-mode",
+        source: plugin,
+        quiet: true,
+        ttscVersion: "1.0.0",
+        tsgoVersion: "7.0.0-dev",
+      });
+      assert.equal(fs.statSync(fakeGo).mode & 0o7777, 0o700);
     } finally {
       if (previousGo === undefined) delete process.env.TTSC_GO_BINARY;
       else process.env.TTSC_GO_BINARY = previousGo;
