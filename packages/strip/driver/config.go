@@ -254,7 +254,7 @@ function recordModuleCandidates(base) {
   recordedModuleBases.add(resolvedBase);
   for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
   try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8"));
+    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
     if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
       recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
     }
@@ -458,7 +458,7 @@ function recordModuleCandidates(base: string): void {
   recordedModuleBases.add(resolvedBase);
   for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
   try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8"));
+    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
     if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
       recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
     }

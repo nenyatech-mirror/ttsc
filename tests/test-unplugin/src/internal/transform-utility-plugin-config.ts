@@ -364,7 +364,7 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
   fs.mkdirSync(path.dirname(nearerPackage), { recursive: true });
   fs.writeFileSync(
     path.join(rootPackage, "package.json"),
-    JSON.stringify({ main: "entry" }),
+    `\uFEFF${JSON.stringify({ main: "entry" })}`,
     "utf8",
   );
   fs.writeFileSync(
