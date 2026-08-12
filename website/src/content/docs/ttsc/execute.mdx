@@ -16,6 +16,23 @@ npx ttsx src/index.ts
 
 Type errors stop execution. So do `@ttsc/lint` errors (warnings don't).
 
+## Register in Node and test runners
+
+When Node, Mocha, or another JavaScript tool owns the process, preload the ttsx runtime from the `ttsc` package:
+
+```bash
+node --require ttsc/register src/index.ts
+mocha --require ttsc/register --extension ts,tsx "test/**/*.ts"
+```
+
+The package is named `ttsc`, even though its typed execution command is `ttsx`, so the resolvable preload is `ttsc/register`. The short Node spelling `-r ttsc/register` is equivalent to `--require ttsc/register`.
+
+The preload installs the same runtime hooks as `ttsx`. When a TypeScript main module or a TypeScript file loaded by a JavaScript host first enters the runtime, `ttsc/register` discovers its nearest `tsconfig.json`, checks the project, applies configured plugins, and executes the compiler-owned JavaScript. A test file outside the config's `include` still inherits that config's compiler options and plugins, just like an out-of-include `ttsx` entry. A diagnostic stops that root before any of its statements execute.
+
+Several roots and tsconfigs can enter one runner process. Their temporary emits coexist for that process and are removed on exit. Register-owned output uses the same project-local ttsx cache as an ordinary run and stays temporary.
+
+Registration is a one-shot load contract, not watch mode. Editing a source after the host has loaded it does not invalidate Node's module cache or re-run the compiler. Restart the runner for a fresh check. To propagate the preload to Node child processes, put `--require ttsc/register` in `NODE_OPTIONS`.
+
 ## Scripts your tsconfig does not include
 
 `ttsc` and `ttsx` select different things from the same `tsconfig.json`. `ttsc` selects a **file set**: a project whose `include` is `["src"]` compiles only `src` into `outDir`, and a `clear.ts`, a `build/release.ts`, or a `lint.config.ts` sitting beside the tsconfig stays out of the output. `ttsx` selects an **entry**: it needs that project's compiler options, not its file list.

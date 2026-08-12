@@ -9,6 +9,11 @@ packages:
 # and Expo transformers as optional peers, which is what they are, and pnpm
 # installs them anyway; `peerDependenciesMeta.optional` does not exempt them.
 autoInstallPeers: false
+# Mocha 11 still ranges over serialize-javascript 6, whose serializer has a
+# code-injection advisory. Its public call shape is unchanged in the patched
+# release, so keep the real Mocha register defense without accepting that edge.
+overrides:
+  "mocha>serialize-javascript": 7.0.3
 catalogs:
   typescript:
     typescript: ^7.0.2

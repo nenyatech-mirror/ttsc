@@ -14,6 +14,7 @@
     "@ttsc/strip": "workspace:*",
     "@ttsc/testing": "workspace:*",
     "@types/node": "catalog:utils",
+    "mocha": "^11",
     "ttsc": "workspace:*",
     "typescript": "catalog:typescript"
   }

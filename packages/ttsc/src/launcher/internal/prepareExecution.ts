@@ -10,8 +10,6 @@ import { createFilesystemPathIdentityContext } from "../../internal/projectInput
 import type { TtscCommonOptions } from "../../structures/internal/TtscCommonOptions";
 import { type OwningModuleOptions, projectModuleOptions } from "./runtimeHooks";
 
-/** Subdirectory name that isolates concurrent ttsx processes by PID. */
-const PROCESS_CACHE_KEY = String(process.pid);
 /**
  * Maximum number of ancestor directories above the project root that the
  * virtual filesystem overlay mirrors. Three levels covers the common monorepo
@@ -32,6 +30,8 @@ export function prepareExecution(
   options: TtscCommonOptions & {
     cacheDir?: string;
     project?: string;
+    /** Internal cache key for more than one checked entry in this process. */
+    runtimeCacheKey?: string;
   } = {},
 ): {
   cleanupDir: string;
@@ -148,6 +148,19 @@ function resolveEntrySpelling(cwd: string, entryFile: string): string {
 }
 
 /**
+ * Directory-safe identity for one prepared runtime. Direct `ttsx` retains its
+ * historical PID directory; the public preload supplies a distinct key for
+ * every late TypeScript root so one preparation cannot erase another's emit.
+ */
+function resolveRuntimeCacheKey(runtimeCacheKey: string | undefined): string {
+  const key = runtimeCacheKey ?? String(process.pid);
+  if (!/^[A-Za-z0-9._-]+$/.test(key) || key === "." || key === "..") {
+    throw new Error(`ttsx: invalid runtime cache key ${JSON.stringify(key)}`);
+  }
+  return key;
+}
+
+/**
  * @param discoveryFile - The entry as the user named it. Project discovery
  *   walks up from here, so it must not be retargeted through a symlink.
  */
@@ -171,7 +184,8 @@ function createProjectContext(
   const cacheDir =
     explicitCacheDir ??
     path.join(root, "node_modules", ".cache", "ttsc", "ttsx");
-  const processDir = path.join(cacheDir, "project", PROCESS_CACHE_KEY);
+  const runtimeCacheKey = resolveRuntimeCacheKey(options.runtimeCacheKey);
+  const processDir = path.join(cacheDir, "project", runtimeCacheKey);
   const virtualRoot = path.join(processDir, "fs");
   // Resolved once: it now costs a realpath (and, for a missing directory on
   // Windows, a case-sensitivity probe) rather than a string join.
@@ -181,6 +195,7 @@ function createProjectContext(
     tsconfig,
     root,
     cacheDir,
+    runtimeCacheKey,
     processDir,
     pluginCacheDir: explicitCacheDir,
     virtualRoot,
@@ -361,7 +376,7 @@ function buildEntryProject(
   const rootDir = commonAncestorDirectory(path.dirname(entry), context.root);
   const tsconfig = path.join(
     context.root,
-    `.ttsx-entry.${PROCESS_CACHE_KEY}.tsconfig.json`,
+    `.ttsx-entry.${context.runtimeCacheKey}.tsconfig.json`,
   );
   fs.writeFileSync(
     tsconfig,
@@ -430,8 +445,8 @@ function buildEntryProject(
       fs.rmSync(tsconfig, { force: true });
     } catch {
       // Best effort: a leftover synthesized tsconfig must not mask a build
-      // failure, and it is PID-scoped so it can never be mistaken for a real
-      // project config.
+      // failure, and it is runtime-scoped so it can never be mistaken for a
+      // real project config.
     }
   }
 }
@@ -575,6 +590,9 @@ function isDirectorySymlinkTarget(realEntry: string): boolean {
  */
 function collectLinkDirectories(projectRoot: string): string[] {
   const out: string[] = [];
+  const identities = createFilesystemPathIdentityContext({
+    throwOnRealpathError: false,
+  });
   let current = projectRoot;
   for (let depth = 0; depth <= MAX_VIRTUAL_PARENT_DEPTH; depth += 1) {
     out.push(current);
@@ -586,7 +604,7 @@ function collectLinkDirectories(projectRoot: string): string[] {
       break;
     }
     const parent = path.dirname(current);
-    if (parent === current || isUnsafeVirtualParent(parent)) {
+    if (parent === current || isUnsafeVirtualParent(parent, identities)) {
       break;
     }
     current = parent;
@@ -594,10 +612,19 @@ function collectLinkDirectories(projectRoot: string): string[] {
   return out.reverse();
 }
 
-function isUnsafeVirtualParent(directory: string): boolean {
-  const resolved = path.resolve(directory);
-  const root = path.parse(resolved).root;
-  return resolved === root || resolved === path.resolve(os.tmpdir());
+/**
+ * Whether mirroring `directory` would reach a filesystem or temporary root.
+ * Identity comparison is required on Windows, where `os.tmpdir()` can carry an
+ * 8.3 component while a project created below it is returned in long spelling.
+ */
+function isUnsafeVirtualParent(
+  directory: string,
+  identities: ReturnType<typeof createFilesystemPathIdentityContext>,
+): boolean {
+  const resolved = identities.resolve(directory);
+  const root = identities.resolve(path.parse(resolved.path).root);
+  const temporaryRoot = identities.resolve(os.tmpdir());
+  return resolved.key === root.key || resolved.key === temporaryRoot.key;
 }
 
 /**

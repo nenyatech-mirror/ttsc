@@ -30,6 +30,15 @@ npx ttsc --watch        # rebuild on save
 
 `ttsx` runs a file the way `tsx` or `ts-node` does, but it type-checks the whole project first, so a type error stops the run before anything executes.
 
+Preload the same checked runtime when Node or a test runner owns the process:
+
+```bash
+node --require ttsc/register src/index.ts
+mocha --require ttsc/register --extension ts,tsx "test/**/*.ts"
+```
+
+`ttsc/register` discovers the nearest `tsconfig.json` for each TypeScript root, applies its plugins, and refuses to execute when the project does not type-check.
+
 That covers the CLI. The integrations each have a short guide:
 
 - [`@ttsc/unplugin`](https://ttsc.dev/docs/setup/unplugin): Vite, Rollup, Rolldown, esbuild, webpack, Rspack, Next.js, Turbopack, Farm, and Bun.
