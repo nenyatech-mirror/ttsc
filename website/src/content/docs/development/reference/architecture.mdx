@@ -82,7 +82,7 @@ The plugin builder reads Go's effective build environment for the cache key. It 
 
 ### Cache-key inputs: `GO_BUILD_ENV_KEYS`
 
-These effective Go build env values fold into the cache key when non-empty, so cross-compile targets, build-tag tweaks, cgo compiler/linker choices, FIPS mode, and toolchain roots never collide with the native build slot. `ttsc` reads them through `go env`, so `go env -w` settings are covered too. `GOROOT` is normalized to a toolchain-content fingerprint instead of the install path, preserving pnpm path sharing for identical bundled toolchains. Command-valued entries such as `CC`, `CXX`, `AR`, `GCCGO`, and `PKG_CONFIG` include the resolved executable content hash as well as the command string.
+These effective Go build env values fold into the cache key when non-empty, so cross-compile targets, build-tag tweaks, cgo compiler/linker choices, FIPS mode, and toolchain roots never collide with the native build slot. `ttsc` reads them through `go env`, so `go env -w` settings are covered too. `GOROOT` is normalized to a toolchain-content fingerprint instead of the install path, preserving pnpm path sharing for identical bundled toolchains. Within one process, an unchanged GOROOT reuses that fingerprint after a fresh file-metadata manifest check; an added, removed, replaced, or modified toolchain file recomputes the same content fingerprint, so this skips repeated SDK reads without changing key bytes or freshness. Command-valued entries such as `CC`, `CXX`, `AR`, `GCCGO`, and `PKG_CONFIG` include the resolved executable content hash as well as the command string.
 
 ```text
 GOOS GOARCH GOAMD64 GOARM GOARM64 GO386 GOMIPS GOMIPS64 GOPPC64

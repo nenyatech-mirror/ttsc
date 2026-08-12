@@ -2896,33 +2896,100 @@ function hashExternalGoBuildEnvironment(
   }
 }
 
+interface GoRootIdentitySnapshot {
+  complete: boolean;
+  files: string[];
+  signature: string;
+}
+
+interface GoRootIdentityCacheEntry {
+  identity: string;
+  signature: string;
+}
+
+// GOROOT is immutable during normal use but contributes roughly 140 MiB of
+// source/tool content to every plugin key. Retain only the final pathless
+// content identity, guarded by a fresh metadata manifest on every call. A
+// changed or incomplete manifest falls through to the historical full read.
+const goRootIdentityCache = new Map<string, GoRootIdentityCacheEntry>();
+
 function resolveGoRootCacheIdentity(goRoot: string): string {
   const resolved = resolveRealPath(goRoot);
   if (!fs.existsSync(resolved)) {
     return `missing:${goRoot}`;
   }
+  const snapshot = collectGoRootIdentitySnapshot(resolved);
+  if (snapshot.complete) {
+    const cached = goRootIdentityCache.get(resolved);
+    if (cached?.signature === snapshot.signature) {
+      return cached.identity;
+    }
+  }
   const hash = crypto.createHash("sha256");
-  for (const file of collectGoRootIdentityFiles(resolved)) {
+  for (const file of snapshot.files) {
     const relative = path.relative(resolved, file).replace(/\\/g, "/");
     hash.update(`f=${relative}\n`);
     hash.update(fs.readFileSync(file));
     hash.update("\n");
   }
-  return `sha256:${hash.digest("hex")}`;
+  const identity = `sha256:${hash.digest("hex")}`;
+  if (snapshot.complete) {
+    goRootIdentityCache.set(resolved, {
+      identity,
+      signature: snapshot.signature,
+    });
+  }
+  return identity;
 }
 
-function collectGoRootIdentityFiles(root: string): string[] {
+function collectGoRootIdentitySnapshot(root: string): GoRootIdentitySnapshot {
   const out: string[] = [];
-  walkGoRootIdentity(root, root, out);
+  const state = { complete: true };
+  walkGoRootIdentity(root, root, out, state);
   out.sort();
-  return out;
+  const signature = crypto.createHash("sha256");
+  for (const file of out) {
+    const relative = path.relative(root, file).replace(/\\/g, "/");
+    try {
+      const stats = fs.statSync(file, { bigint: true });
+      if (!stats.isFile()) {
+        state.complete = false;
+        continue;
+      }
+      signature.update(
+        [
+          relative,
+          stats.dev,
+          stats.ino,
+          stats.mode,
+          stats.size,
+          stats.mtimeNs,
+          stats.ctimeNs,
+        ].join("\0"),
+      );
+      signature.update("\n");
+    } catch {
+      state.complete = false;
+    }
+  }
+  return {
+    complete: state.complete,
+    files: out,
+    signature: signature.digest("hex"),
+  };
 }
 
-function walkGoRootIdentity(root: string, dir: string, out: string[]): void {
+function walkGoRootIdentity(
+  root: string,
+  dir: string,
+  out: string[],
+  state: { complete: boolean },
+): void {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
+    state.complete = false;
     return;
   }
   for (const entry of entries) {
@@ -2930,7 +2997,7 @@ function walkGoRootIdentity(root: string, dir: string, out: string[]): void {
     const rel = path.relative(root, file).replace(/\\/g, "/");
     if (entry.isDirectory()) {
       if (shouldHashGoRootPath(rel, true)) {
-        walkGoRootIdentity(root, file, out);
+        walkGoRootIdentity(root, file, out, state);
       }
     } else if (entry.isFile() && shouldHashGoRootPath(rel, false)) {
       out.push(file);
