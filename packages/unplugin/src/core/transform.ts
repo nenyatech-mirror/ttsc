@@ -1926,10 +1926,13 @@ async function transformProject(props: {
     }).transform();
     const temporaryTsconfig =
       configured.path === props.tsconfig ? undefined : configured.path;
+    const persistentHostInputs = selectPersistentHostInputs({
+      projectRoot,
+      result,
+      temporaryTsconfig,
+    });
     hostInputTracker = props.trackProjectMembership
-      ? await createHostInputMutationTracker(
-          result.type === "exception" ? [] : (result.hostInputs ?? []),
-        )
+      ? await createHostInputMutationTracker(persistentHostInputs)
       : undefined;
     const externalInputPaths = selectExternalInputPaths({
       projectRoot,
@@ -1990,6 +1993,22 @@ async function transformProject(props: {
     }
     configured.dispose();
   }
+}
+
+/** Exclude the disposed overlay tsconfig from live host-input tracking. */
+function selectPersistentHostInputs(props: {
+  projectRoot: string;
+  result: ITtscCompilerTransformation;
+  temporaryTsconfig?: string;
+}): string[] {
+  if (props.result.type === "exception") return [];
+  const inputs = selectListedFiles(props.projectRoot, props.result.hostInputs);
+  if (props.temporaryTsconfig === undefined) return inputs;
+  const identities = createHostPathIdentityContext();
+  const temporary = pathIdentityKey(props.temporaryTsconfig, identities);
+  return inputs.filter(
+    (input) => pathIdentityKey(input, identities) !== temporary,
+  );
 }
 
 function createTransformTsconfig(props: {
