@@ -26,19 +26,14 @@ import {
 import { resolveBinary } from "./resolveBinary";
 import { resolveTsgo } from "./resolveTsgo";
 import {
+  TSGO_ARGS_ENV,
   assertSharedHostCompatibility,
+  clearInheritedTsgoArgs,
   linkedTransformPlugins,
   resolvePluginConfigDir,
   selectSharedHostPlugin,
 } from "./sharedHostHelpers";
 import { outputText, spawnNative } from "./spawnNative";
-
-/**
- * Environment channel carrying the JSON-encoded tsgo argv ttsc forwards to a
- * native sidecar. Mirrors `driver.TsgoArgsEnv` on the Go side; see
- * {@link createNativeTsgoArgs} for why the payload is not a CLI flag.
- */
-const TSGO_ARGS_ENV = "TTSC_TSGO_ARGS";
 
 export type RunBuildOptions = TtscBuildOptions & {
   skipDiagnosticsCheck?: boolean;
@@ -218,13 +213,12 @@ function nativePluginEnv(
     ...extra,
   });
   // Forwarded tsgo argv is per-invocation state this host owns, exactly like
-  // the config anchor below: publish this run's payload, and drop any value an
-  // ancestor ttsc process left behind when this lane forwards nothing, so a
-  // nested build never inherits the outer run's `--strict`.
+  // the config anchor below: publish this run's payload, or drop whatever an
+  // ancestor ttsc process left behind when this lane forwards nothing.
   if (tsgoArgs !== undefined) {
     env[TSGO_ARGS_ENV] = tsgoArgs;
-  } else if (extra?.[TSGO_ARGS_ENV] === undefined) {
-    delete env[TSGO_ARGS_ENV];
+  } else {
+    clearInheritedTsgoArgs(env, extra);
   }
   // The anchor is per-invocation state owned by this host: when this run
   // declared none (and the caller's env does not name one), drop any value

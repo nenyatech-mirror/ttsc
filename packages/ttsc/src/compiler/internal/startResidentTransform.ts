@@ -9,6 +9,7 @@ import { resolveBinary } from "./resolveBinary";
 import { resolveTsgo } from "./resolveTsgo";
 import {
   assertSharedHostCompatibility,
+  clearInheritedTsgoArgs,
   linkedTransformPlugins,
   resolvePluginConfigDir,
   selectSharedHostPlugin,
@@ -121,6 +122,9 @@ function residentEnv(
   ) {
     delete env.TTSC_PLUGIN_CONFIG_DIR;
   }
+  // This lane forwards no tsgo argv of its own, so anything inherited belongs
+  // to an outer ttsc run and must not reach the resident sidecar.
+  clearInheritedTsgoArgs(env, context.env);
   const linked = linkedTransformPlugins(nativePlugins);
   if (linked.length !== 0) {
     env.TTSC_LINKED_PLUGINS_JSON = serializeNativePlugins(linked);

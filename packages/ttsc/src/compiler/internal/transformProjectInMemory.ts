@@ -19,6 +19,7 @@ import { resolveTsgo } from "./resolveTsgo";
 import { appendBuildOutput, normalizeBuildOutput } from "./runBuild";
 import {
   assertSharedHostCompatibility,
+  clearInheritedTsgoArgs,
   linkedTransformPlugins,
   resolvePluginConfigDir,
   selectSharedHostPlugin,
@@ -385,6 +386,9 @@ function nativePluginEnv(
   ) {
     delete env.TTSC_PLUGIN_CONFIG_DIR;
   }
+  // This lane forwards no tsgo argv of its own, so anything inherited belongs
+  // to an outer ttsc run and must not reach these sidecars.
+  clearInheritedTsgoArgs(env, options.env);
   if (plugin?.stage === "transform") {
     const linked = linkedTransformPlugins(nativePlugins ?? []);
     if (linked.length !== 0) {
