@@ -1961,12 +1961,10 @@ function ensureExecutableGoToolchain(goBinary: string): void {
   }
 }
 
-/** Add missing execute bits without rewriting already-correct metadata. */
+/** Normalize unsafe tool modes without rewriting already-correct metadata. */
 function ensureExecutableFile(file: string): void {
-  const mode = fs.statSync(file).mode & 0o777;
-  if ((mode & 0o111) !== 0o111) {
-    fs.chmodSync(file, mode | 0o111);
-  }
+  const mode = fs.statSync(file).mode & 0o7777;
+  if (mode !== 0o755) fs.chmodSync(file, 0o755);
 }
 
 function walkToolFiles(dir: string): string[] {
