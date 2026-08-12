@@ -563,6 +563,15 @@ func (p *Program) HasLinkedProgramPlugins() bool {
   return p != nil && p.plugins.hasProgramPlugins()
 }
 
+// PluginHostInputs returns the generation-wide native configuration files
+// reported by linked plugins while this Program was loaded or transformed.
+func (p *Program) PluginHostInputs() []string {
+  if p == nil {
+    return nil
+  }
+  return p.plugins.hostInputs()
+}
+
 // Diagnostics returns project diagnostics that must block compilation or
 // runtime execution before any JavaScript is emitted or evaluated.
 func (p *Program) Diagnostics() []Diagnostic {

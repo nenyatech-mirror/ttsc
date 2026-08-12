@@ -27,6 +27,7 @@ type apiTransformResult struct {
 }
 
 type utilityTransformResult struct {
+  HostInputs []string          `json:"hostInputs,omitempty"`
   TypeScript map[string]string `json:"typescript"`
 }
 

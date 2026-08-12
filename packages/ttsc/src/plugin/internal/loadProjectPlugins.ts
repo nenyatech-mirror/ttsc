@@ -49,9 +49,10 @@ type PackageManifest = {
  * @param options.cwd - Working directory for resolving relative paths.
  * @param options.entries - Explicit plugin entries; `false` disables all
  *   plugins (skips both tsconfig entries and package auto-discovery).
- * @param options.env - Effective environment for source-plugin builds and the
- *   `ttsx` descriptor child (`{ ...process.env, ...context.env }`). Defaults to
- *   `process.env` for CLI callers, so ambient behavior is unchanged.
+ * @param options.env - Effective environment for source-plugin builds and
+ *   isolated descriptor evaluators, including the `ttsx` fallback (`{
+ *   ...process.env, ...context.env }`). Defaults to `process.env` for CLI
+ *   callers, so ambient behavior is unchanged.
  * @param options.file - Path to the tsconfig/jsconfig file.
  * @param options.pluginConfigDir - Caller-declared anchor for plugin
  *   config-file discovery (see `ITtscPluginFactoryContext.pluginConfigDir`).
@@ -897,6 +898,20 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `const path = require("node:path");`,
   `const out = process.env.TTSC_PLUGIN_DESCRIPTOR_OUT;`,
   `let retryWithTtsx = false;`,
+  `function shouldRetryWithTtsx(error, request) {`,
+  `  const code = error && error.code;`,
+  `  if (code === "ERR_UNKNOWN_FILE_EXTENSION" || code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" || code === "ERR_INVALID_TYPESCRIPT_SYNTAX") return true;`,
+  `  if (code !== "MODULE_NOT_FOUND") return false;`,
+  `  const firstLine = String(error && error.message || "").split("\\n", 1)[0];`,
+  `  const firstQuote = firstLine.indexOf("'");`,
+  `  const secondQuote = firstQuote < 0 ? -1 : firstLine.indexOf("'", firstQuote + 1);`,
+  `  const specifier = secondQuote < 0 ? "" : firstLine.slice(firstQuote + 1, secondQuote);`,
+  `  if (!specifier.startsWith(".") || path.extname(specifier) !== "") return false;`,
+  `  const stack = Array.isArray(error.requireStack) ? error.requireStack : [];`,
+  `  const anchor = stack.length === 0 ? request : stack[0];`,
+  `  const candidate = path.resolve(path.dirname(anchor), specifier);`,
+  `  return [".ts", ".cts", ".mts", ".tsx"].some((extension) => fs.existsSync(candidate + extension) || fs.existsSync(path.join(candidate, "index" + extension)));`,
+  `}`,
   `try {`,
   `  const request = process.env.TTSC_PLUGIN_ENTRY;`,
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
@@ -913,7 +928,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  try {`,
   `    mod = require(request);`,
   `  } catch (error) {`,
-  `    retryWithTtsx = true;`,
+  `    retryWithTtsx = shouldRetryWithTtsx(error, request);`,
   `    throw error;`,
   `  }`,
   `  const candidate = mod.createTtscPlugin ?? mod.default ?? mod.plugin ?? mod;`,

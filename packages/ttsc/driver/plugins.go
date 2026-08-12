@@ -5,7 +5,9 @@ import (
   "fmt"
   "os"
   "path/filepath"
+  "sort"
   "strings"
+  "sync"
 )
 
 // LinkedPluginsEnv is the environment variable ttsc sets to pass the JSON
@@ -60,6 +62,22 @@ type PluginContext struct {
   Cwd      string
   Entry    PluginEntry
   Tsconfig string
+
+  reportHostInput func(string)
+}
+
+// ReportHostInput declares an absolute file whose content or presence was
+// consumed while the native plugin evaluated configuration. Native transform
+// envelopes expose the generation-wide union so persistent hosts can invalidate
+// without re-evaluating plugin config on the JavaScript side.
+func (ctx PluginContext) ReportHostInput(file string) {
+  if ctx.reportHostInput == nil || strings.TrimSpace(file) == "" {
+    return
+  }
+  if !filepath.IsAbs(file) {
+    file = filepath.Join(ctx.Cwd, file)
+  }
+  ctx.reportHostInput(filepath.Clean(file))
 }
 
 // SourcePreamblePlugin can inject source text before TypeScript-Go parses the
@@ -92,7 +110,40 @@ type EmitTransformPlugin interface {
 type linkedPluginState struct {
   cwd      string
   entries  []PluginEntry
+  inputs   *pluginHostInputs
   tsconfig string
+}
+
+type pluginHostInputs struct {
+  files map[string]struct{}
+  mu    sync.Mutex
+}
+
+func newPluginHostInputs() *pluginHostInputs {
+  return &pluginHostInputs{files: map[string]struct{}{}}
+}
+
+func (inputs *pluginHostInputs) add(file string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  inputs.files[file] = struct{}{}
+  inputs.mu.Unlock()
+}
+
+func (inputs *pluginHostInputs) list() []string {
+  if inputs == nil {
+    return nil
+  }
+  inputs.mu.Lock()
+  files := make([]string, 0, len(inputs.files))
+  for file := range inputs.files {
+    files = append(files, file)
+  }
+  inputs.mu.Unlock()
+  sort.Strings(files)
+  return files
 }
 
 var pluginRegistry []any
@@ -113,7 +164,7 @@ func RegisterPlugin(plugin any) {
 func loadLinkedPluginState(cwd, tsconfigPath string) (linkedPluginState, error) {
   input := strings.TrimSpace(os.Getenv(LinkedPluginsEnv))
   if input == "" {
-    return linkedPluginState{cwd: cwd, tsconfig: tsconfigPath}, nil
+    return linkedPluginState{cwd: cwd, inputs: newPluginHostInputs(), tsconfig: tsconfigPath}, nil
   }
   var entries []PluginEntry
   if err := json.Unmarshal([]byte(input), &entries); err != nil {
@@ -122,6 +173,7 @@ func loadLinkedPluginState(cwd, tsconfigPath string) (linkedPluginState, error) 
   return linkedPluginState{
     cwd:      cwd,
     entries:  entries,
+    inputs:   newPluginHostInputs(),
     tsconfig: tsconfigPath,
   }, nil
 }
@@ -219,8 +271,15 @@ func registeredPlugin(index int) (any, bool) {
 // context builds the PluginContext the driver passes to each plugin hook.
 func (state linkedPluginState) context(entry PluginEntry) PluginContext {
   return PluginContext{
-    Cwd:      state.cwd,
-    Entry:    entry,
-    Tsconfig: state.tsconfig,
+    Cwd:             state.cwd,
+    Entry:           entry,
+    Tsconfig:        state.tsconfig,
+    reportHostInput: state.inputs.add,
   }
+}
+
+// hostInputs returns the exact native configuration inputs reported in this
+// generation.
+func (state linkedPluginState) hostInputs() []string {
+  return state.inputs.list()
 }

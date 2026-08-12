@@ -10,6 +10,12 @@ import path from "node:path";
  * A directory named like a config is not a native config candidate. The
  * descriptor-side input walk must therefore continue to the selected ancestor
  * file so a persistent bundler generation observes edits to it.
+ *
+ * 1. Plant a candidate-named directory in a nested project and a real config in
+ *    its workspace ancestor.
+ * 2. Invoke both package descriptors with that project as the discovery root.
+ * 3. Assert each host-input list crosses the directory and stops at the real
+ *    selected ancestor.
  */
 export const test_ttsc_banner_and_strip_descriptors_ignore_directories_during_config_discovery =
   () => {

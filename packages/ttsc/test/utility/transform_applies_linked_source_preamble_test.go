@@ -2,6 +2,7 @@ package ttsc_test
 
 import (
   "encoding/json"
+  "path/filepath"
   "strings"
   "testing"
 
@@ -9,9 +10,12 @@ import (
   "github.com/samchon/ttsc/packages/ttsc/utility"
 )
 
-type utilityPreamblePlugin struct{}
+type utilityPreamblePlugin struct {
+  input string
+}
 
-func (utilityPreamblePlugin) SourcePreamble(driver.PluginContext) (string, error) {
+func (plugin utilityPreamblePlugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
+  ctx.ReportHostInput(plugin.input)
   return "// utility linked preamble\n", nil
 }
 
@@ -23,13 +27,14 @@ func (utilityPreamblePlugin) SourcePreamble(driver.PluginContext) (string, error
 // the Program text only after source-preamble hooks have run; without this
 // ordering the preamble would be absent from the JSON output seen by callers.
 //
-// 1. Register a linked source-preamble plugin.
+// 1. Register a linked source-preamble plugin that reports one config input.
 // 2. Run utility transform with one linked plugin manifest entry.
-// 3. Assert the JSON result contains the generated preamble text.
+// 3. Assert the JSON result contains the preamble and exact reported input.
 func TestUtilityTransformAppliesLinkedSourcePreamble(t *testing.T) {
   resetLinkedPluginRegistry()
-  driver.RegisterPlugin(utilityPreamblePlugin{})
   root := t.TempDir()
+  input := filepath.Join(root, "banner.config.cjs")
+  driver.RegisterPlugin(utilityPreamblePlugin{input: input})
   writeProjectFile(t, root, "tsconfig.json", `{
   "compilerOptions": { "module": "commonjs", "target": "es2020" },
   "files": ["index.ts"]
@@ -53,5 +58,8 @@ func TestUtilityTransformAppliesLinkedSourcePreamble(t *testing.T) {
   }
   if !strings.Contains(result.TypeScript["index.ts"], "utility linked preamble") {
     t.Fatalf("preamble missing from transform output: %#v", result.TypeScript)
+  }
+  if len(result.HostInputs) != 1 || result.HostInputs[0] != input {
+    t.Fatalf("host inputs mismatch: %#v", result.HostInputs)
   }
 }

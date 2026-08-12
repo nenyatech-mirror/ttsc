@@ -47,8 +47,9 @@ type hostOptions struct {
 // transformed module without per-plugin reporting.
 type transformResult struct {
   Diagnostics []any                  `json:"diagnostics,omitempty"`
-  TypeScript  map[string]string      `json:"typescript"`
   Graph       *driver.TransformGraph `json:"graph,omitempty"`
+  HostInputs  []string               `json:"hostInputs,omitempty"`
+  TypeScript  map[string]string      `json:"typescript"`
 }
 
 // RunCheck validates the project and linked plugin configuration without
@@ -150,6 +151,7 @@ func RunTransformWithIO(args []string, stdout, stderr io.Writer) int {
     text := shimprinter.EmitSourceFile(printer, file)
     out.TypeScript[apiOutputKey(opts.cwd, file.FileName())] = text
   }
+  out.HostInputs = prog.PluginHostInputs()
   data, _ := json.Marshal(out)
   fmt.Fprintln(opts.stdout, string(data))
   return 0

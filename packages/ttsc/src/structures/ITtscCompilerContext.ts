@@ -76,11 +76,14 @@ export interface ITtscCompilerContext {
   binary?: string;
 
   /**
-   * Additional environment variables for child compiler processes.
+   * Additional environment variables for child compiler and plugin-descriptor
+   * processes.
    *
    * Values are merged over `process.env` before ttsc starts TypeScript-Go,
-   * native plugin binaries, or the native compiler host used by
-   * {@link TtscCompiler.compile}.
+   * native plugin binaries, isolated descriptor evaluators (including the
+   * `ttsx` fallback), or the native compiler host used by
+   * {@link TtscCompiler.compile}. Descriptor output is diagnostic text and is
+   * forwarded to stderr so it cannot corrupt compiler/API protocol stdout.
    */
   env?: NodeJS.ProcessEnv;
 

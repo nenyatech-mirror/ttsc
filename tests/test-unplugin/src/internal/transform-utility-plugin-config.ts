@@ -207,6 +207,129 @@ async function assertPersistentBannerConfigEditInvalidatesTransform() {
 }
 
 /**
+ * Assert persistent generations include modules evaluated by native utility
+ * config loaders, even when those modules live outside the project walk.
+ *
+ * 1. Configure banner and strip through `.cjs` and `.ts` files that import an
+ *    external helper and compile each project into a persistent cache.
+ * 2. Edit only the external helper, leaving every descriptor, config, and
+ *    TypeScript project file untouched.
+ * 3. Assert the generation is replaced and the transformed output reflects the
+ *    helper's new value for both plugins.
+ */
+async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform() {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+
+  for (const { format, plugin } of [
+    { format: "cjs", plugin: "banner" },
+    { format: "ts", plugin: "banner" },
+    { format: "cjs", plugin: "strip" },
+    { format: "ts", plugin: "strip" },
+  ] as const) {
+    const root = createUtilityPluginProject({
+      plugin,
+      source:
+        plugin === "banner"
+          ? 'export const value: string = "kept";\n'
+          : STRIP_SOURCE,
+    });
+    const external = path.join(
+      TestProject.tmpdir(`ttsc-${plugin}-${format}-external-config-`),
+      `selection.${format}`,
+    );
+    const externalManifest = path.join(path.dirname(external), "package.json");
+    fs.writeFileSync(
+      externalManifest,
+      JSON.stringify({ private: true, type: "module" }),
+      "utf8",
+    );
+    const config = path.join(root, `${plugin}.config.${format}`);
+    const specifier = path
+      .relative(path.dirname(config), external)
+      .split(path.sep)
+      .join("/");
+    fs.writeFileSync(
+      config,
+      format === "cjs"
+        ? `module.exports = require(${JSON.stringify(external)});\n`
+        : `import selection from ${JSON.stringify(specifier.startsWith(".") ? specifier : `./${specifier}`)};\nexport default selection;\n`,
+      "utf8",
+    );
+    const configValue = (phase: "NEW" | "OLD") =>
+      plugin === "banner"
+        ? `{ text: ${JSON.stringify(`${phase} NATIVE INPUT`)} }`
+        : phase === "OLD"
+          ? '{ calls: ["logger.trace"], statements: [] }'
+          : '{ calls: ["console.log"], statements: [] }';
+    const moduleText = (phase: "NEW" | "OLD") =>
+      format === "cjs"
+        ? `module.exports = ${configValue(phase)};\n`
+        : `export default ${configValue(phase)};\n`;
+    fs.writeFileSync(external, moduleText("OLD"), "utf8");
+
+    const file = TestUnpluginProject.mainFile(root);
+    const source = TestUnpluginProject.mainSource(root);
+    const cache = createTtscTransformCache();
+    const first = await transformTtsc(
+      file,
+      source,
+      resolveOptions(),
+      undefined,
+      cache,
+    );
+    assert.ok(first);
+    const firstGeneration = [...cache.values()][0];
+    const cached = (await firstGeneration) as {
+      result?: { hostInputs?: string[] };
+    };
+    assert.ok(
+      cached.result?.hostInputs?.some(
+        (input) => path.resolve(input) === path.resolve(external),
+      ),
+      `${plugin}.${format} omitted its evaluated external config dependency: ${JSON.stringify(cached.result?.hostInputs ?? [])}`,
+    );
+    assert.ok(
+      cached.result?.hostInputs?.some(
+        (input) => path.resolve(input) === path.resolve(externalManifest),
+      ),
+      `${plugin}.${format} omitted the package boundary used to resolve its config dependency`,
+    );
+    assert.equal(
+      cached.result?.hostInputs?.some((input) =>
+        /ttsc-(?:banner|strip)-config-/i.test(input),
+      ),
+      false,
+      `${plugin}.${format} reported an ephemeral config-loader file`,
+    );
+    if (plugin === "banner") {
+      assert.match(first.code, /OLD NATIVE INPUT/);
+    } else {
+      assert.doesNotMatch(first.code, /logger\.trace\("drop"\)/);
+      assert.match(first.code, /console\.log\("kept"\)/);
+    }
+
+    fs.writeFileSync(external, moduleText("NEW"), "utf8");
+    const second = await transformTtsc(
+      file,
+      source,
+      resolveOptions(),
+      undefined,
+      cache,
+    );
+    assert.ok(second);
+    assert.notEqual([...cache.values()][0], firstGeneration);
+    if (plugin === "banner") {
+      assert.match(second.code, /NEW NATIVE INPUT/);
+      assert.doesNotMatch(second.code, /OLD NATIVE INPUT/);
+    } else {
+      assert.match(second.code, /logger\.trace\("drop"\)/);
+      assert.doesNotMatch(second.code, /console\.log\("kept"\)/);
+    }
+  }
+}
+
+/**
  * Asserts that a relative `configFile` on a tsconfig-declared plugin entry
  * resolves against the project even when the compile runs through the generated
  * alias tsconfig in the temp directory.
@@ -297,4 +420,5 @@ export {
   assertAliasOverlayMatchesNoAliasStripOutput,
   assertAliasOverlayResolvesRelativeConfigFile,
   assertPersistentBannerConfigEditInvalidatesTransform,
+  assertPersistentUtilityConfigDependencyEditInvalidatesTransform,
 };

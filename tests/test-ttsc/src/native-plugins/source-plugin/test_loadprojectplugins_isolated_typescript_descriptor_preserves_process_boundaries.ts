@@ -11,6 +11,13 @@ import { assert, fs, path, spawnNodeWorker } from "../../internal/source-build";
  * descriptor stdout away from the host's protocol stream, and never interpret a
  * factory exception as a loader failure that should execute the factory a
  * second time through ttsx.
+ *
+ * 1. Load an enum-bearing descriptor under contradictory ambient/effective
+ *    environments and make its factory throw after one observable write.
+ * 2. Assert descriptor stdout reaches stderr, the effective value wins, and the
+ *    factory ran once.
+ * 3. Replace it with a top-level side-effect-plus-throw and assert that module
+ *    initialization also runs once instead of being retried through ttsx.
  */
 export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_process_boundaries =
   async () => {
@@ -80,4 +87,34 @@ export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_pr
     assert.match(result.stderr, /factory-env:effective/);
     assert.equal(/factory-env:ambient/.test(result.stderr), false);
     assert.equal(fs.readFileSync(counter, "utf8"), "run\n");
+
+    const moduleCounter = path.join(root, "module-runs.txt");
+    const moduleDescriptor = path.join(root, "module.cts");
+    fs.writeFileSync(
+      moduleDescriptor,
+      [
+        `const fs = require("node:fs");`,
+        `fs.appendFileSync(${JSON.stringify(moduleCounter)}, "run\\n");`,
+        `throw new Error("module-initialization:loaded");`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { plugins: [{ transform: moduleDescriptor }] },
+      }),
+      "utf8",
+    );
+    const moduleResult = await spawnNodeWorker({
+      env: {
+        TTSC_BINARY: TestProject.NATIVE_BINARY,
+        TTSC_DESC_MARKER: "ambient",
+        TTSC_TSGO_BINARY: TestProject.TSGO_BINARY,
+      },
+      script,
+    });
+    assert.match(moduleResult.stderr, /module-initialization:loaded/);
+    assert.equal(fs.readFileSync(moduleCounter, "utf8"), "run\n");
   };

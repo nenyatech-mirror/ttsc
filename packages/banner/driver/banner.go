@@ -61,13 +61,17 @@ func validateBannerConfig(config map[string]any) error {
 // SourcePreamble resolves the banner text from the plugin config and returns it
 // formatted as a JSDoc block comment suitable for prepending to each emitted file.
 func (plugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
-  return parseBanner(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig)
+  return parseBannerWithReporter(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput)
 }
 
 // parseBanner resolves and formats banner text into a JSDoc block comment.
 // Trailing blank lines are stripped from the resolved text before formatting.
 func parseBanner(config map[string]any, cwd, tsconfigPath string) (string, error) {
-  text, err := resolveBannerText(config, cwd, tsconfigPath)
+  return parseBannerWithReporter(config, cwd, tsconfigPath, nil)
+}
+
+func parseBannerWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
+  text, err := resolveBannerTextWithReporter(config, cwd, tsconfigPath, reporter)
   if err != nil {
     return "", err
   }
@@ -108,6 +112,10 @@ func sanitizeJSDocLine(line string) string {
 // The discovery base directory doubles as the resolution root the config
 // loader anchors its toolchain lookup on; see configToolAnchors.
 func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string, error) {
+  return resolveBannerTextWithReporter(config, cwd, tsconfigPath, nil)
+}
+
+func resolveBannerTextWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
   if err := validateBannerConfig(config); err != nil {
     return "", err
   }
@@ -119,11 +127,12 @@ func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string,
       return "", fmt.Errorf("@ttsc/banner: \"configFile\" must be a non-empty string path")
     }
     location := resolveBannerConfigPath(configFile, cwd, tsconfigPath)
-    raw, err := loadBannerConfigFile(location, resolutionRoot)
+    loaded, err := loadBannerConfigFileWithInputs(location, resolutionRoot)
     if err != nil {
       return "", err
     }
-    text, ok, err := bannerTextFromConfigValue(raw, filepath.Base(location))
+    reportBannerConfigInputs(loaded.inputs, reporter)
+    text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
     if err != nil {
       return "", err
     }
@@ -140,11 +149,12 @@ func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string,
   if location == "" {
     return "", fmt.Errorf("@ttsc/banner: no banner.config.{ts,cts,mts,js,cjs,mjs,json} file found; create one or set \"configFile\" in the tsconfig plugin entry")
   }
-  raw, err := loadBannerConfigFile(location, resolutionRoot)
+  loaded, err := loadBannerConfigFileWithInputs(location, resolutionRoot)
   if err != nil {
     return "", err
   }
-  text, ok, err := bannerTextFromConfigValue(raw, filepath.Base(location))
+  reportBannerConfigInputs(loaded.inputs, reporter)
+  text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
   if err != nil {
     return "", err
   }
@@ -253,17 +263,37 @@ func tsconfigBaseDir(cwd, tsconfigPath string) string {
 // toolchain resolution on when the config file's own ancestry answers nothing;
 // see configToolAnchors. The JSON and JS branches spawn no ttsx and ignore it.
 func loadBannerConfigFile(location, resolutionRoot string) (any, error) {
+  loaded, err := loadBannerConfigFileWithInputs(location, resolutionRoot)
+  return loaded.value, err
+}
+
+type bannerLoadedConfig struct {
+  inputs []string
+  value  any
+}
+
+func loadBannerConfigFileWithInputs(location, resolutionRoot string) (bannerLoadedConfig, error) {
   if !isBannerConfigFileName(filepath.Base(location)) {
-    return nil, fmt.Errorf("@ttsc/banner: config file must be named banner.config.{ts,cts,mts,js,cjs,mjs,json}: %s", location)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: config file must be named banner.config.{ts,cts,mts,js,cjs,mjs,json}: %s", location)
   }
   ext := strings.ToLower(filepath.Ext(location))
   switch ext {
   case ".json":
-    return loadBannerJSONConfigFile(location)
+    value, err := loadBannerJSONConfigFile(location)
+    return bannerLoadedConfig{inputs: []string{location}, value: value}, err
   case ".js", ".cjs", ".mjs":
-    return loadBannerScriptConfigFile(location)
+    return loadBannerScriptConfigFileWithInputs(location)
   }
-  return loadBannerTypeScriptConfigFile(location, resolutionRoot)
+  return loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot)
+}
+
+func reportBannerConfigInputs(inputs []string, reporter func(string)) {
+  if reporter == nil {
+    return
+  }
+  for _, input := range inputs {
+    reporter(input)
+  }
 }
 
 // isBannerConfigFileName reports whether name is an allowed banner config file name.
@@ -304,8 +334,46 @@ func loadBannerJSONConfigFile(location string) (any, error) {
 // running a small Node.js loader script that dynamic-imports the file and
 // serializes its exported value to stdout as JSON.
 func loadBannerScriptConfigFile(location string) (any, error) {
+  loaded, err := loadBannerScriptConfigFileWithInputs(location)
+  return loaded.value, err
+}
+
+func loadBannerScriptConfigFileWithInputs(location string) (bannerLoadedConfig, error) {
   const script = `
-const { pathToFileURL } = require("node:url");
+const { registerHooks } = require("node:module");
+const fs = require("node:fs");
+const path = require("node:path");
+const { fileURLToPath, pathToFileURL } = require("node:url");
+const inputs = new Set();
+
+function recordFile(file) {
+  const resolvedFile = path.resolve(file);
+  inputs.add(resolvedFile);
+  for (let directory = path.dirname(resolvedFile);;) {
+    const manifest = path.join(directory, "package.json");
+    inputs.add(manifest);
+    if (fs.existsSync(manifest)) {
+      break;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+}
+
+recordFile(process.argv[1]);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    const url = typeof resolved === "string" ? resolved : resolved && resolved.url;
+    if (typeof url === "string" && url.startsWith("file:")) {
+      recordFile(fileURLToPath(url));
+    }
+    return resolved;
+  },
+});
 
 (async () => {
   const mod = await import(pathToFileURL(process.argv[1]).href);
@@ -321,7 +389,7 @@ const { pathToFileURL } = require("node:url");
     break;
   }
   const value = typeof current === "function" ? await current() : current;
-  process.stdout.write(JSON.stringify(toSerializableBanner(value)));
+  process.stdout.write(JSON.stringify({ value: toSerializableBanner(value), inputs: [...inputs].sort() }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
   // The stack above is for the reader. This is for the caller: the parent reads
@@ -360,15 +428,44 @@ function toSerializableBanner(value) {
     // What it could not put there is a reason a caller can act on, so that
     // arrives through the payload channel instead.
     if reason := loaderFailureReason(output); reason != "" {
-      return nil, fmt.Errorf("@ttsc/banner: load config file %s: %s", location, reason)
+      return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load config file %s: %s", location, reason)
     }
-    return nil, fmt.Errorf("@ttsc/banner: load config file %s: %w", location, err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load config file %s: %w", location, err)
   }
-  var out any
-  if err := json.Unmarshal(output, &out); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: parse config file %s output: %w", location, err)
+  loaded, err := decodeBannerConfigLoaderOutput(output)
+  if err != nil {
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: parse config file %s output: %w", location, err)
   }
-  return out, nil
+  return loaded, nil
+}
+
+func decodeBannerConfigLoaderOutput(output []byte) (bannerLoadedConfig, error) {
+  var envelope struct {
+    Error  string          `json:"__ttscLoaderError"`
+    Inputs []string        `json:"inputs"`
+    Value  json.RawMessage `json:"value"`
+  }
+  if err := json.Unmarshal(output, &envelope); err != nil {
+    return bannerLoadedConfig{}, err
+  }
+  if envelope.Error != "" {
+    return bannerLoadedConfig{}, fmt.Errorf("%s", envelope.Error)
+  }
+  if len(envelope.Value) == 0 {
+    // Test/fallback launchers written against the historical payload return
+    // the config value directly. Preserve that accepted contract while real
+    // loaders use the envelope to carry runtime inputs.
+    var value any
+    if err := json.Unmarshal(output, &value); err != nil {
+      return bannerLoadedConfig{}, err
+    }
+    return bannerLoadedConfig{value: value}, nil
+  }
+  var value any
+  if err := json.Unmarshal(envelope.Value, &value); err != nil {
+    return bannerLoadedConfig{}, err
+  }
+  return bannerLoadedConfig{inputs: envelope.Inputs, value: value}, nil
 }
 
 // loadBannerTypeScriptConfigFile compiles and runs a TypeScript banner config
@@ -381,28 +478,33 @@ function toSerializableBanner(value) {
 // resolved from the project rather than from the process environment alone;
 // see configToolAnchors.
 func loadBannerTypeScriptConfigFile(location, resolutionRoot string) (any, error) {
+  loaded, err := loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot)
+  return loaded.value, err
+}
+
+func loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot string) (bannerLoadedConfig, error) {
   tempDir, err := os.MkdirTemp(loaderTempBase(location, os.TempDir()), "ttsc-banner-config-")
   if err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: create config loader tempdir: %w", err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: create config loader tempdir: %w", err)
   }
   defer os.RemoveAll(tempDir)
 
   if err := linkConfigNodeModules(tempDir, filepath.Dir(location)); err != nil {
-    return nil, err
+    return bannerLoadedConfig{}, err
   }
 
   loader := filepath.Join(tempDir, "loader.mts")
   tsconfig := filepath.Join(tempDir, "tsconfig.json")
   importSpecifier, err := relativeImportSpecifier(tempDir, location)
   if err != nil {
-    return nil, err
+    return bannerLoadedConfig{}, err
   }
   importLiteral, _ := json.Marshal(importSpecifier)
   if err := writeConfigLoaderFile(loader, []byte(bannerTypeScriptConfigLoaderSource(string(importLiteral))), 0o644); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: write config loader: %w", err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: write config loader: %w", err)
   }
   if err := writeConfigLoaderFile(tsconfig, []byte(typeScriptConfigLoaderTsconfig(loader, location, tempDir)), 0o644); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: write config loader tsconfig: %w", err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: write config loader tsconfig: %w", err)
   }
 
   args := []string{
@@ -432,22 +534,56 @@ func loadBannerTypeScriptConfigFile(location, resolutionRoot string) (any, error
     // What it could not put there is a reason a caller can act on, so that
     // arrives through the payload channel instead.
     if reason := loaderFailureReason(output); reason != "" {
-      return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %s", location, reason)
+      return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %s", location, reason)
     }
-    return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %w", location, err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %w", location, err)
   }
-  var out any
-  if err := json.Unmarshal(output, &out); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: parse TypeScript config file %s output: %w", location, err)
+  loaded, err := decodeBannerConfigLoaderOutput(output)
+  if err != nil {
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: parse TypeScript config file %s output: %w", location, err)
   }
-  return out, nil
+  return loaded, nil
 }
 
 // bannerTypeScriptConfigLoaderSource returns the source of a TypeScript loader
 // module that imports the banner config file specified by importLiteral (a
 // JSON-encoded import specifier) and writes the serialized banner value to stdout.
 func bannerTypeScriptConfigLoaderSource(importLiteral string) string {
-  return fmt.Sprintf(`import * as importedConfig from %s;
+  return fmt.Sprintf(`// @ts-nocheck
+import { registerHooks } from "node:module";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const inputs = new Set<string>();
+
+function recordFile(file: string): void {
+  const resolvedFile = path.resolve(file);
+  inputs.add(resolvedFile);
+  for (let directory = path.dirname(resolvedFile);;) {
+    const manifest = path.join(directory, "package.json");
+    inputs.add(manifest);
+    if (fs.existsSync(manifest)) {
+      break;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+}
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    const url = typeof resolved === "string" ? resolved : resolved?.url;
+    if (typeof url === "string" && url.startsWith("file:")) {
+      recordFile(fileURLToPath(url));
+    }
+    return resolved;
+  },
+});
 
 declare const process: {
   exitCode?: number;
@@ -463,8 +599,12 @@ declare const process: {
 // left for a trailing handler to settle.
 (async () => {
   try {
+    const importedConfig = await import(%s);
     const value = await resolveConfig(importedConfig);
-    process.stdout.write(JSON.stringify(toSerializableBanner(value)));
+    process.stdout.write(JSON.stringify({
+      value: toSerializableBanner(value),
+      inputs: [...inputs].sort(),
+    }));
   } catch (error) {
     process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
     // The stack above is for the reader. This is for the caller: the parent

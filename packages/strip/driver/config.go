@@ -41,6 +41,10 @@ var allowedTsconfigKeys = map[string]struct{}{
 // configuration from either an explicit configFile or an auto-discovered
 // strip.config.* file. Returns the raw config map ready for parseStrip.
 func loadStripConfigMap(pluginConfig map[string]any, cwd, tsconfigPath string) (map[string]any, error) {
+  return loadStripConfigMapWithReporter(pluginConfig, cwd, tsconfigPath, nil)
+}
+
+func loadStripConfigMapWithReporter(pluginConfig map[string]any, cwd, tsconfigPath string, reporter func(string)) (map[string]any, error) {
   // Reject any key that @ttsc/strip does not recognise. This surfaces
   // stale inline keys (calls, statements) with a clear error so users
   // migrate to a config file instead of silently using defaults.
@@ -81,11 +85,12 @@ func loadStripConfigMap(pluginConfig map[string]any, cwd, tsconfigPath string) (
     return map[string]any{}, nil
   }
 
-  raw, err := loadStripConfigFile(configFilePath, resolutionRoot)
+  loaded, err := loadStripConfigFileWithInputs(configFilePath, resolutionRoot)
   if err != nil {
     return nil, err
   }
-  cfg, ok := raw.(map[string]any)
+  reportStripConfigInputs(loaded.inputs, reporter)
+  cfg, ok := loaded.value.(map[string]any)
   if !ok {
     return nil, fmt.Errorf("@ttsc/strip: config file %s must export an object", configFilePath)
   }
@@ -157,16 +162,36 @@ func resolveStripConfigFilePath(configPath, cwd, tsconfigPath string) string {
 // see stripConfigToolAnchors. The JSON and JS branches spawn no ttsx and
 // ignore it.
 func loadStripConfigFile(location, resolutionRoot string) (any, error) {
+  loaded, err := loadStripConfigFileWithInputs(location, resolutionRoot)
+  return loaded.value, err
+}
+
+type stripLoadedConfig struct {
+  inputs []string
+  value  any
+}
+
+func loadStripConfigFileWithInputs(location, resolutionRoot string) (stripLoadedConfig, error) {
   ext := strings.ToLower(filepath.Ext(location))
   switch ext {
   case ".json":
-    return loadStripJSONConfigFile(location)
+    value, err := loadStripJSONConfigFile(location)
+    return stripLoadedConfig{inputs: []string{location}, value: value}, err
   case ".js", ".cjs", ".mjs":
-    return loadStripScriptConfigFile(location)
+    return loadStripScriptConfigFileWithInputs(location)
   case ".ts", ".cts", ".mts":
-    return loadStripTypeScriptConfigFile(location, resolutionRoot)
+    return loadStripTypeScriptConfigFileWithInputs(location, resolutionRoot)
   default:
-    return nil, fmt.Errorf("@ttsc/strip: unsupported config file extension %q for %s", ext, location)
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: unsupported config file extension %q for %s", ext, location)
+  }
+}
+
+func reportStripConfigInputs(inputs []string, reporter func(string)) {
+  if reporter == nil {
+    return
+  }
+  for _, input := range inputs {
+    reporter(input)
   }
 }
 
@@ -190,7 +215,40 @@ func loadStripJSONConfigFile(location string) (any, error) {
 // loadStripScriptConfigFile to evaluate a .js/.cjs/.mjs strip config and
 // serialize the result to stdout as JSON.
 const stripScriptLoaderSource = `
-const { pathToFileURL } = require("node:url");
+const { registerHooks } = require("node:module");
+const fs = require("node:fs");
+const path = require("node:path");
+const { fileURLToPath, pathToFileURL } = require("node:url");
+const inputs = new Set();
+
+function recordFile(file) {
+  const resolvedFile = path.resolve(file);
+  inputs.add(resolvedFile);
+  for (let directory = path.dirname(resolvedFile);;) {
+    const manifest = path.join(directory, "package.json");
+    inputs.add(manifest);
+    if (fs.existsSync(manifest)) {
+      break;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+}
+
+recordFile(process.argv[1]);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    const url = typeof resolved === "string" ? resolved : resolved && resolved.url;
+    if (typeof url === "string" && url.startsWith("file:")) {
+      recordFile(fileURLToPath(url));
+    }
+    return resolved;
+  },
+});
 
 (async () => {
   const mod = await import(pathToFileURL(process.argv[1]).href);
@@ -206,7 +264,7 @@ const { pathToFileURL } = require("node:url");
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("strip config file must export an object");
   }
-  process.stdout.write(JSON.stringify(value));
+  process.stdout.write(JSON.stringify({ value, inputs: [...inputs].sort() }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
   // The stack above is for the reader. This is for the caller: the parent reads
@@ -224,6 +282,11 @@ const { pathToFileURL } = require("node:url");
 // Node subprocess that dynamic-imports the file, resolves the default export,
 // and serializes the result as JSON to stdout.
 func loadStripScriptConfigFile(location string) (any, error) {
+  loaded, err := loadStripScriptConfigFileWithInputs(location)
+  return loaded.value, err
+}
+
+func loadStripScriptConfigFileWithInputs(location string) (stripLoadedConfig, error) {
   node := os.Getenv("TTSC_NODE_BINARY")
   if node == "" {
     node = "node"
@@ -243,15 +306,44 @@ func loadStripScriptConfigFile(location string) (any, error) {
     // What it could not put there is a reason a caller can act on, so that
     // arrives through the payload channel instead.
     if reason := loaderFailureReason(output); reason != "" {
-      return nil, fmt.Errorf("@ttsc/strip: load config file %s: %s", location, reason)
+      return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: load config file %s: %s", location, reason)
     }
-    return nil, fmt.Errorf("@ttsc/strip: load config file %s: %w", location, err)
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: load config file %s: %w", location, err)
   }
-  var out any
-  if err := json.Unmarshal(output, &out); err != nil {
-    return nil, fmt.Errorf("@ttsc/strip: parse config file %s output: %w", location, err)
+  loaded, err := decodeStripConfigLoaderOutput(output)
+  if err != nil {
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: parse config file %s output: %w", location, err)
   }
-  return out, nil
+  return loaded, nil
+}
+
+func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
+  var envelope struct {
+    Error  string          `json:"__ttscLoaderError"`
+    Inputs []string        `json:"inputs"`
+    Value  json.RawMessage `json:"value"`
+  }
+  if err := json.Unmarshal(output, &envelope); err != nil {
+    return stripLoadedConfig{}, err
+  }
+  if envelope.Error != "" {
+    return stripLoadedConfig{}, fmt.Errorf("%s", envelope.Error)
+  }
+  if len(envelope.Value) == 0 {
+    // Test/fallback launchers written against the historical payload return
+    // the config value directly. Preserve that accepted contract while real
+    // loaders use the envelope to carry runtime inputs.
+    var value any
+    if err := json.Unmarshal(output, &value); err != nil {
+      return stripLoadedConfig{}, err
+    }
+    return stripLoadedConfig{value: value}, nil
+  }
+  var value any
+  if err := json.Unmarshal(envelope.Value, &value); err != nil {
+    return stripLoadedConfig{}, err
+  }
+  return stripLoadedConfig{inputs: envelope.Inputs, value: value}, nil
 }
 
 // stripTypeScriptLoaderSource returns the TypeScript source of the ephemeral
@@ -259,7 +351,41 @@ func loadStripScriptConfigFile(location string) (any, error) {
 // importLiteral must be a JSON-encoded relative import path (e.g.
 // `"./strip.config.ts"`) produced by json.Marshal.
 func stripTypeScriptLoaderSource(importLiteral string) string {
-  return fmt.Sprintf(`import * as importedConfig from %s;
+  return fmt.Sprintf(`// @ts-nocheck
+import { registerHooks } from "node:module";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const inputs = new Set<string>();
+
+function recordFile(file: string): void {
+  const resolvedFile = path.resolve(file);
+  inputs.add(resolvedFile);
+  for (let directory = path.dirname(resolvedFile);;) {
+    const manifest = path.join(directory, "package.json");
+    inputs.add(manifest);
+    if (fs.existsSync(manifest)) {
+      break;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+}
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    const url = typeof resolved === "string" ? resolved : resolved?.url;
+    if (typeof url === "string" && url.startsWith("file:")) {
+      recordFile(fileURLToPath(url));
+    }
+    return resolved;
+  },
+});
 
 declare const process: {
   exitCode?: number;
@@ -275,6 +401,7 @@ declare const process: {
 // left for a trailing handler to settle.
 (async () => {
   try {
+    const importedConfig = await import(%s);
     let current: unknown = importedConfig;
     for (let i = 0; i < 8; i++) {
       if (current !== null && typeof current === "object" && Object.prototype.hasOwnProperty.call(current as Record<string, unknown>, "default")) {
@@ -289,7 +416,7 @@ declare const process: {
     if (current === null || typeof current !== "object" || Array.isArray(current)) {
       throw new Error("strip config file must export an object");
     }
-    process.stdout.write(JSON.stringify(current));
+    process.stdout.write(JSON.stringify({ value: current, inputs: [...inputs].sort() }));
   } catch (error) {
     process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
     // The stack above is for the reader. This is for the caller: the parent
@@ -321,31 +448,36 @@ declare const process: {
 // resolved from the project rather than from the process environment alone;
 // see stripConfigToolAnchors.
 func loadStripTypeScriptConfigFile(location, resolutionRoot string) (any, error) {
+  loaded, err := loadStripTypeScriptConfigFileWithInputs(location, resolutionRoot)
+  return loaded.value, err
+}
+
+func loadStripTypeScriptConfigFileWithInputs(location, resolutionRoot string) (stripLoadedConfig, error) {
   tempDir, err := os.MkdirTemp(stripLoaderTempBase(location, os.TempDir()), "ttsc-strip-config-")
   if err != nil {
-    return nil, fmt.Errorf("@ttsc/strip: create config loader tempdir: %w", err)
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: create config loader tempdir: %w", err)
   }
   defer os.RemoveAll(tempDir)
 
   if err := stripLinkNearestNodeModules(tempDir, filepath.Dir(location)); err != nil {
-    return nil, err
+    return stripLoadedConfig{}, err
   }
 
   loader := filepath.Join(tempDir, "loader.mts")
   tsconfig := filepath.Join(tempDir, "tsconfig.json")
   importSpecifier, err := stripRelativeImportSpecifier(tempDir, location)
   if err != nil {
-    return nil, err
+    return stripLoadedConfig{}, err
   }
   importLiteral, err := json.Marshal(importSpecifier)
   if err != nil {
-    return nil, fmt.Errorf("@ttsc/strip: encode config import %s: %w", location, err)
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: encode config import %s: %w", location, err)
   }
   if err := os.WriteFile(loader, []byte(stripTypeScriptLoaderSource(string(importLiteral))), 0o644); err != nil {
-    return nil, fmt.Errorf("@ttsc/strip: write config loader: %w", err)
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: write config loader: %w", err)
   }
   if err := os.WriteFile(tsconfig, []byte(stripTypeScriptLoaderTsconfig(loader, location, tempDir)), 0o644); err != nil {
-    return nil, fmt.Errorf("@ttsc/strip: write config loader tsconfig: %w", err)
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: write config loader tsconfig: %w", err)
   }
 
   args := []string{
@@ -375,15 +507,15 @@ func loadStripTypeScriptConfigFile(location, resolutionRoot string) (any, error)
     // What it could not put there is a reason a caller can act on, so that
     // arrives through the payload channel instead.
     if reason := loaderFailureReason(output); reason != "" {
-      return nil, fmt.Errorf("@ttsc/strip: load TypeScript config file %s: %s", location, reason)
+      return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: load TypeScript config file %s: %s", location, reason)
     }
-    return nil, fmt.Errorf("@ttsc/strip: load TypeScript config file %s: %w", location, err)
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: load TypeScript config file %s: %w", location, err)
   }
-  var out any
-  if err := json.Unmarshal(output, &out); err != nil {
-    return nil, fmt.Errorf("@ttsc/strip: parse TypeScript config file %s output: %w", location, err)
+  loaded, err := decodeStripConfigLoaderOutput(output)
+  if err != nil {
+    return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: parse TypeScript config file %s output: %w", location, err)
   }
-  return out, nil
+  return loaded, nil
 }
 
 // stripTypeScriptLoaderTsconfig generates the JSON content of the ephemeral

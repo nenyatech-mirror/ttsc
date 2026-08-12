@@ -475,7 +475,11 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   );
   const modules = projectModules(project.root);
   const cache = createTtscTransformCache();
-  const options = resolveOptions();
+  const options = resolveOptions({
+    // Force a generated overlay so the per-module bounds also guard the exact
+    // temporary-tsconfig exclusion that authorizes narrow validation.
+    compilerOptions: { removeComments: true },
+  });
   const deliver = (file: string) =>
     transformTtsc(
       file,

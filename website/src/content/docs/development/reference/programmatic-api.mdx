@@ -102,7 +102,7 @@ if (t.type === "success") {
 
 When no transform-stage plugin is configured, the map contains the unmodified files as TypeScript-Go loaded them. With a transform plugin (e.g. typia's), the map contains the rewritten text.
 
-Successful and compiler-failure transformations may also carry `hostInputs`: the exact tsconfig ancestry, every package manifest inspected by auto-discovery, the JavaScript descriptor's loaded CommonJS graph, and absolute paths declared by each plugin descriptor. First-party plugins use the declaration for implicit config candidates and evaluated config dependencies; missing paths are retained because creating a higher-priority candidate changes resolution. Bundler adapters treat these as universal watch and cache inputs, while arbitrary unclassified project files remain absent.
+Successful and compiler-failure transformations may also carry `hostInputs`: the exact tsconfig ancestry, every package manifest inspected by auto-discovery, the JavaScript descriptor's loaded CommonJS graph, absolute paths declared by each plugin descriptor, and inputs a linked native plugin reports while evaluating configuration. First-party plugins use the two reporting channels for implicit config candidates and evaluated config dependencies; missing paths are retained because creating a higher-priority candidate changes resolution. Bundler adapters treat these as universal watch and cache inputs, while arbitrary unclassified project files remain absent.
 
 ### `prepare()`
 

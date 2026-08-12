@@ -234,10 +234,10 @@ export class TtscCompiler {
    * The effective environment for this instance's source-plugin builds and
    * clean targets: `context.env` merged over `process.env`, matching the
    * documented {@link ITtscCompilerContext.env} contract that child compiler,
-   * native-plugin, and native-host processes already receive. Returned as a
-   * fresh object so callers never mutate the shared `process.env`; when no
-   * `context.env` was supplied this is a plain copy of `process.env`, so CLI /
-   * default behavior is unchanged.
+   * native-plugin, native-host, and isolated descriptor processes already
+   * receive. Returned as a fresh object so callers never mutate the shared
+   * `process.env`; when no `context.env` was supplied this is a plain copy of
+   * `process.env`, so CLI / default behavior is unchanged.
    */
   private resolveEffectiveEnv(): NodeJS.ProcessEnv {
     return { ...process.env, ...this.context.env };

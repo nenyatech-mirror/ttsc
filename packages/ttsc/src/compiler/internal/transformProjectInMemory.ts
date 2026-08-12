@@ -112,7 +112,10 @@ function transformProjectWithNativeHost(
   );
   return {
     ...envelopeSideChannels(output),
-    hostInputs: collectProjectHostInputs(project),
+    hostInputs: mergeHostInputs(
+      collectProjectHostInputs(project),
+      output.hostInputs,
+    ),
     result: {
       diagnostics: output.diagnostics,
       status: res.status ?? 1,
@@ -174,7 +177,7 @@ function transformProjectWithPlugins(
     const transformed = transformProjectWithNativeHost(options, project);
     return {
       ...envelopeSideChannels(transformed),
-      hostInputs: loaded.hostInputs,
+      hostInputs: mergeHostInputs(loaded.hostInputs, transformed.hostInputs),
       result: appendBuildOutput(checked, transformed.result),
       typescript: transformed.typescript,
     };
@@ -211,7 +214,7 @@ function transformProjectWithPlugins(
   };
   return {
     ...envelopeSideChannels(output),
-    hostInputs: loaded.hostInputs,
+    hostInputs: mergeHostInputs(loaded.hostInputs, output.hostInputs),
     result: appendBuildOutput(checked, result),
     typescript: output.typescript,
   };
@@ -244,6 +247,19 @@ function envelopeSideChannels(output: {
     ...(output.graph === undefined ? {} : { graph: output.graph }),
     ...(output.volatile === undefined ? {} : { volatile: output.volatile }),
   };
+}
+
+/** Merge JavaScript- and native-host universal inputs by absolute path. */
+function mergeHostInputs(
+  ...groups: readonly (readonly string[] | undefined)[]
+): string[] {
+  return [
+    ...new Set(
+      groups.flatMap((group) =>
+        (group ?? []).map((file) => path.resolve(file)),
+      ),
+    ),
+  ].sort();
 }
 
 /**
@@ -426,6 +442,7 @@ function parseNativeTransformOutput(
   dependenciesComplete?: string[];
   diagnostics: ITtscCompilerDiagnostic[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputs?: string[];
   typescript: Record<string, string>;
   volatile?: string[];
 } {
@@ -435,6 +452,7 @@ function parseNativeTransformOutput(
       dependenciesComplete?: string[];
       diagnostics?: ITtscCompilerDiagnostic[];
       graph?: ITtscCompilerTransformation.IReferenceGraph;
+      hostInputs?: string[];
       typescript?: Record<string, string>;
       volatile?: string[];
     };
@@ -446,11 +464,13 @@ function parseNativeTransformOutput(
     const dependencies = parseDependencyLists(parsed.dependencies);
     const dependenciesComplete = parseFileList(parsed.dependenciesComplete);
     const graph = parseReferenceGraph(parsed.graph);
+    const hostInputs = parseFileList(parsed.hostInputs);
     const volatile = parseFileList(parsed.volatile);
     return {
       ...(dependencies === undefined ? {} : { dependencies }),
       ...(dependenciesComplete === undefined ? {} : { dependenciesComplete }),
       ...(graph === undefined ? {} : { graph }),
+      ...(hostInputs === undefined ? {} : { hostInputs }),
       ...(volatile === undefined ? {} : { volatile }),
       diagnostics: Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [],
       typescript: parsed.typescript,
@@ -534,8 +554,8 @@ function parseReferenceGraph(
 
 /**
  * Normalize an optional string-list envelope field (`dependenciesComplete`,
- * `volatile`, and the `globals`/`configs` graph sections), or `undefined` when
- * absent or carrying nothing usable.
+ * `hostInputs`, `volatile`, and the `globals`/`configs` graph sections), or
+ * `undefined` when absent or carrying nothing usable.
  */
 function parseFileList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
