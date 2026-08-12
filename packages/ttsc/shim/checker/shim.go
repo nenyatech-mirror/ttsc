@@ -611,6 +611,9 @@ func checkerInstantiateType(recv *innerchecker.Checker, t *innerchecker.Type, m 
 //go:linkname checkerNewSimpleTypeMapper github.com/microsoft/typescript-go/internal/checker.newSimpleTypeMapper
 func checkerNewSimpleTypeMapper(source *innerchecker.Type, target *innerchecker.Type) *innerchecker.TypeMapper
 
+//go:linkname checkerNewTypeMapper github.com/microsoft/typescript-go/internal/checker.newTypeMapper
+func checkerNewTypeMapper(sources []*innerchecker.Type, targets []*innerchecker.Type) *innerchecker.TypeMapper
+
 // Checker_instantiateType substitutes the type parameters of `t` with the
 // concrete types in `mapper`, returning the instantiated type. A type-transform
 // plugin uses it to instantiate a generic class's constructor type with the
@@ -632,6 +635,23 @@ func Checker_newSimpleTypeMapper(source *innerchecker.Type, target *innerchecker
     return nil
   }
   return checkerNewSimpleTypeMapper(source, target)
+}
+
+// Checker_newTypeMapper builds a parallel type mapper from corresponding
+// source and target slices. Unlike Checker_combineTypeMappers, it does not feed
+// one substitution's target through later substitutions, so a mapping such as
+// `[A, B] -> [B, A]` preserves both target identities. Returns nil when the
+// slices are empty, differ in length, or contain nil types.
+func Checker_newTypeMapper(sources []*innerchecker.Type, targets []*innerchecker.Type) *innerchecker.TypeMapper {
+  if len(sources) == 0 || len(sources) != len(targets) {
+    return nil
+  }
+  for i := range sources {
+    if sources[i] == nil || targets[i] == nil {
+      return nil
+    }
+  }
+  return checkerNewTypeMapper(sources, targets)
 }
 
 //go:linkname checkerCombineTypeMappers github.com/microsoft/typescript-go/internal/checker.(*Checker).combineTypeMappers
