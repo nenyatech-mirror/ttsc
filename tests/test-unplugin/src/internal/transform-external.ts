@@ -296,12 +296,24 @@ export async function assertCacheInvalidatesOnNodeModulesDeclarationChange(): Pr
  * universe. A `compilerOptions` overlay compiles through a generated tsconfig
  * that the host's config chain reports and that is deleted right after the
  * compile; hashing it would flip to `missing` on the first revalidation and
- * turn every subsequent transform into a recompile.
+ * turn every subsequent transform into a recompile. The same exclusion must
+ * hold when the operating-system temp root is configured inside the project,
+ * without masking a real descriptor/config edit.
  */
 export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promise<void> {
   const { resolveOptions, transformTtsc, createTtscTransformCache } =
     await TestUnpluginRuntime.loadUnpluginApi();
   const root = TestUnpluginProject.createProject({ plugins: [] });
+  const projectTemp = path.join(root, ".project-temp");
+  fs.mkdirSync(projectTemp, { recursive: true });
+  const previousTemp = {
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    TMPDIR: process.env.TMPDIR,
+  };
+  process.env.TEMP = projectTemp;
+  process.env.TMP = projectTemp;
+  process.env.TMPDIR = projectTemp;
   const options = resolveOptions({
     compilerOptions: { removeComments: true },
     plugins: emitGraphPlugins({
@@ -311,23 +323,55 @@ export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promis
   });
   const cache = createTtscTransformCache();
 
-  const before = await transformTtsc(
-    TestUnpluginProject.mainFile(root),
-    TestUnpluginProject.mainSource(root),
-    options,
-    undefined,
-    cache,
-  );
-  assert.ok(before);
-  const generation = cacheEntry(cache);
+  try {
+    const before = await transformTtsc(
+      TestUnpluginProject.mainFile(root),
+      TestUnpluginProject.mainSource(root),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(before);
+    assert.strictEqual(process.env.TEMP, projectTemp);
+    assert.strictEqual(process.env.TMP, projectTemp);
+    assert.strictEqual(process.env.TMPDIR, projectTemp);
+    const generation = cacheEntry(cache);
+    const cached = (await generation) as { temporaryTsconfig?: string };
+    assert.ok(cached.temporaryTsconfig);
+    const relativeTemporaryTsconfig = path.relative(
+      root,
+      cached.temporaryTsconfig,
+    );
+    assert.ok(
+      relativeTemporaryTsconfig === ".." ||
+        relativeTemporaryTsconfig.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relativeTemporaryTsconfig),
+    );
 
-  const after = await transformTtsc(
-    TestUnpluginProject.mainFile(root),
-    TestUnpluginProject.mainSource(root),
-    options,
-    undefined,
-    cache,
-  );
-  assert.ok(after);
-  assert.strictEqual(cacheEntry(cache), generation);
+    const after = await transformTtsc(
+      TestUnpluginProject.mainFile(root),
+      TestUnpluginProject.mainSource(root),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(after);
+    assert.strictEqual(cacheEntry(cache), generation);
+
+    fs.appendFileSync(path.join(root, "plugin.cjs"), "\n// host edit\n");
+    const changed = await transformTtsc(
+      TestUnpluginProject.mainFile(root),
+      TestUnpluginProject.mainSource(root),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(changed);
+    assert.notStrictEqual(cacheEntry(cache), generation);
+  } finally {
+    for (const [name, value] of Object.entries(previousTemp)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 }

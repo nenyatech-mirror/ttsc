@@ -1903,6 +1903,8 @@ async function transformProject(props: {
 }): Promise<TtscCachedProjectTransform> {
   const configured = createTransformTsconfig(props);
   const projectRoot = path.dirname(props.tsconfig);
+  const temporaryTsconfig =
+    configured.path === props.tsconfig ? undefined : configured.path;
   const identities = createHostPathIdentityContext();
   const before = collectProjectInputSnapshot(projectRoot, identities);
   const tracker = props.trackProjectMembership
@@ -1911,21 +1913,24 @@ async function transformProject(props: {
   let retainTracker = false;
   let hostInputTracker: TtscProjectMutationTracker | undefined;
   try {
-    const result = new TtscCompiler({
-      cwd: projectRoot,
-      // The generated tsconfig (if any) lives in the system temp directory,
-      // so declare the real project as the plugin config anchor: utility
-      // plugin config discovery (banner.config.*, strip.config.*,
-      // lint.config.*) and relative configFile resolution walk the project,
-      // never the temp tree. In the passthrough case this equals the
-      // tsconfig's own directory, the default anchor.
-      pluginConfigDir: projectRoot,
-      plugins: props.plugins,
-      projectRoot,
-      tsconfig: configured.path,
-    }).transform();
-    const temporaryTsconfig =
-      configured.path === props.tsconfig ? undefined : configured.path;
+    const result = withTransformTemporaryEnvironment(temporaryTsconfig, () =>
+      new TtscCompiler({
+        cwd: projectRoot,
+        // The generated tsconfig (if any) lives outside the project directory,
+        // so declare the real project as the plugin config anchor: utility
+        // plugin config discovery (banner.config.*, strip.config.*,
+        // lint.config.*) and relative configFile resolution walk the project,
+        // never the temp tree. In the passthrough case this equals the
+        // tsconfig's own directory, the default anchor.
+        pluginConfigDir: projectRoot,
+        plugins: props.plugins,
+        projectRoot,
+        tsconfig: configured.path,
+        ...(temporaryTsconfig === undefined
+          ? {}
+          : { env: transformTemporaryEnvironment(temporaryTsconfig) }),
+      }).transform(),
+    );
     const persistentHostInputs = selectPersistentHostInputs({
       projectRoot,
       result,
@@ -2030,7 +2035,9 @@ function createTransformTsconfig(props: {
     };
   }
 
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-unplugin-"));
+  const directory = createTransformTsconfigDirectory(
+    path.dirname(props.tsconfig),
+  );
   const file = path.join(directory, "tsconfig.json");
   fs.writeFileSync(
     file,
@@ -2050,13 +2057,90 @@ function createTransformTsconfig(props: {
   };
 }
 
+/** Create generated config storage outside the project snapshot and watchers. */
+function createTransformTsconfigDirectory(projectRoot: string): string {
+  const root = path.resolve(projectRoot);
+  const platformTemp =
+    process.platform === "win32" && process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, "Temp")
+      : "/tmp";
+  const candidates = [
+    os.tmpdir(),
+    platformTemp,
+    path.dirname(root),
+    os.homedir(),
+  ];
+  let failure: unknown;
+  for (const candidate of new Set(candidates.map((dir) => path.resolve(dir)))) {
+    if (pathIsWithin(candidate, root)) continue;
+    try {
+      return fs.mkdtempSync(path.join(candidate, "ttsc-unplugin-"));
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw (
+    failure ??
+    new Error("ttsc: no temporary directory exists outside the project")
+  );
+}
+
+function pathIsWithin(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
+/** Route compiler/plugin scratch beside the generated config, outside project. */
+function transformTemporaryEnvironment(
+  temporaryTsconfig: string,
+): NodeJS.ProcessEnv {
+  const directory = path.dirname(temporaryTsconfig);
+  return {
+    ...process.env,
+    TEMP: directory,
+    TMP: directory,
+    TMPDIR: directory,
+  };
+}
+
+/** Scope parent-process temp consumers to the same owned temporary directory. */
+function withTransformTemporaryEnvironment<T>(
+  temporaryTsconfig: string | undefined,
+  callback: () => T,
+): T {
+  if (temporaryTsconfig === undefined) return callback();
+  const environment = transformTemporaryEnvironment(temporaryTsconfig);
+  const previous = {
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    TMPDIR: process.env.TMPDIR,
+  };
+  process.env.TEMP = environment.TEMP;
+  process.env.TMP = environment.TMP;
+  process.env.TMPDIR = environment.TMPDIR;
+  try {
+    return callback();
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 /**
  * Resolve all relative paths inside `compilerOptions` against `tsconfigDir`.
  *
- * The generated tsconfig lives in a system temp directory, so any relative path
- * (e.g. `"outDir": "../dist"`) that was meaningful relative to the original
- * tsconfig must be converted to an absolute path before writing the generated
- * file. Otherwise TypeScript-Go resolves it against the temp dir.
+ * The generated tsconfig lives in a temporary directory outside the project, so
+ * any relative path (e.g. `"outDir": "../dist"`) that was meaningful relative
+ * to the original tsconfig must be converted to an absolute path before writing
+ * the generated file. Otherwise TypeScript-Go resolves it against the temp
+ * dir.
  *
  * `paths` targets are absolutized for the same reason, with the extra twist
  * that TypeScript-Go rejects bare non-relative targets outright (TS5090) and
