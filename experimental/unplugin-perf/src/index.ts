@@ -81,14 +81,18 @@ async function main(): Promise<void> {
     "\nScenario D — graph envelope without a build boundary (Vite serve):",
   );
   console.log(
-    "  measurement only: per-module complete-validation cost with a large",
+    "  invariant: validation reads stay bounded by each module's graph inputs,",
   );
-  console.log("  external input set (no invariant gate)\n");
-  await measureServeValidation(adapter, {
-    count: 50,
-    emitExternalKey: false,
-    graphFanout: 100,
-  });
+  console.log("  not the whole envelope's external-input union\n");
+  recordFailure(
+    failures,
+    await measureServeValidation(adapter, {
+      count: 50,
+      emitExternalKey: false,
+      graphFanout: 50,
+      partitionExternalInputs: true,
+    }),
+  );
 
   if (failures.length !== 0) {
     console.error(
@@ -166,6 +170,8 @@ interface MeasureOptions {
    * graph-bearing shape typia >= 13.1.19 produces.
    */
   graphFanout?: number;
+  /** Give each module one disjoint external edge instead of the whole union. */
+  partitionExternalInputs?: boolean;
 }
 
 async function measure(
@@ -220,10 +226,10 @@ const GRAPH_PROBES_PER_MODULE_BUDGET = 64;
 /**
  * Drive a build-scoped run over a graph-bearing envelope and count the fs
  * probes a macOS host would pay for watch-input derivation. The first module
- * delivery compiles (and therefore needs the real platform for the native
- * spawn); the remaining deliveries are pure cache hits, so `process.platform`
- * is flipped to `darwin` only for them, making the per-delivery probe volume of
- * the macOS `pathIdentityKey` branch observable on any host.
+ * delivery compiles; the remaining deliveries are pure cache hits. The shared
+ * path-identity resolver performs a physical-path probe on every supported
+ * host, so the counter observes the real platform without mutating global
+ * process identity after a Windows binary has already been selected.
  */
 async function measureGraphBuild(
   adapter: Adapter,
@@ -251,15 +257,12 @@ async function measureGraphBuild(
   await plugin.transform.call(context, fs.readFileSync(first!, "utf8"), first!);
 
   const probes = instrumentFsProbes();
-  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", { value: "darwin" });
   const started = process.hrtime.bigint();
   try {
     for (const id of rest) {
       await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
     }
   } finally {
-    Object.defineProperty(process, "platform", platform);
     probes.restore();
   }
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
@@ -287,16 +290,15 @@ async function measureGraphBuild(
 }
 
 /**
- * Measure the serve-mode path: with no `buildStart` boundary the cache stays in
- * persistent-validation mode, so every delivered module re-walks the project
- * and re-reads the recorded external input set. Measurement only — the path is
- * the deliberate #980 freshness contract; this quantifies how the graph
- * envelope's external set multiplies it.
+ * Gate the serve-mode path: with no `buildStart` boundary the cache stays in
+ * persistent-validation mode. Each module owns one disjoint external graph
+ * input, so rereading the envelope union is visible as linear reads per module
+ * while per-file validation stays under a fixed budget.
  */
 async function measureServeValidation(
   adapter: Adapter,
   options: MeasureOptions,
-): Promise<void> {
+): Promise<string | undefined> {
   const project = createProject(options);
   const plugin = adapter.rollup({
     project: path.join(project, "tsconfig.json"),
@@ -332,6 +334,10 @@ async function measureServeValidation(
       `reads/file=${(counter.calls / options.count).toFixed(1).padStart(8)}  ` +
       `${elapsedMs.toFixed(0).padStart(7)}ms`,
   );
+  const readsPerFile = counter.calls / options.count;
+  return readsPerFile <= 16
+    ? undefined
+    : `scenario D N=${options.count} K=${options.graphFanout}: reads/file=${readsPerFile.toFixed(1)} exceeds the per-file validation budget of 16`;
 }
 
 /**
@@ -497,6 +503,9 @@ function createProject(options: MeasureOptions): string {
   // The Go sidecar keys its extra output entry only when asked.
   process.env.TTSC_PERF_EMIT_EXTERNAL = options.emitExternalKey ? "1" : "0";
   process.env.TTSC_PERF_GRAPH_FANOUT = String(graphFanout);
+  process.env.TTSC_PERF_PARTITION_EXTERNAL = options.partitionExternalInputs
+    ? "1"
+    : "0";
   return project;
 }
 
@@ -607,12 +616,16 @@ function writeGoPlugin(project: string): void {
       "    for i, name := range names {",
       '      key := "src/" + name',
       "      targets := []string{}",
-      "      if i+1 < len(names) {",
-      '        targets = append(targets, "src/"+names[i+1])',
+      '      if os.Getenv("TTSC_PERF_PARTITION_EXTERNAL") == "1" {',
+      "        targets = append(targets, externals[i%len(externals)])",
+      "      } else {",
+      "        if i+1 < len(names) {",
+      '          targets = append(targets, "src/"+names[i+1])',
+      "        }",
+      "        targets = append(targets, externals...)",
       "      }",
-      "      targets = append(targets, externals...)",
       "      edges[key] = targets",
-      "      deps[key] = externals",
+      "      deps[key] = targets",
       "      // A missing superseding probe, mirroring an unsuccessful",
       "      // module-resolution candidate the compiler records.",
       '      candidates[key] = []string{fmt.Sprintf("node_modules/dep%d/index.ts", i%fanout)}',

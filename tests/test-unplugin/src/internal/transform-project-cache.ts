@@ -24,6 +24,7 @@ interface ICacheProjectOptions {
   emitExternalKey?: boolean;
   fileCount?: number;
   graphFanout?: number;
+  partitionGraph?: boolean;
 }
 
 // Build the Go fixture once per process; transformTtsc shells out to it.
@@ -417,6 +418,96 @@ async function assertSiblingDeliveriesDoNotReprobeGraph(): Promise<void> {
 }
 
 /**
+ * Asserts persistent validation reads only each file's graph inputs while
+ * retaining freshness for relevant edits and project-membership changes.
+ */
+async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const count = 12;
+  const project = createCacheProject({
+    fileCount: count,
+    graphFanout: count,
+    partitionGraph: true,
+  });
+  const modules = projectModules(project.root);
+  const cache = createTtscTransformCache();
+  const options = resolveOptions();
+  const deliver = (file: string) =>
+    transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+    );
+
+  for (const file of modules) {
+    assert.ok(await deliver(file));
+  }
+
+  const originalRead = fs.readFileSync;
+  let reads = 0;
+  (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.readFileSync>
+  ) {
+    reads += 1;
+    return originalRead.apply(this, args as never);
+  } as typeof fs.readFileSync;
+  try {
+    for (const file of modules) {
+      assert.ok(await deliver(file));
+    }
+  } finally {
+    (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = originalRead;
+  }
+  assert.ok(
+    reads / modules.length <= 12,
+    `persistent validation read ${(reads / modules.length).toFixed(1)} files per module (bound: 12)`,
+  );
+
+  const main = modules[0]!;
+  const originalGeneration = [...cache.values()][0];
+  fs.writeFileSync(
+    path.join(project.root, "node_modules", "dep1", "index.d.ts"),
+    "export declare const unrelated: string;\n",
+    "utf8",
+  );
+  assert.ok(await deliver(main));
+  assert.equal(
+    [...cache.values()][0],
+    originalGeneration,
+    "an unreachable external edit must not replace the file's generation",
+  );
+
+  fs.writeFileSync(
+    path.join(project.root, "node_modules", "dep0", "index.d.ts"),
+    "export declare const relevant: string;\n",
+    "utf8",
+  );
+  assert.ok(await deliver(main));
+  const relevantGeneration = [...cache.values()][0];
+  assert.notEqual(
+    relevantGeneration,
+    originalGeneration,
+    "a reachable external edit must replace the file's generation",
+  );
+
+  fs.writeFileSync(
+    path.join(project.root, "src", "new-global.d.ts"),
+    "declare const newlyIncluded: string;\n",
+    "utf8",
+  );
+  assert.ok(await deliver(main));
+  assert.notEqual(
+    [...cache.values()][0],
+    relevantGeneration,
+    "a project-membership change must replace the generation",
+  );
+}
+
+/**
  * Wrap the shared identity resolver's physical lookup with a pass-through
  * counter.
  */
@@ -622,6 +713,7 @@ function createCacheProject(options: ICacheProjectOptions): {
               runLog,
               emitExternal: options.emitExternalKey === true,
               graphFanout: options.graphFanout ?? 0,
+              partitionGraph: options.partitionGraph === true,
             },
           ],
         },
@@ -771,12 +863,16 @@ function writeGoPlugin(root: string): void {
       '      externals = append(externals, fmt.Sprintf("node_modules/dep%d/index.d.ts", j))',
       "    }",
       "    edges := map[string][]string{}",
-      "    for _, name := range names {",
+      "    for i, name := range names {",
       "      targets := []string{}",
-      "      for _, other := range names {",
-      '        if other != name { targets = append(targets, "src/"+other) }',
+      '      if boolValue(cfg, "partitionGraph") {',
+      "        targets = append(targets, externals[i%len(externals)])",
+      "      } else {",
+      "        for _, other := range names {",
+      '          if other != name { targets = append(targets, "src/"+other) }',
+      "        }",
+      "        targets = append(targets, externals...)",
       "      }",
-      "      targets = append(targets, externals...)",
       '      edges["src/"+name] = targets',
       "    }",
       "    result.Graph = &graphSection{",
@@ -826,6 +922,7 @@ export {
   assertFirstModuleDeliveriesDoNotRehashProject,
   assertHostExceptionTransformIsEvictedAndRecovers,
   assertPersistentCacheValidatesAnUnservedModule,
+  assertPersistentValidationUsesPerFileInputs,
   assertRejectedTransformIsEvictedAndRecovers,
   assertSiblingDeliveriesDoNotReprobeGraph,
   assertStaleEvictionKeepsNewerGeneration,
