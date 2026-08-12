@@ -5,6 +5,7 @@ import {
 } from "@ttsc/testing";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { emitGraphPlugins } from "./transform-graph";
@@ -296,9 +297,10 @@ export async function assertCacheInvalidatesOnNodeModulesDeclarationChange(): Pr
  * universe. A `compilerOptions` overlay compiles through a generated tsconfig
  * that the host's config chain reports and that is deleted right after the
  * compile; hashing it would flip to `missing` on the first revalidation and
- * turn every subsequent transform into a recompile. The same exclusion must
- * hold when the operating-system temp root is configured inside the project,
- * without masking a real descriptor/config edit.
+ * turn every subsequent transform into a recompile. All compiler scratch must
+ * stay outside the project when the operating-system temp root is configured
+ * inside it, directly or through a filesystem alias, without masking a real
+ * descriptor/config edit. The rule also applies without a generated overlay.
  */
 export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promise<void> {
   const { resolveOptions, transformTtsc, createTtscTransformCache } =
@@ -306,14 +308,23 @@ export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promis
   const root = TestUnpluginProject.createProject({ plugins: [] });
   const projectTemp = path.join(root, ".project-temp");
   fs.mkdirSync(projectTemp, { recursive: true });
+  const aliasRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "ttsc-project-temp-alias-"),
+  );
+  const aliasedProjectTemp = path.join(aliasRoot, "temp");
+  fs.symlinkSync(
+    projectTemp,
+    aliasedProjectTemp,
+    process.platform === "win32" ? "junction" : "dir",
+  );
   const previousTemp = {
     TEMP: process.env.TEMP,
     TMP: process.env.TMP,
     TMPDIR: process.env.TMPDIR,
   };
-  process.env.TEMP = projectTemp;
-  process.env.TMP = projectTemp;
-  process.env.TMPDIR = projectTemp;
+  process.env.TEMP = aliasedProjectTemp;
+  process.env.TMP = aliasedProjectTemp;
+  process.env.TMPDIR = aliasedProjectTemp;
   const options = resolveOptions({
     compilerOptions: { removeComments: true },
     plugins: emitGraphPlugins({
@@ -332,11 +343,15 @@ export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promis
       cache,
     );
     assert.ok(before);
-    assert.strictEqual(process.env.TEMP, projectTemp);
-    assert.strictEqual(process.env.TMP, projectTemp);
-    assert.strictEqual(process.env.TMPDIR, projectTemp);
+    assert.strictEqual(process.env.TEMP, aliasedProjectTemp);
+    assert.strictEqual(process.env.TMP, aliasedProjectTemp);
+    assert.strictEqual(process.env.TMPDIR, aliasedProjectTemp);
     const generation = cacheEntry(cache);
-    const cached = (await generation) as { temporaryTsconfig?: string };
+    const cached = (await generation) as {
+      projectSnapshotComplete?: boolean;
+      temporaryTsconfig?: string;
+    };
+    assert.strictEqual(cached.projectSnapshotComplete, true);
     assert.ok(cached.temporaryTsconfig);
     const relativeTemporaryTsconfig = path.relative(
       root,
@@ -368,10 +383,48 @@ export async function assertExternalValidationIgnoresGeneratedTsconfig(): Promis
     );
     assert.ok(changed);
     assert.notStrictEqual(cacheEntry(cache), generation);
+
+    process.env.TEMP = projectTemp;
+    process.env.TMP = projectTemp;
+    process.env.TMPDIR = projectTemp;
+    const passthroughOptions = resolveOptions({
+      plugins: emitGraphPlugins({
+        echoTsconfig: true,
+        edges: { "src/main.ts": ["src/types.d.ts"] },
+      }),
+    });
+    const passthroughCache = createTtscTransformCache();
+    const passthroughBefore = await transformTtsc(
+      TestUnpluginProject.mainFile(root),
+      TestUnpluginProject.mainSource(root),
+      passthroughOptions,
+      undefined,
+      passthroughCache,
+    );
+    assert.ok(passthroughBefore);
+    const passthroughGeneration = cacheEntry(passthroughCache);
+    const passthroughCached = (await passthroughGeneration) as {
+      projectSnapshotComplete?: boolean;
+      temporaryTsconfig?: string;
+    };
+    assert.strictEqual(passthroughCached.projectSnapshotComplete, true);
+    assert.strictEqual(passthroughCached.temporaryTsconfig, undefined);
+
+    const passthroughAfter = await transformTtsc(
+      TestUnpluginProject.mainFile(root),
+      TestUnpluginProject.mainSource(root),
+      passthroughOptions,
+      undefined,
+      passthroughCache,
+    );
+    assert.ok(passthroughAfter);
+    assert.strictEqual(cacheEntry(passthroughCache), passthroughGeneration);
   } finally {
     for (const [name, value] of Object.entries(previousTemp)) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+    fs.unlinkSync(aliasedProjectTemp);
+    fs.rmdirSync(aliasRoot);
   }
 }

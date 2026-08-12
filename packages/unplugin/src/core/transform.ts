@@ -1901,19 +1901,21 @@ async function transformProject(props: {
   trackProjectMembership: boolean;
   tsconfig: string;
 }): Promise<TtscCachedProjectTransform> {
-  const configured = createTransformTsconfig(props);
   const projectRoot = path.dirname(props.tsconfig);
-  const temporaryTsconfig =
-    configured.path === props.tsconfig ? undefined : configured.path;
-  const identities = createHostPathIdentityContext();
-  const before = collectProjectInputSnapshot(projectRoot, identities);
-  const tracker = props.trackProjectMembership
-    ? await createProjectMutationTracker(before.projectDirectories)
-    : undefined;
+  const scratchDirectory = createTransformScratchDirectory(projectRoot);
+  let tracker: TtscProjectMutationTracker | undefined;
   let retainTracker = false;
   let hostInputTracker: TtscProjectMutationTracker | undefined;
   try {
-    const result = withTransformTemporaryEnvironment(temporaryTsconfig, () =>
+    const configured = createTransformTsconfig(props, scratchDirectory);
+    const temporaryTsconfig =
+      configured.path === props.tsconfig ? undefined : configured.path;
+    const identities = createHostPathIdentityContext();
+    const before = collectProjectInputSnapshot(projectRoot, identities);
+    tracker = props.trackProjectMembership
+      ? await createProjectMutationTracker(before.projectDirectories)
+      : undefined;
+    const result = withTransformScratchEnvironment(scratchDirectory, () =>
       new TtscCompiler({
         cwd: projectRoot,
         // The generated tsconfig (if any) lives outside the project directory,
@@ -1926,9 +1928,7 @@ async function transformProject(props: {
         plugins: props.plugins,
         projectRoot,
         tsconfig: configured.path,
-        ...(temporaryTsconfig === undefined
-          ? {}
-          : { env: transformTemporaryEnvironment(temporaryTsconfig) }),
+        env: transformScratchEnvironment(scratchDirectory),
       }).transform(),
     );
     const persistentHostInputs = selectPersistentHostInputs({
@@ -1990,13 +1990,19 @@ async function transformProject(props: {
       ...(temporaryTsconfig === undefined ? {} : { temporaryTsconfig }),
     };
   } finally {
-    if (!retainTracker && tracker !== undefined) {
-      tracker.close();
+    try {
+      if (!retainTracker && tracker !== undefined) {
+        tracker.close();
+      }
+    } finally {
+      try {
+        if (!retainTracker && hostInputTracker !== undefined) {
+          hostInputTracker.close();
+        }
+      } finally {
+        fs.rmSync(scratchDirectory, { force: true, recursive: true });
+      }
     }
-    if (!retainTracker && hostInputTracker !== undefined) {
-      hostInputTracker.close();
-    }
-    configured.dispose();
   }
 }
 
@@ -2016,11 +2022,14 @@ function selectPersistentHostInputs(props: {
   );
 }
 
-function createTransformTsconfig(props: {
-  aliasPaths: Record<string, string[]>;
-  compilerOptions: Record<string, unknown>;
-  tsconfig: string;
-}): { path: string; dispose: () => void } {
+function createTransformTsconfig(
+  props: {
+    aliasPaths: Record<string, string[]>;
+    compilerOptions: Record<string, unknown>;
+    tsconfig: string;
+  },
+  scratchDirectory: string,
+): { path: string } {
   const compilerOptions = normalizeCompilerOptionsForGeneratedTsconfig(
     {
       ...props.compilerOptions,
@@ -2029,16 +2038,10 @@ function createTransformTsconfig(props: {
     path.dirname(props.tsconfig),
   );
   if (Object.keys(compilerOptions).length === 0) {
-    return {
-      path: props.tsconfig,
-      dispose: () => undefined,
-    };
+    return { path: props.tsconfig };
   }
 
-  const directory = createTransformTsconfigDirectory(
-    path.dirname(props.tsconfig),
-  );
-  const file = path.join(directory, "tsconfig.json");
+  const file = path.join(scratchDirectory, "tsconfig.json");
   fs.writeFileSync(
     file,
     JSON.stringify(
@@ -2051,15 +2054,13 @@ function createTransformTsconfig(props: {
     ),
     "utf8",
   );
-  return {
-    path: file,
-    dispose: () => fs.rmSync(directory, { force: true, recursive: true }),
-  };
+  return { path: file };
 }
 
-/** Create generated config storage outside the project snapshot and watchers. */
-function createTransformTsconfigDirectory(projectRoot: string): string {
+/** Create compiler scratch storage outside the project snapshot and watchers. */
+function createTransformScratchDirectory(projectRoot: string): string {
   const root = path.resolve(projectRoot);
+  const canonicalRoot = fs.realpathSync.native(root);
   const platformTemp =
     process.platform === "win32" && process.env.LOCALAPPDATA
       ? path.join(process.env.LOCALAPPDATA, "Temp")
@@ -2070,14 +2071,47 @@ function createTransformTsconfigDirectory(projectRoot: string): string {
     path.dirname(root),
     os.homedir(),
   ];
+  const canonicalCandidates = new Set<string>();
   let failure: unknown;
   for (const candidate of new Set(candidates.map((dir) => path.resolve(dir)))) {
     if (pathIsWithin(candidate, root)) continue;
+    let canonicalCandidate: string;
     try {
-      return fs.mkdtempSync(path.join(candidate, "ttsc-unplugin-"));
+      canonicalCandidate = fs.realpathSync.native(candidate);
     } catch (error) {
       failure = error;
+      continue;
     }
+    if (
+      pathIsWithin(canonicalCandidate, canonicalRoot) ||
+      canonicalCandidates.has(canonicalCandidate)
+    ) {
+      continue;
+    }
+    canonicalCandidates.add(canonicalCandidate);
+    let directory: string;
+    try {
+      directory = fs.mkdtempSync(path.join(candidate, "ttsc-unplugin-"));
+    } catch (error) {
+      failure = error;
+      continue;
+    }
+    let canonicalDirectory: string;
+    try {
+      canonicalDirectory = fs.realpathSync.native(directory);
+    } catch (error) {
+      try {
+        fs.rmdirSync(directory);
+      } catch (cleanupError) {
+        throw cleanupError;
+      }
+      failure = error;
+      continue;
+    }
+    if (!pathIsWithin(canonicalDirectory, canonicalRoot)) return directory;
+    // A candidate can be replaced between the preflight realpath and mkdtemp.
+    // Refuse the result and synchronously remove only our empty random child.
+    fs.rmdirSync(directory);
   }
   throw (
     failure ??
@@ -2095,11 +2129,8 @@ function pathIsWithin(child: string, parent: string): boolean {
   );
 }
 
-/** Route compiler/plugin scratch beside the generated config, outside project. */
-function transformTemporaryEnvironment(
-  temporaryTsconfig: string,
-): NodeJS.ProcessEnv {
-  const directory = path.dirname(temporaryTsconfig);
+/** Route all compiler/plugin scratch to one owned directory outside project. */
+function transformScratchEnvironment(directory: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     TEMP: directory,
@@ -2108,13 +2139,12 @@ function transformTemporaryEnvironment(
   };
 }
 
-/** Scope parent-process temp consumers to the same owned temporary directory. */
-function withTransformTemporaryEnvironment<T>(
-  temporaryTsconfig: string | undefined,
+/** Scope parent-process temp consumers to the same owned scratch directory. */
+function withTransformScratchEnvironment<T>(
+  scratchDirectory: string,
   callback: () => T,
 ): T {
-  if (temporaryTsconfig === undefined) return callback();
-  const environment = transformTemporaryEnvironment(temporaryTsconfig);
+  const environment = transformScratchEnvironment(scratchDirectory);
   const previous = {
     TEMP: process.env.TEMP,
     TMP: process.env.TMP,
