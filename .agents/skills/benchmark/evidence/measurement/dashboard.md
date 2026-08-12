@@ -69,4 +69,6 @@ Two are commonly misread:
 
 Work time excludes verified suspensions, setup time, and operator time.
 
+It is the model process's uptime plus what judging the Reviews cost, not the time the cell spent inside its objectives. The two differ: across round two's cells the goals' own elapsed sum is 88% to 99% of the published figure, the rest being the process alive between them. Read the column as what the cohort spent, not as what the agent worked, and take the per-stage list under it as the second reading — stage tokens close against the cell total, while stage time falls short of it by exactly that difference.
+
 The tracked artifacts a campaign publishes at the end are a different command and a different file set; [aggregate.md](aggregate.md) owns them.
