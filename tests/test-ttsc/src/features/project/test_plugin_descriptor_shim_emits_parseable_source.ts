@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 
-import { PLUGIN_DESCRIPTOR_SHIM_SOURCE } from "../../../../../packages/ttsc/lib/plugin/internal/loadProjectPlugins.js";
+import {
+  COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+  PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+} from "../../../../../packages/ttsc/lib/plugin/internal/loadProjectPlugins.js";
 
 /**
  * Verifies the plugin-descriptor shim is emitted as source that can parse.
@@ -24,21 +27,26 @@ import { PLUGIN_DESCRIPTOR_SHIM_SOURCE } from "../../../../../packages/ttsc/lib/
  * 3. Assert the environment variables the parent supplies survive.
  */
 export const test_plugin_descriptor_shim_emits_parseable_source = (): void => {
-  for (const line of PLUGIN_DESCRIPTOR_SHIM_SOURCE.split("\n")) {
-    assert.equal(
-      quotesPair(line),
-      true,
-      `the shim leaves a string literal open: ${line}`,
-    );
-    assert.equal(
-      // A carriage return is in the class even though a newline is not: the
-      // split above already turns a stray newline into an unterminated literal
-      // the scanner catches, while a stray carriage return neither splits the
-      // line nor unbalances a quote - and it is still a syntax error.
-      /[\u0000-\u0008\u000b\u000c\r\u000e-\u001f]/.test(line),
-      false,
-      `the shim emitted a raw control character: ${JSON.stringify(line)}`,
-    );
+  for (const source of [
+    PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+    COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+  ]) {
+    for (const line of source.split("\n")) {
+      assert.equal(
+        quotesPair(line),
+        true,
+        `the shim leaves a string literal open: ${line}`,
+      );
+      assert.equal(
+        // A carriage return is in the class even though a newline is not: the
+        // split above already turns a stray newline into an unterminated literal
+        // the scanner catches, while a stray carriage return neither splits the
+        // line nor unbalances a quote - and it is still a syntax error.
+        /[\u0000-\u0008\u000b\u000c\r\u000e-\u001f]/.test(line),
+        false,
+        `the shim emitted a raw control character: ${JSON.stringify(line)}`,
+      );
+    }
   }
   for (const variable of [
     "TTSC_PLUGIN_ENTRY",
@@ -46,7 +54,10 @@ export const test_plugin_descriptor_shim_emits_parseable_source = (): void => {
     "TTSC_PLUGIN_DESCRIPTOR_OUT",
   ]) {
     assert.equal(
-      PLUGIN_DESCRIPTOR_SHIM_SOURCE.includes(variable),
+      [
+        PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+        COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+      ].some((source) => source.includes(variable)),
       true,
       `the shim lost ${variable}`,
     );

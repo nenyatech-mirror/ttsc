@@ -22,10 +22,6 @@ import {
 
 const GO_MOD_SEARCH_MAX_DEPTH = 3;
 
-type TtscPluginFactory<T = ITtscProjectPluginConfig> = (
-  context: ITtscPluginFactoryContext<T>,
-) => ITtscPlugin;
-
 type ProjectPluginEntry = {
   baseDir: string;
   config: ITtscProjectPluginConfig;
@@ -717,29 +713,10 @@ function loadPluginEntry(
       dirname: path.dirname(request),
       filename: request,
     };
-    const loaded = requirePluginEntry(request, context, effectiveEnv);
-    const mod = loaded.value as {
-      createTtscPlugin?: TtscPluginFactory;
-      default?: ITtscPlugin | TtscPluginFactory;
-    } & Partial<Record<"plugin", ITtscPlugin | TtscPluginFactory>>;
-    const candidate =
-      mod.createTtscPlugin ??
-      mod.default ??
-      mod.plugin ??
-      (mod as unknown as ITtscPlugin | TtscPluginFactory);
-    if (typeof candidate === "function") {
-      const plugin = candidate(context);
-      if (!isTtscPlugin(plugin)) {
-        throw new Error(
-          `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
-        );
-      }
-      rejectJsTransformFunctions(specifier, plugin);
-      return { hostInputs: loaded.inputs, plugin };
-    }
-    if (isTtscPlugin(candidate)) {
-      rejectJsTransformFunctions(specifier, candidate);
-      return { hostInputs: loaded.inputs, plugin: candidate };
+    const loaded = loadPluginDescriptor(request, context, effectiveEnv);
+    if (isTtscPlugin(loaded.descriptor)) {
+      rejectJsTransformFunctions(specifier, loaded.descriptor);
+      return { hostInputs: loaded.inputs, plugin: loaded.descriptor };
     }
     throw new Error(
       `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
@@ -762,15 +739,13 @@ function loadPluginEntry(
  * never runs and cannot deadlock. A package that loads directly (a compiled
  * descriptor, or Bun's native `.ts`) never reaches the fallback.
  */
-function requirePluginEntry(
+function loadPluginDescriptor(
   request: string,
   context: ITtscPluginFactoryContext,
   effectiveEnv: NodeJS.ProcessEnv,
-): { inputs: string[]; value: unknown } {
-  purgePluginDescriptorModules(request);
+): IsolatedPluginDescriptor {
   try {
-    const value = require(request);
-    return { inputs: collectPluginDescriptorModules(request), value };
+    return loadCommonJsDescriptor(request, context);
   } catch (error) {
     if (!TS_SOURCE_PATTERN.test(request)) {
       throw error;
@@ -779,40 +754,93 @@ function requirePluginEntry(
     if (descriptor === undefined) {
       throw error;
     }
-    return { inputs: [path.resolve(request)], value: { default: descriptor } };
+    return { descriptor, inputs: [path.resolve(request)] };
   }
 }
 
-/** Remove the prior descriptor's complete CommonJS dependency generation. */
-function purgePluginDescriptorModules(request: string): void {
-  const seen = new Set<string>();
-  const visit = (id: string): void => {
-    const resolved = path.resolve(id);
-    if (seen.has(resolved)) return;
-    seen.add(resolved);
-    const cached = require.cache[resolved];
-    if (cached === undefined) return;
-    for (const child of cached.children) visit(child.id);
-    delete require.cache[resolved];
-  };
-  visit(request);
+interface IsolatedPluginDescriptor {
+  descriptor: unknown;
+  inputs: string[];
 }
 
-/** Collect the descriptor's loaded CommonJS dependency graph. */
-function collectPluginDescriptorModules(request: string): string[] {
-  const output = new Set<string>([path.resolve(request)]);
-  const seen = new Set<string>();
-  const visit = (id: string): void => {
-    const resolved = path.resolve(id);
-    if (seen.has(resolved)) return;
-    seen.add(resolved);
-    const cached = require.cache[resolved];
-    if (cached === undefined) return;
-    output.add(resolved);
-    for (const child of cached.children) visit(child.id);
-  };
-  visit(request);
-  return [...output].sort();
+/**
+ * Evaluate one CommonJS descriptor in a fresh Node module-cache generation.
+ *
+ * Reloading an external descriptor dependency inside this process has no safe
+ * cache operation: retaining it serves stale exports, while deleting it splits
+ * any application singleton that required the same module first. Isolation
+ * gives every descriptor load current bytes without mutating the host's cache.
+ * The child invokes the factory before walking its graph, so lazy `require()`
+ * calls are included, and a failed first load cannot strand poisoned children.
+ */
+function loadCommonJsDescriptor(
+  request: string,
+  context: ITtscPluginFactoryContext,
+): IsolatedPluginDescriptor {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
+  const out = path.join(dir, "descriptor.json");
+  const runtimeHookPreload = path.join(
+    __dirname,
+    "..",
+    "..",
+    "launcher",
+    "internal",
+    "runtimeHookPreload.js",
+  );
+  try {
+    const result = childProcess.spawnSync(
+      process.execPath,
+      [
+        "--require",
+        runtimeHookPreload,
+        "-e",
+        COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+      ],
+      {
+        cwd: context.projectRoot,
+        env: {
+          ...process.env,
+          TTSC_PLUGIN_CONTEXT: JSON.stringify(context),
+          TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
+          TTSC_PLUGIN_DESCRIPTOR_OUT: out,
+          TTSC_PLUGIN_ENTRY: request,
+        },
+        stdio: ["ignore", 1, 2],
+        windowsHide: true,
+      },
+    );
+    const failure = commonJsDescriptorProcessFailure(result, request);
+    if (failure !== undefined) {
+      const reason = pluginDescriptorFailureReason(out);
+      throw reason === ""
+        ? failure
+        : new Error(`${failure.message}\n${reason}`);
+    }
+    if (!fs.existsSync(out)) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" evaluation in isolated Node produced no descriptor output.`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(out, "utf8"));
+    } catch (error) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" produced invalid isolated output: ${errorMessage(error)}`,
+      );
+    }
+    if (!isRecord(parsed) || !Array.isArray(parsed.inputs)) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" produced an invalid isolated result`,
+      );
+    }
+    return {
+      descriptor: parsed.descriptor,
+      inputs: parsed.inputs.map((input) => String(input)),
+    };
+  } finally {
+    removeEvaluationTempDir(dir);
+  }
 }
 
 /** Validate plugin-declared universal host inputs. */
@@ -835,6 +863,66 @@ function validatePluginHostInputs(
     }
     return path.resolve(file);
   });
+}
+
+/** CommonJS evaluator emitted into a clean Node process for every load. */
+export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
+  `const fs = require("node:fs");`,
+  `const Module = require("node:module");`,
+  `const path = require("node:path");`,
+  `const out = process.env.TTSC_PLUGIN_DESCRIPTOR_OUT;`,
+  `try {`,
+  `  const request = process.env.TTSC_PLUGIN_ENTRY;`,
+  `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
+  `  const inputs = new Set([path.resolve(request)]);`,
+  `  const load = Module._load;`,
+  `  Module._load = function (specifier, parent, isMain) {`,
+  `    try {`,
+  `      const resolved = Module._resolveFilename(specifier, parent, isMain);`,
+  `      if (typeof resolved === "string" && path.isAbsolute(resolved)) inputs.add(path.resolve(resolved));`,
+  `    } catch {}`,
+  `    return Reflect.apply(load, this, arguments);`,
+  `  };`,
+  `  const mod = require(request);`,
+  `  const candidate = mod.createTtscPlugin ?? mod.default ?? mod.plugin ?? mod;`,
+  `  const descriptor = typeof candidate === "function" ? candidate(context) : candidate;`,
+  `  if (descriptor && typeof descriptor === "object" && ("transformSource" in descriptor || "transformOutput" in descriptor)) {`,
+  `    throw new Error("ttsc: plugin descriptor declares unsupported JS transform functions; declare a native backend instead");`,
+  `  }`,
+  `  fs.writeFileSync(out, JSON.stringify({ descriptor, inputs: [...inputs].sort() }));`,
+  `} catch (error) {`,
+  `  try {`,
+  `    fs.writeFileSync(out, JSON.stringify({ __ttscLoaderError: error instanceof Error && error.stack ? error.stack : String(error) }));`,
+  `  } catch {}`,
+  `  process.exit(1);`,
+  `}`,
+  ``,
+].join("\n");
+
+function commonJsDescriptorProcessFailure(
+  result: {
+    error?: Error;
+    signal: NodeJS.Signals | null;
+    status: number | null;
+  },
+  request: string,
+): Error | undefined {
+  if (result.error !== undefined) {
+    return new Error(
+      `ttsc: failed to launch isolated Node for plugin descriptor "${request}": ${result.error.message}`,
+    );
+  }
+  if (result.signal !== null) {
+    return new Error(
+      `ttsc: plugin descriptor "${request}" isolated evaluation was killed by signal ${result.signal}.`,
+    );
+  }
+  if (result.status !== 0) {
+    return new Error(
+      `ttsc: plugin descriptor "${request}" isolated evaluation failed with exit code ${String(result.status)}`,
+    );
+  }
+  return undefined;
 }
 
 const TS_SOURCE_PATTERN = /\.(?:[cm]?ts|tsx)$/i;

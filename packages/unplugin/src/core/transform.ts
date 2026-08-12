@@ -485,6 +485,8 @@ interface TtscEnvelopeDerivation {
    * files, `undefined` until the first completeness predicate.
    */
   dependenciesComplete?: Set<string>;
+  /** Universal inputs validated once at generation time and then by metadata. */
+  hostInputValidation?: TtscHostInputValidation;
   /**
    * Lazily built identity -> output source index of the `typescript` map (first
    * match wins, mirroring the historical scan). `undefined` until the first
@@ -498,6 +500,18 @@ interface TtscEnvelopeDerivation {
   dependencyIndex?: Map<string, unknown>;
   /** Per-file memo of the final derived watch-input list. */
   readonly watchInputs: Map<string, string[]>;
+}
+
+interface TtscHostInputValidation {
+  /** Files/non-files that existed when the generation was captured. */
+  readonly entries: Map<string, { path: string; signature: string }>;
+  /** Identities omitted from the per-module dependency loop below. */
+  readonly identities: Set<string>;
+  /**
+   * Missing paths grouped by the nearest directory whose listing proves them
+   * absent.
+   */
+  readonly missing: Map<string, Set<string>>;
 }
 
 /** Reference-graph indexes shared by every watch-input derivation. */
@@ -1162,6 +1176,13 @@ function matchesNarrowPersistentInputs(
     return false;
   }
   const state = envelopeDerivation(cached);
+  const hostValidation = state.hostInputValidation;
+  if (
+    hostValidation === undefined ||
+    !matchesUniversalHostInputs(cached, hostValidation)
+  ) {
+    return false;
+  }
   const inputs = selectWatchInputs({
     file,
     projectRoot: cached.projectRoot,
@@ -1169,11 +1190,125 @@ function matchesNarrowPersistentInputs(
     temporaryTsconfig: cached.temporaryTsconfig,
   });
   for (const input of inputs) {
+    if (hostValidation.identities.has(derivationIdentity(state, input))) {
+      continue;
+    }
     if (!matchesRecordedInput(cached, input)) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Validate universal descriptor/config inputs without re-reading them for every
+ * module. Existing paths use the same nanosecond metadata manifest that guards
+ * GOROOT identity memoization; missing probes are grouped by the nearest
+ * existing directory and checked through one exact membership listing.
+ */
+function matchesUniversalHostInputs(
+  cached: TtscCachedProjectTransform,
+  validation: TtscHostInputValidation,
+): boolean {
+  for (const entry of validation.entries.values()) {
+    const signature = inputMetadataSignature(entry.path);
+    if (signature === entry.signature) continue;
+    if (!matchesRecordedInput(cached, entry.path)) return false;
+    if (signature === undefined) return false;
+    entry.signature = signature;
+  }
+  for (const [directory, names] of validation.missing) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      // If the proving ancestor disappeared, every path below it remains
+      // missing. A later recreation is visible when this listing succeeds.
+      continue;
+    }
+    if (entries.some((entry) => names.has(entry.name))) return false;
+  }
+  return true;
+}
+
+/** Capture the universal-input manifest while the generation is still fresh. */
+function captureUniversalHostInputValidation(
+  cached: TtscCachedProjectTransform,
+): TtscHostInputValidation | undefined {
+  const state = envelopeDerivation(cached);
+  const validation: TtscHostInputValidation = {
+    entries: new Map(),
+    identities: new Set(),
+    missing: new Map(),
+  };
+  for (const input of selectHostInputs({
+    projectRoot: cached.projectRoot,
+    result: cached.result,
+  })) {
+    const identity = derivationIdentity(state, input);
+    if (validation.identities.has(identity)) continue;
+    validation.identities.add(identity);
+    const before = inputMetadataSignature(input);
+    if (!matchesRecordedInput(cached, input)) return undefined;
+    const after = inputMetadataSignature(input);
+    if (before !== after) return undefined;
+    if (after !== undefined) {
+      validation.entries.set(identity, { path: input, signature: after });
+      continue;
+    }
+    const probe = missingPathProbe(input);
+    let names = validation.missing.get(probe.directory);
+    if (names === undefined) {
+      names = new Set<string>();
+      validation.missing.set(probe.directory, names);
+    }
+    names.add(probe.name);
+  }
+  state.hostInputValidation = validation;
+  return validation;
+}
+
+/** Metadata identity whose stability lets a generation reuse a content hash. */
+function inputMetadataSignature(file: string): string | undefined {
+  try {
+    const link = fs.lstatSync(file, { bigint: true });
+    const target = link.isSymbolicLink()
+      ? fs.statSync(file, { bigint: true })
+      : link;
+    return [
+      link.dev,
+      link.ino,
+      link.mode,
+      link.size,
+      link.mtimeNs,
+      link.ctimeNs,
+      target.dev,
+      target.ino,
+      target.mode,
+      target.size,
+      target.mtimeNs,
+      target.ctimeNs,
+    ].join(":");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Find one directory listing that proves an absent path is still absent. */
+function missingPathProbe(file: string): { directory: string; name: string } {
+  let child = path.resolve(file);
+  for (;;) {
+    const directory = path.dirname(child);
+    try {
+      if (fs.statSync(directory).isDirectory()) {
+        return { directory, name: path.basename(child) };
+      }
+    } catch {}
+    if (directory === child) {
+      return { directory, name: path.basename(child) };
+    }
+    child = directory;
+  }
 }
 
 /** Fall back to the historical whole-envelope validation without a graph. */
@@ -1923,7 +2058,7 @@ async function transformProject(props: {
       temporaryTsconfig,
     });
     const inputSnapshot = collectProjectInputSnapshot(projectRoot, identities);
-    const stableProjectSnapshot =
+    let stableProjectSnapshot =
       before.complete &&
       inputSnapshot.complete &&
       sameHashes(before.hashes, inputSnapshot.hashes) &&
@@ -1940,11 +2075,7 @@ async function transformProject(props: {
     inputSnapshot.hashes[
       toProjectKey(projectRoot, props.currentFile, identities)
     ] = hashText(props.currentSource);
-    retainTracker =
-      stableProjectSnapshot &&
-      tracker !== undefined &&
-      hostInputTracker !== undefined;
-    return {
+    const cached: TtscCachedProjectTransform = {
       // Capture the out-of-walk input hashes while the generation is fresh so
       // cache validation can re-check them; computed before dispose so the
       // exclusion of the temp-dir tsconfig is the only reason it never keys.
@@ -1952,13 +2083,7 @@ async function transformProject(props: {
       externalInputPaths,
       inputHashes: inputSnapshot.hashes,
       projectDirectories: inputSnapshot.projectDirectories,
-      ...(stableProjectSnapshot && tracker !== undefined
-        ? { projectMutationTracker: tracker }
-        : {}),
-      ...(stableProjectSnapshot && hostInputTracker !== undefined
-        ? { hostInputMutationTracker: hostInputTracker }
-        : {}),
-      projectSnapshotComplete: stableProjectSnapshot,
+      projectSnapshotComplete: false,
       projectRoot,
       result,
       servedFiles: new Set(),
@@ -1967,6 +2092,21 @@ async function transformProject(props: {
       // but deleted file would invalidate every persistent-cache snapshot.
       ...(temporaryTsconfig === undefined ? {} : { temporaryTsconfig }),
     };
+    stableProjectSnapshot =
+      stableProjectSnapshot &&
+      captureUniversalHostInputValidation(cached) !== undefined;
+    cached.projectSnapshotComplete = stableProjectSnapshot;
+    if (stableProjectSnapshot && tracker !== undefined) {
+      cached.projectMutationTracker = tracker;
+    }
+    if (stableProjectSnapshot && hostInputTracker !== undefined) {
+      cached.hostInputMutationTracker = hostInputTracker;
+    }
+    retainTracker =
+      stableProjectSnapshot &&
+      tracker !== undefined &&
+      hostInputTracker !== undefined;
+    return cached;
   } finally {
     try {
       if (!retainTracker && tracker !== undefined) {

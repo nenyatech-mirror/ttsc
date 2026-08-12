@@ -17,8 +17,10 @@ import {
  * project cache root only — never a shared/global location.
  *
  * 1. Seed stale/fresh entries plus generation-fencing lock artifacts.
- * 2. Resolve the default plugin cache root (no cacheDir/TTSC_CACHE_DIR override).
- * 3. Assert the stale entry is removed while fresh data and fences remain.
+ * 2. Seed a future-dated GC marker, as can happen after a clock rollback or
+ *    restored cache.
+ * 3. Resolve the default plugin cache root (no cacheDir/TTSC_CACHE_DIR override).
+ * 4. Assert the stale entry is removed while fresh data and fences remain.
  */
 export const test_resolveplugincacheroot_prunes_stale_cache_entries = () => {
   const root = TestProject.tmpdir("ttsc-cache-gc-");
@@ -57,6 +59,11 @@ export const test_resolveplugincacheroot_prunes_stale_cache_entries = () => {
       "utf8",
     );
     fs.writeFileSync(path.join(fresh, ".last-used"), `${now}\n`, "utf8");
+    fs.writeFileSync(
+      path.join(pluginCache, ".gc-last-run"),
+      `${now + 24 * 60 * 60 * 1000}\n`,
+      "utf8",
+    );
 
     assert.equal(resolvePluginCacheRoot(root), pluginCache);
     assert.equal(fs.existsSync(stale), false);

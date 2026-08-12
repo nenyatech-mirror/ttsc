@@ -241,13 +241,14 @@ function resolveConfigFileContributors(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): { contributors: TtscPluginContributor[]; hostInputs: string[] } {
   const configFile = readConfigFileOption(context);
-  const configPath =
-    configFile !== undefined
-      ? path.resolve(pluginConfigBaseDir(context), configFile)
-      : findLintConfigFile(context);
+  const explicitConfigPath =
+    configFile === undefined
+      ? undefined
+      : path.resolve(pluginConfigBaseDir(context), configFile);
+  const configPath = explicitConfigPath ?? findLintConfigFile(context);
   const configInputs =
-    configFile !== undefined
-      ? [configPath]
+    explicitConfigPath !== undefined
+      ? [explicitConfigPath]
       : lintConfigDiscoveryInputs(context, configPath);
   if (!configPath || !fs.existsSync(configPath)) {
     return { contributors: [], hostInputs: configInputs };
@@ -301,7 +302,7 @@ function lintConfigDiscoveryInputs(
       ) {
         return [...new Set(inputs.map((input) => path.resolve(input)))];
       }
-      if (candidates.some((candidate) => fs.existsSync(candidate))) break;
+      if (lintConfigMatchesIn(directory).length !== 0) break;
       const parent = path.dirname(directory);
       if (parent === directory) break;
     }
@@ -414,24 +415,9 @@ function findLintConfigFileFrom(origin: string): string | undefined {
   // (the Go side raises a hard error on the duplicate; here we leave it to
   // the binary's own discovery to surface the issue once with one canonical
   // message).
-  const candidateSet = new Set<string>(LINT_CONFIG_FILENAMES);
   let dir = origin;
   while (true) {
-    // One `readdirSync` per directory level beats 14 `existsSync`+
-    // `statSync` pairs (= 28 stat syscalls) per level; intersect the
-    // listing with the candidate set instead.
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      entries = [];
-    }
-    const matches: string[] = [];
-    for (const entry of entries) {
-      if (!candidateSet.has(entry.name)) continue;
-      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-      matches.push(path.join(dir, entry.name));
-    }
+    const matches = lintConfigMatchesIn(dir);
     if (matches.length === 1) {
       return matches[0];
     }
@@ -442,6 +428,26 @@ function findLintConfigFileFrom(origin: string): string | undefined {
     if (parent === dir) return undefined;
     dir = parent;
   }
+}
+
+/** Return the regular-file/symlink candidates native discovery recognizes. */
+function lintConfigMatchesIn(directory: string): string[] {
+  const candidateSet = new Set<string>(LINT_CONFIG_FILENAMES);
+  // One `readdirSync` per directory level beats 14 `existsSync`+`statSync`
+  // pairs (= 28 stat syscalls) per level; intersect the listing instead.
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter(
+      (entry) =>
+        candidateSet.has(entry.name) &&
+        (entry.isFile() || entry.isSymbolicLink()),
+    )
+    .map((entry) => path.join(directory, entry.name));
 }
 
 /**

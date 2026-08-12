@@ -438,6 +438,12 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     TestProject.tmpdir("ttsc-unplugin-descriptor-selection-"),
     "selection.cjs",
   );
+  const descriptorProbes = Array.from({ length: 100 }, (_, index) =>
+    path.join(path.dirname(descriptorSelection), `missing-${index}.json`),
+  );
+  for (const probe of descriptorProbes.filter((_, index) => index % 2 === 0)) {
+    fs.writeFileSync(probe, "{}\n", "utf8");
+  }
   fs.writeFileSync(descriptorSelection, 'module.exports = "go-plugin";\n');
   fs.writeFileSync(
     path.join(project.root, "plugin.cjs"),
@@ -447,6 +453,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
       "",
       "module.exports = (context) => ({",
       '  name: context.plugin.name ?? "cache-probe",',
+      `  hostInputs: ${JSON.stringify(descriptorProbes)},`,
       "  source: path.resolve(context.dirname, source),",
       "});",
       "",
@@ -471,8 +478,10 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   const originalRead = fs.readFileSync;
+  const originalLstat = fs.lstatSync;
   const originalStat = fs.statSync;
   let reads = 0;
+  let lstats = 0;
   let stats = 0;
   (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (
     this: unknown,
@@ -481,6 +490,13 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     reads += 1;
     return originalRead.apply(this, args as never);
   } as typeof fs.readFileSync;
+  (fs as { lstatSync: typeof fs.lstatSync }).lstatSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.lstatSync>
+  ) {
+    lstats += 1;
+    return originalLstat.apply(this, args as never);
+  } as typeof fs.lstatSync;
   (fs as { statSync: typeof fs.statSync }).statSync = function (
     this: unknown,
     ...args: Parameters<typeof fs.statSync>
@@ -496,6 +512,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   } finally {
     (fs as { readFileSync: typeof fs.readFileSync }).readFileSync =
       originalRead;
+    (fs as { lstatSync: typeof fs.lstatSync }).lstatSync = originalLstat;
     (fs as { statSync: typeof fs.statSync }).statSync = originalStat;
   }
   assert.ok(
@@ -505,6 +522,10 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   assert.ok(
     stats / modules.length <= 12,
     `persistent validation statted ${(stats / modules.length).toFixed(1)} paths per module (bound: 12)`,
+  );
+  assert.ok(
+    lstats / modules.length <= 60,
+    `persistent validation metadata-checked ${(lstats / modules.length).toFixed(1)} existing universal inputs per module (bound: 60)`,
   );
 
   const main = modules[0]!;

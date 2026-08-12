@@ -2074,9 +2074,9 @@ export function resolvePluginCacheRoot(
  * Resolve all source-plugin build cache directories for one invocation.
  *
  * `pluginRoot` stores compiled plugin binaries; `goBuildRoot` is the Go object
- * cache passed as `GOCACHE` while ttsc builds those binaries. Both live under a
- * single `root`, so persisting one directory covers the whole source-build
- * cache without depending on ttsc internals.
+ * cache passed as `GOCACHE` while ttsc builds those binaries. The default Go
+ * cache lives under `root`; an explicit `TTSC_GO_CACHE_DIR` or `GOCACHE` keeps
+ * its independently resolved location and ownership policy.
  */
 export function resolveSourceBuildCachePaths(
   projectRoot: string,
@@ -3113,7 +3113,11 @@ function prunePluginCacheRoot(root: string): void {
     const marker = path.join(root, CACHE_GC_MARKER_FILE);
     const now = Date.now();
     const lastRun = readTimestamp(marker);
-    if (lastRun !== null && now - lastRun < PLUGIN_CACHE_GC_INTERVAL_MS) {
+    if (
+      lastRun !== null &&
+      lastRun <= now &&
+      now - lastRun < PLUGIN_CACHE_GC_INTERVAL_MS
+    ) {
       return;
     }
     fs.writeFileSync(marker, `${now}\n`);
@@ -3184,6 +3188,7 @@ export function pruneGoBuildCacheRoot(
     if (
       options.force !== true &&
       lastRun !== null &&
+      lastRun <= now &&
       now - lastRun < GO_BUILD_CACHE_GC_INTERVAL_MS
     ) {
       return;

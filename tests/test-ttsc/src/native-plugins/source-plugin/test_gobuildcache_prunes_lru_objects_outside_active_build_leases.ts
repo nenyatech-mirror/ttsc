@@ -21,11 +21,13 @@ import {
  * 2. Release the lease, prune toward one object, and assert the newest survives.
  * 3. Seed four recent objects and assert the newest target-sized cohort is
  *    protected.
- * 4. Prove completed, stale, and future-dated intents cannot poison a live process
+ * 4. Prove a future-dated GC marker cannot suppress maintenance after a clock
+ *    rollback or restored cache.
+ * 5. Prove completed, stale, and future-dated intents cannot poison a live process
  *    while fresh orphan leases retain their conservative grace.
- * 5. Deny Worker permission and prove the IPC heartbeat fallback cleans up its
+ * 6. Deny Worker permission and prove the IPC heartbeat fallback cleans up its
  *    lease after running the callback.
- * 6. Resolve user and explicitly named cache layouts and assert their objects and
+ * 7. Resolve user and explicitly named cache layouts and assert their objects and
  *    maintenance metadata remain untouched at the exact resolved roots.
  */
 export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
@@ -75,6 +77,26 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       recent.map((file) => fs.existsSync(file)),
       [false, false, true, true],
     );
+
+    const futureMarkerCache = path.join(root, "future-marker-go-build");
+    const futureMarkerObject = writeObject(
+      futureMarkerCache,
+      "14",
+      "future-marker",
+      now - 30_000,
+    );
+    fs.writeFileSync(
+      path.join(futureMarkerCache, ".ttsc-gc"),
+      `${now + 24 * 60 * 60 * 1000}\n`,
+      "utf8",
+    );
+    pruneGoBuildCacheRoot(futureMarkerCache, {
+      maxBytes: 0,
+      now,
+      protectedAgeMs: 0,
+      targetBytes: 0,
+    });
+    assert.equal(fs.existsSync(futureMarkerObject), false);
 
     const staleIntent = writeCoordinationRecord(
       goCache,
