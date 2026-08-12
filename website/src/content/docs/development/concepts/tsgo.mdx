@@ -465,6 +465,8 @@ When a tsgo method you need is *un*exported, the shim provides a `Checker_*` wra
 - `IsTupleType(typ)`
 - `Type_getTypeNameSymbol(typ)`
 
+Use `Checker_newTypeMapper` for parallel type-parameter and type-argument slices. `Checker_combineTypeMappers` composes sequential mapper stages and may map a target produced by the first stage again in the second stage.
+
 If you need an unexported method that is not yet shimmed, prefer the direct-method form on a related exported alternative; failing that, file a shim addition.
 
 ### Worked example: await-thenable
