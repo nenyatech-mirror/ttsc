@@ -1,10 +1,16 @@
 // gen_shims:hand-maintained
 //
-// Reference-graph parts of tsgo's own incremental engine (`tsc --incremental`
-// semantics), linked from internal/execute/incremental so ttsc's transform
-// envelopes can carry the same language-semantic input bound the compiler
-// itself uses for invalidation: per-file direct resolved references and the
-// files that contribute to the global scope.
+// Parts of tsgo's own incremental engine (`tsc --incremental` semantics),
+// exposed from internal/execute/incremental for the two things a ttsc host
+// needs from it:
+//
+//   - the reference graph, so transform envelopes can carry the same
+//     language-semantic input bound the compiler itself uses for invalidation:
+//     per-file direct resolved references and the files that contribute to the
+//     global scope;
+//   - the build-information emit, so a host that constructs its Program
+//     in-process still writes the `.tsbuildinfo` an `incremental` or
+//     `composite` project asked for.
 package compiler
 
 import (
@@ -16,9 +22,10 @@ import (
   innercompiler "github.com/microsoft/typescript-go/internal/compiler"
   "github.com/microsoft/typescript-go/internal/tspath"
 
-  // The linknamed symbols below live in the incremental package; the blank
-  // import compiles it into every shim consumer so the references resolve.
-  incremental "github.com/microsoft/typescript-go/internal/execute/incremental"
+  // Imported for EmitFreshWithBuildInfo below, and for the linknamed symbols
+  // further down: compiling the package into every shim consumer is what makes
+  // those references resolve.
+  "github.com/microsoft/typescript-go/internal/execute/incremental"
 )
 
 // EmitFreshWithBuildInfo runs a full emit through tsgo's own incremental

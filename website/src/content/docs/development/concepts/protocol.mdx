@@ -553,7 +553,7 @@ Some payloads reach a sidecar through the environment rather than argv, because 
 | `TTSC_PLUGIN_CONFIG_DIR` | Directory that plugin config-file discovery and relative `configFile` resolution anchor at, when the compiled tsconfig is a generated wrapper outside the project. Read it through `driver.PluginConfigBaseDir`. |
 | `TTSC_TSGO_BINARY`, `TTSC_TTSX_BINARY` | Absolute paths to the compiler and runner this invocation resolved, for a plugin that has to shell out to either. |
 
-Each variable is set per spawn and describes only the current invocation. A value inherited from an ancestor `ttsc` process is cleared rather than passed on, so a nested build never sees the outer run's flags.
+`TTSC_TSGO_ARGS` and `TTSC_PLUGIN_CONFIG_DIR` describe one invocation, so a spawn that has nothing to say clears whatever an ancestor `ttsc` process left behind rather than passing it on: a nested build never inherits the outer run's forwarded flags or project anchor. The two binary paths are the opposite — an inherited value wins, because it is how an embedder pins the toolchain for a whole process tree.
 
 ## Exit and Output
 
