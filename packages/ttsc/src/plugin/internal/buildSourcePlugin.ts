@@ -324,19 +324,16 @@ function compileSourcePlugin(opts: {
     );
     const scratchBinaryName =
       process.platform === "win32" ? ".ttsc-plugin.exe" : ".ttsc-plugin";
-    withGoBuildCacheLease(
-      opts.goBuildCacheRoot,
-      opts.manageGoBuildCache,
-      () =>
-        runGoBuild(
-          scratchDir,
-          opts.entry,
-          scratchBinaryName,
-          opts.pluginName,
-          opts.goBinary,
-          opts.goBuildCacheRoot,
-          opts.env,
-        ),
+    withGoBuildCacheLease(opts.goBuildCacheRoot, opts.manageGoBuildCache, () =>
+      runGoBuild(
+        scratchDir,
+        opts.entry,
+        scratchBinaryName,
+        opts.pluginName,
+        opts.goBinary,
+        opts.goBuildCacheRoot,
+        opts.env,
+      ),
     );
     const builtBinary = path.join(scratchDir, scratchBinaryName);
     publishBuiltBinary(builtBinary, opts.binaryPath);
@@ -2209,9 +2206,7 @@ function shouldManageSourceBuildCaches(
   env: NodeJS.ProcessEnv,
 ): boolean {
   return (
-    !cacheDir &&
-    !env.TTSC_CACHE_DIR &&
-    paths.goBuildRootSource === "ttsc-cache"
+    !cacheDir && !env.TTSC_CACHE_DIR && paths.goBuildRootSource === "ttsc-cache"
   );
 }
 
@@ -3153,8 +3148,7 @@ export function pruneGoBuildCacheRoot(
     const remainingBytes = pruneGoBuildCacheEntries(root, {
       maxBytes: options.maxBytes ?? GO_BUILD_CACHE_MAX_BYTES,
       now,
-      protectedAgeMs:
-        options.protectedAgeMs ?? GO_BUILD_CACHE_PROTECTED_AGE_MS,
+      protectedAgeMs: options.protectedAgeMs ?? GO_BUILD_CACHE_PROTECTED_AGE_MS,
       targetBytes: options.targetBytes ?? GO_BUILD_CACHE_TARGET_BYTES,
     });
     // If recent protection or a transient delete failure left the cache above
@@ -3253,7 +3247,9 @@ function pruneGoBuildCacheEntries(
   // 2.9 GiB cold builds grow without bound during that hour.
   const protectedFiles = new Set<string>();
   let protectedBytes = 0;
-  for (const entry of [...entries].sort((a, b) => b.lastUsedAt - a.lastUsedAt)) {
+  for (const entry of [...entries].sort(
+    (a, b) => b.lastUsedAt - a.lastUsedAt,
+  )) {
     if (options.now - entry.lastUsedAt > options.protectedAgeMs) {
       continue;
     }
@@ -3389,7 +3385,9 @@ function goBuildCacheCoordinationRecordIsLive(
     }
   } catch {}
   try {
-    return now - fs.statSync(file).mtimeMs <= GO_BUILD_CACHE_COORDINATION_STALE_MS;
+    return (
+      now - fs.statSync(file).mtimeMs <= GO_BUILD_CACHE_COORDINATION_STALE_MS
+    );
   } catch {
     return false;
   }

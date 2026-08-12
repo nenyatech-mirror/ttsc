@@ -216,10 +216,10 @@ export async function assertVolatileFileIgnoresItsCompletenessDeclaration(): Pro
 }
 
 /**
- * Asserts a completeness declaration narrows persistent transform validation
- * as well as bundler watch registration. The plugin has transferred ownership
- * of the file's complete dependency set, so an undeclared graph member cannot
- * keep imposing whole-envelope reads on every delivery.
+ * Asserts a completeness declaration narrows persistent transform validation as
+ * well as bundler watch registration. The plugin has transferred ownership of
+ * the file's complete dependency set, so an undeclared graph member cannot keep
+ * imposing whole-envelope reads on every delivery.
  */
 export async function assertCompletenessNarrowsPersistentCacheValidation(): Promise<void> {
   const { resolveOptions, transformTtsc, createTtscTransformCache } =

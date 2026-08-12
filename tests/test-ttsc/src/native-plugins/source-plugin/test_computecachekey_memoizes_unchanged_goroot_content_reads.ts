@@ -81,7 +81,8 @@ export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
       assert.notEqual(third, first);
       assert.ok(goRootReads > 0, "a changed manifest must re-read GOROOT");
     } finally {
-      (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = originalRead;
+      (fs as { readFileSync: typeof fs.readFileSync }).readFileSync =
+        originalRead;
       if (previous === undefined) delete process.env.FAKE_GO_ENV_GOROOT;
       else process.env.FAKE_GO_ENV_GOROOT = previous;
     }

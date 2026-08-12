@@ -479,7 +479,12 @@ function createProject(options: MeasureOptions): string {
     index < (options.unrelatedDirectoryCount ?? 0);
     index += 1
   ) {
-    const directory = path.join(project, "fixtures", `unused-${index}`, "nested");
+    const directory = path.join(
+      project,
+      "fixtures",
+      `unused-${index}`,
+      "nested",
+    );
     fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(path.join(directory, "asset.txt"), "fixture\n", "utf8");
   }

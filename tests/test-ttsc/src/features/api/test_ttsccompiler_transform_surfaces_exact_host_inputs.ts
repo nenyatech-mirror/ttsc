@@ -17,7 +17,8 @@ import {
  * universal inputs. A missing explicit config path is state too: its later
  * creation must invalidate the generation.
  *
- * 1. Create a plugin project with a missing explicit config and an unrelated asset.
+ * 1. Create a plugin project with a missing explicit config and an unrelated
+ *    asset.
  * 2. Transform it through the programmatic API.
  * 3. Assert only config ancestry, manifest, descriptor, and config path surface.
  */

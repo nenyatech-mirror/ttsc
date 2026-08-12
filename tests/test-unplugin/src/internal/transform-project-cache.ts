@@ -474,7 +474,8 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
       assert.ok(await deliver(file));
     }
   } finally {
-    (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = originalRead;
+    (fs as { readFileSync: typeof fs.readFileSync }).readFileSync =
+      originalRead;
     (fs as { statSync: typeof fs.statSync }).statSync = originalStat;
   }
   assert.ok(
@@ -599,7 +600,8 @@ async function assertIncompleteProjectSnapshotFallsBackAndRecovers(): Promise<vo
       ),
     );
   } finally {
-    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = originalReaddir;
+    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
+      originalReaddir;
   }
   assert.equal(failed, true, "the generation walk must exercise the failure");
   const incompleteGeneration = [...cache.values()][0];

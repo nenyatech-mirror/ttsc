@@ -18,9 +18,10 @@ import {
  *
  * 1. Seed three old object files and prove an active build lease blocks GC.
  * 2. Release the lease, prune toward one object, and assert the newest survives.
- * 3. Seed four recent objects and assert the newest target-sized cohort is protected.
- * 4. Resolve user and explicitly named cache layouts and assert their objects
- *    and maintenance metadata remain untouched.
+ * 3. Seed four recent objects and assert the newest target-sized cohort is
+ *    protected.
+ * 4. Resolve user and explicitly named cache layouts and assert their objects and
+ *    maintenance metadata remain untouched.
  */
 export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
   () => {
