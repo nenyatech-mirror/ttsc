@@ -52,6 +52,8 @@ import {
  *   (bounded by a two-minute safety deadline).
  * - `FAKE_GO_BUILD_EXIT_CODE`: exit `go build` with this status instead of
  *   writing the output binary, simulating a failed compile.
+ * - `FAKE_GO_BUILD_CACHE_OBJECT_COUNT`: write this many four-byte, old objects
+ *   into `GOCACHE`, allowing post-build size maintenance to be tested.
  */
 function createFakeGoBinary(
   root: string,
@@ -114,6 +116,17 @@ function createFakeGoBinary(
       "if (process.env.FAKE_GO_BUILD_EXIT_CODE) {",
       '  console.error("fake go: build failed as directed by FAKE_GO_BUILD_EXIT_CODE");',
       "  process.exit(Number(process.env.FAKE_GO_BUILD_EXIT_CODE));",
+      "}",
+      "if (process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT && process.env.GOCACHE) {",
+      "  const count = Number(process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT);",
+      "  const old = new Date(Date.now() - 3 * 60 * 60 * 1000);",
+      "  for (let index = 0; index < count; index += 1) {",
+      '    const bucket = index.toString(16).padStart(2, "0");',
+      "    const file = path.join(process.env.GOCACHE, bucket, `fake-${index}`);",
+      "    fs.mkdirSync(path.dirname(file), { recursive: true });",
+      '    fs.writeFileSync(file, "data", "utf8");',
+      "    fs.utimesSync(file, old, old);",
+      "  }",
       "}",
       "const required = [",
       '  "vendor/local/value.go",',
