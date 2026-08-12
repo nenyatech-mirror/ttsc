@@ -20,6 +20,7 @@ import { appendBuildOutput, normalizeBuildOutput } from "./runBuild";
 import {
   assertSharedHostCompatibility,
   clearInheritedTsgoArgs,
+  inheritedSidecarEnv,
   linkedTransformPlugins,
   resolvePluginConfigDir,
   selectSharedHostPlugin,
@@ -95,7 +96,7 @@ function transformProjectWithNativeHost(
     ["api-transform", "--cwd", project.root, "--tsconfig", project.path],
     {
       cwd: project.root,
-      env: { ...process.env, ...options.env },
+      env: inheritedSidecarEnv(options.env),
     },
   );
   if (res.error) {
@@ -137,7 +138,7 @@ function transformProjectWithPlugins(
     cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
     cwd,
     entries: options.plugins,
-    env: { ...process.env, ...options.env },
+    env: inheritedSidecarEnv(options.env),
     pluginConfigDir: options.pluginConfigDir,
     projectRoot: options.projectRoot,
     tsconfig: project.path,

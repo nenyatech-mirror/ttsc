@@ -10,6 +10,7 @@ import { resolveTsgo } from "./resolveTsgo";
 import {
   assertSharedHostCompatibility,
   clearInheritedTsgoArgs,
+  inheritedSidecarEnv,
   linkedTransformPlugins,
   resolvePluginConfigDir,
   selectSharedHostPlugin,
@@ -53,7 +54,7 @@ export function startResidentTransform(
     cacheDir: context.cacheDir ?? context.env?.TTSC_CACHE_DIR,
     cwd,
     entries: context.plugins,
-    env: { ...process.env, ...context.env },
+    env: inheritedSidecarEnv(context.env),
     pluginConfigDir: context.pluginConfigDir,
     projectRoot: context.projectRoot,
     tsconfig: project.path,

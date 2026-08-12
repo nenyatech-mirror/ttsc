@@ -11,6 +11,7 @@ import { buildNativeCompiler } from "./buildNativeCompiler";
 import { isOutsideRelativePath, packageRootDir } from "./paths";
 import { readProjectConfig } from "./project/readProjectConfig";
 import { runBuild } from "./runBuild";
+import { inheritedSidecarEnv } from "./sharedHostHelpers";
 import { outputText, spawnNative } from "./spawnNative";
 
 /**
@@ -50,7 +51,7 @@ export function compileProjectInMemory(options: ITtscCompilerContext): {
     ["api-compile", "--cwd", project.root, "--tsconfig", tsconfig],
     {
       cwd: project.root,
-      env: { ...process.env, ...options.env },
+      env: inheritedSidecarEnv(options.env),
     },
   );
   if (res.error) {
