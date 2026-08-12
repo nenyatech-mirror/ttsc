@@ -1,7 +1,6 @@
 package driver
 
 import (
-  "context"
   "errors"
   "strings"
   "sync"
@@ -222,12 +221,30 @@ func (p *Program) EmitWithPluginTransformers(transforms []PluginTransform, write
       }
     }
   }
-  if !options.GetEmitDeclarations() {
+  // The declaration pass below doubles as this lane's build-information pass,
+  // so it also runs for a JavaScript-only `incremental` / `composite` project
+  // that has no declarations to write at all.
+  if !options.GetEmitDeclarations() && !p.emitsBuildInfo() {
     return nil, nil
   }
 
+  // What the build information this pass writes does and does not claim.
+  //
+  // The JavaScript above was hand-assembled and written outside tsgo's
+  // emitter, so tsgo's snapshot never saw it happen and records the JS emit of
+  // every file as still pending. That error is one-directional and safe: a
+  // consumer reading it can only decide to emit again, never to skip a file
+  // ttsc actually transformed. Making the record exact would mean running
+  // tsgo's own JavaScript emit a second time and discarding its output, paying
+  // a full emit to describe work already done. Everything else in the file —
+  // the compiler version, the resolved options, per-file versions and
+  // signatures, and the declaration state this pass does produce — is accurate.
+  //
+  // ttsc itself never reads build information back (see
+  // `shimcompiler.EmitFreshWithBuildInfo`), so this asymmetry costs a ttsc
+  // rebuild nothing.
   var wfMu sync.Mutex
-  result := p.TSProgram.Emit(context.Background(), shimcompiler.EmitOptions{
+  result := p.emitProgram(shimcompiler.EmitOptions{
     EmitOnly: shimcompiler.EmitOnlyDts,
     WriteFile: func(fileName string, text string, data *shimcompiler.WriteFileData) error {
       wfMu.Lock()

@@ -635,10 +635,17 @@ export const FLAG_SCHEMA: readonly FlagSpec[] = [
   },
 
   // -------------------------------------------------------------------------
-  // `--tsgo-args` — JSON-encoded passthrough envelope the launcher emits on
-  // the way down to native sidecars. The sidecars decode it back into the
-  // tsgo argv. Listed here so the schema describes every flag the Go layers
-  // accept, not just the user-facing ones.
+  // `--tsgo-args` — JSON-encoded passthrough envelope a native sidecar decodes
+  // back into the tsgo argv. Listed here so the schema describes every flag
+  // the Go layers accept, not just the user-facing ones.
+  //
+  // The launcher no longer emits it. A CLI flag is fatal to any host whose
+  // `flag.FlagSet` does not declare it, and this one was added to a plugin
+  // protocol third-party hosts had already frozen, so every forwarded compiler
+  // flag exited 2 on a typia/nestia-shaped sidecar (issue #1188). The payload
+  // now rides the `TTSC_TSGO_ARGS` environment variable, which an unaware host
+  // simply ignores. ttsc's own hosts still accept the flag so an older
+  // launcher, or an embedder that composes sidecar argv itself, keeps working.
   // -------------------------------------------------------------------------
   {
     name: "--tsgo-args",
@@ -654,7 +661,7 @@ export const FLAG_SCHEMA: readonly FlagSpec[] = [
     ],
     consumedBy: ["host", "lint"],
     description:
-      "JSON-encoded tsgo passthrough argv (internal: emitted by runBuild).",
+      "JSON-encoded tsgo passthrough argv (internal: accepted by ttsc's own hosts; the launcher forwards it in TTSC_TSGO_ARGS).",
   },
   {
     name: "--plugins-json",

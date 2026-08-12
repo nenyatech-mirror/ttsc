@@ -26,7 +26,10 @@ import {
 import { resolveBinary } from "./resolveBinary";
 import { resolveTsgo } from "./resolveTsgo";
 import {
+  TSGO_ARGS_ENV,
   assertSharedHostCompatibility,
+  clearInheritedTsgoArgs,
+  inheritedSidecarEnv,
   linkedTransformPlugins,
   resolvePluginConfigDir,
   selectSharedHostPlugin,
@@ -198,6 +201,7 @@ function nativePluginEnv(
   extra: NodeJS.ProcessEnv | undefined,
   execution: ReturnType<typeof resolveExecutionContext>,
   plugin?: ITtscLoadedNativePlugin,
+  tsgoArgs?: string,
 ): NodeJS.ProcessEnv {
   const env = mergeEnv({
     ...(execution.pluginConfigDir === undefined
@@ -209,6 +213,14 @@ function nativePluginEnv(
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
     ...extra,
   });
+  // Forwarded tsgo argv is per-invocation state this host owns, exactly like
+  // the config anchor below: publish this run's payload, or drop whatever an
+  // ancestor ttsc process left behind when this lane forwards nothing.
+  if (tsgoArgs !== undefined) {
+    env[TSGO_ARGS_ENV] = tsgoArgs;
+  } else {
+    clearInheritedTsgoArgs(env, extra);
+  }
   // The anchor is per-invocation state owned by this host: when this run
   // declared none (and the caller's env does not name one), drop any value
   // inherited from an ancestor ttsc process so a nested build never
@@ -391,8 +403,11 @@ export class ResidentCheckWatchSession {
       stderr: "",
       stdout: "",
     };
-    const checks = planResidentCheckEntries(execution.nativePlugins, (plugin) =>
-      createNativeCheckArgs(execution, options, plugin),
+    const tsgoArgs = createNativeTsgoArgs(options);
+    const checks = planResidentCheckEntries(
+      execution.nativePlugins,
+      (plugin) => createNativeCheckArgs(execution, options, plugin),
+      tsgoArgs,
     );
     const request = residentCheckRequest(change, execution.projectRoot);
     // Buffer the cycle for every resident plugin before running any of them.
@@ -411,6 +426,7 @@ export class ResidentCheckWatchSession {
           "ttsc.check",
           timing,
           `ttsc check plugin ${plugin.name} time`,
+          tsgoArgs,
         );
       } else {
         const startedAt = process.hrtime.bigint();
@@ -420,7 +436,7 @@ export class ResidentCheckWatchSession {
             args: ["check-serve", ...args.slice(1)],
             binary: plugin.binary,
             cwd: execution.projectRoot,
-            env: nativePluginEnv(options.env, execution, plugin),
+            env: nativePluginEnv(options.env, execution, plugin, tsgoArgs),
           });
           this.processes.set(key, resident);
         }
@@ -506,8 +522,9 @@ function residentCheckExecutionIsCompatible(
 function residentCheckProcessKey(
   plugin: ITtscLoadedNativePlugin,
   args: readonly string[],
+  tsgoArgs?: string,
 ): string {
-  return `${plugin.binary}\0${plugin.name}\0${JSON.stringify(args)}`;
+  return `${plugin.binary}\0${plugin.name}\0${JSON.stringify(args)}\0${tsgoArgs ?? ""}`;
 }
 
 export type ResidentCheckEntryPlan = {
@@ -524,6 +541,11 @@ export type ResidentCheckEntryPlan = {
 export function planResidentCheckEntries(
   plugins: readonly ITtscLoadedNativePlugin[],
   createArgs: (plugin: ITtscLoadedNativePlugin) => string[],
+  // Part of the process identity even though it never appears in argv: the
+  // forwarded tsgo payload rides the environment, and a resident process holds
+  // the compiler options it was started with. Two cycles that forward different
+  // flags must not share one warm Program.
+  tsgoArgs?: string,
 ): ResidentCheckEntryPlan[] {
   return plugins
     .filter((candidate) => candidate.stage === "check")
@@ -534,7 +556,7 @@ export function planResidentCheckEntries(
         entryIndex,
         key:
           plugin.capabilities?.residentCheck === true
-            ? residentCheckProcessKey(plugin, args)
+            ? residentCheckProcessKey(plugin, args, tsgoArgs)
             : undefined,
         plugin,
       };
@@ -1126,6 +1148,7 @@ function buildWithNativeCompilerPlugins(
     "ttsc.build",
     timing,
     transformHostTimingLabel(plugins),
+    createNativeBuildTsgoArgs(execution, options),
   );
 }
 
@@ -1401,13 +1424,21 @@ function createNativeBuildArgs(
       args.push("--quiet");
     }
   }
-  // The sidecar builds its Program in-process, so the pinned `rootDir` has to
-  // travel the same channel every other tsgo option takes to it — the host flag
-  // set does not declare `--rootDir`, and `filterHostArgs` would strip it.
-  args.push(
-    ...createNativeTsgoArgs(options, pinnedRootDirArgs(execution, options)),
-  );
   return args;
+}
+
+/**
+ * The forwarded-tsgo payload for a native `build`/`check` emit invocation.
+ *
+ * The sidecar builds its Program in-process, so the pinned `rootDir` has to
+ * travel the same channel every other tsgo option takes to it — the host flag
+ * set does not declare `--rootDir`, and `filterHostArgs` would strip it.
+ */
+function createNativeBuildTsgoArgs(
+  execution: ReturnType<typeof resolveExecutionContext>,
+  options: RunBuildOptions,
+): string | undefined {
+  return createNativeTsgoArgs(options, pinnedRootDirArgs(execution, options));
 }
 
 /** Build the argument list for a native plugin check/fix/format invocation. */
@@ -1440,7 +1471,6 @@ function createNativeCheckArgs(
   }
   args.push(...createNativeCheckThreadingArgs(options, plugin));
   args.push(...createNativeCheckDiagnosticsArgs(options, plugin));
-  args.push(...createNativeTsgoArgs(options));
   return args;
 }
 
@@ -1550,15 +1580,37 @@ function transformHostTimingLabel(
 
 /**
  * Forward the tsgo flags ttsc did not recognize to a native sidecar as one
- * JSON-encoded `--tsgo-args` flag. The sidecar replays them through tsgo's own
- * option parser onto `CompilerOptions`, so a flag like `ttsc --strict` reaches
- * a plugin build the same way it reaches the plain tsgo lane. Encoded as a
- * single token so the sidecars' unknown-flag filters keep it intact.
+ * JSON-encoded payload. The sidecar replays them through tsgo's own option
+ * parser onto `CompilerOptions`, so a flag like `ttsc --strict` reaches a
+ * plugin build the same way it reaches the plain tsgo lane.
+ *
+ * The payload travels in the `TTSC_TSGO_ARGS` environment variable, not on the
+ * sidecar's command line. #113 shipped it as a `--tsgo-args` flag, which is an
+ * addition to a plugin protocol third-party hosts had already frozen: a Go
+ * `flag.FlagSet` created with `flag.ContinueOnError` treats an undeclared flag
+ * as fatal, so every pre-#113 sidecar answered `flag provided but not defined:
+ * -tsgo-args` and exited 2. That took down `ttsc --strict`, `ttsc
+ * --declaration`, `ttsx --strict` and — because {@link isolatedTsgoOutputArgs}
+ * makes this payload non-empty on its own — plain `ttsc <file.ts>`, on every
+ * project carrying a typia/nestia-era transform host (issue #1188).
+ *
+ * The environment is the channel ttsc already uses for host-owned payloads that
+ * must not collide with a third-party flag set (`TTSC_LINKED_PLUGINS_JSON`,
+ * `TTSC_PLUGIN_CONFIG_DIR`). It reaches those hosts without any change on their
+ * side, because `buildSourcePlugin.ts::sourceBuildWorkspaceReplacements` builds
+ * every source plugin against the installed ttsc's own driver, and
+ * `driver.LoadProgram` reads the variable whenever the caller supplied no
+ * explicit argv. It is strictly better than the capability gate `ad3443a` used
+ * for `--singleThreaded` / `--checkers`: that one drops the flag for hosts that
+ * cannot take it, which is acceptable for a threading knob and not for
+ * `--strict`.
+ *
+ * Returns the JSON payload, or `undefined` when this lane forwards nothing.
  */
 function createNativeTsgoArgs(
   options: TtscCommonOptions,
   leading: readonly string[] = [],
-): string[] {
+): string | undefined {
   const passthrough = [
     // Ahead of the user's own flags, so the same precedence holds here as on
     // the direct tsgo lane: whatever the user forwarded wins.
@@ -1567,9 +1619,9 @@ function createNativeTsgoArgs(
     ...isolatedTsgoOutputArgs(options),
   ];
   if (passthrough.length === 0) {
-    return [];
+    return undefined;
   }
-  return ["--tsgo-args=" + JSON.stringify(passthrough)];
+  return JSON.stringify(passthrough);
 }
 
 function isolatedTsgoOutputArgs(options: TtscCommonOptions): string[] {
@@ -1678,6 +1730,7 @@ function runNativeCheckPlugins(
       "ttsc.check",
       timing,
       `ttsc check plugin ${plugin.name} time`,
+      createNativeTsgoArgs(options),
     );
     out = appendBuildOutput(out, result);
     if (result.status !== 0) {
@@ -1949,11 +2002,12 @@ function runNativePluginCommand(
   label: string,
   timing: BuildTiming,
   timingLabel: string,
+  tsgoArgs?: string,
 ): TtscBuildResult {
   const startedAt = process.hrtime.bigint();
   const res = spawnNative(plugin.binary, args, {
     cwd: execution.projectRoot,
-    env: nativePluginEnv(options.env, execution, plugin),
+    env: nativePluginEnv(options.env, execution, plugin, tsgoArgs),
     encoding: "utf8",
   });
   recordTiming(timing, timingLabel, startedAt);
@@ -2047,7 +2101,7 @@ function resolveExecutionContext(
         cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
         cwd,
         entries: options.plugins,
-        env: { ...process.env, ...options.env },
+        env: inheritedSidecarEnv(options.env),
         onWatchInputs: options.onWatchInputs,
         pluginConfigDir: options.pluginConfigDir,
         projectRoot,

@@ -19,6 +19,8 @@ import { resolveTsgo } from "./resolveTsgo";
 import { appendBuildOutput, normalizeBuildOutput } from "./runBuild";
 import {
   assertSharedHostCompatibility,
+  clearInheritedTsgoArgs,
+  inheritedSidecarEnv,
   linkedTransformPlugins,
   resolvePluginConfigDir,
   selectSharedHostPlugin,
@@ -94,7 +96,7 @@ function transformProjectWithNativeHost(
     ["api-transform", "--cwd", project.root, "--tsconfig", project.path],
     {
       cwd: project.root,
-      env: { ...process.env, ...options.env },
+      env: inheritedSidecarEnv(options.env),
     },
   );
   if (res.error) {
@@ -136,7 +138,7 @@ function transformProjectWithPlugins(
     cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
     cwd,
     entries: options.plugins,
-    env: { ...process.env, ...options.env },
+    env: inheritedSidecarEnv(options.env),
     pluginConfigDir: options.pluginConfigDir,
     projectRoot: options.projectRoot,
     tsconfig: project.path,
@@ -385,6 +387,9 @@ function nativePluginEnv(
   ) {
     delete env.TTSC_PLUGIN_CONFIG_DIR;
   }
+  // This lane forwards no tsgo argv of its own, so anything inherited belongs
+  // to an outer ttsc run and must not reach these sidecars.
+  clearInheritedTsgoArgs(env, options.env);
   if (plugin?.stage === "transform") {
     const linked = linkedTransformPlugins(nativePlugins ?? []);
     if (linked.length !== 0) {

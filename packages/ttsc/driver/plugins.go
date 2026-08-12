@@ -27,6 +27,44 @@ const LinkedPluginsEnv = "TTSC_LINKED_PLUGINS_JSON"
 // still receive it.
 const PluginConfigDirEnv = "TTSC_PLUGIN_CONFIG_DIR"
 
+// TsgoArgsEnv is the environment variable through which the ttsc launcher
+// passes the tsgo CLI flags it did not consume itself (`--strict`,
+// `--declaration`, the single-file lane's output containment, …) to a native
+// sidecar. The value is a JSON array of argv tokens; an empty or absent value
+// means nothing was forwarded.
+//
+// It rides the environment for the same reason PluginConfigDirEnv does, only
+// with sharper consequences. The payload used to travel as a `--tsgo-args`
+// flag, which #113 appended to a plugin protocol third-party hosts had already
+// frozen. A Go `flag.FlagSet` created with `flag.ContinueOnError` treats an
+// undeclared flag as fatal, so every sidecar built before #113 answered
+// `flag provided but not defined: -tsgo-args` and exited 2 — including on
+// `ttsc <file.ts>`, where the launcher forwards its own output-containment
+// flags and the user passed nothing at all (issue #1188). An unknown
+// environment variable is inert to every host; an unknown flag is fatal to all
+// of them. ttsc's own hosts still accept `--tsgo-args` so an older launcher
+// paired with a newer host keeps working.
+const TsgoArgsEnv = "TTSC_TSGO_ARGS"
+
+// TsgoArgsFromEnv decodes the forwarded tsgo argv the launcher published in
+// TsgoArgsEnv. An absent or whitespace-only value yields a nil slice and no
+// error, so a host can call this unconditionally.
+//
+// Hosts that also declare a `--tsgo-args` flag should prefer the explicit flag
+// value and fall back to this; LoadProgram already does that for every
+// driver-based host.
+func TsgoArgsFromEnv() ([]string, error) {
+  raw := strings.TrimSpace(os.Getenv(TsgoArgsEnv))
+  if raw == "" {
+    return nil, nil
+  }
+  var args []string
+  if err := json.Unmarshal([]byte(raw), &args); err != nil {
+    return nil, fmt.Errorf("ttsc driver: invalid %s: %w", TsgoArgsEnv, err)
+  }
+  return args, nil
+}
+
 // PluginConfigBaseDir returns the directory where a plugin anchors its
 // config-file discovery walk and resolves relative "configFile" paths.
 // The explicit PluginConfigDirEnv channel wins when set; otherwise the
