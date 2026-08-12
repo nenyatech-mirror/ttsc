@@ -245,8 +245,12 @@ function resolveConfigFileContributors(
     configFile !== undefined
       ? path.resolve(pluginConfigBaseDir(context), configFile)
       : findLintConfigFile(context);
+  const configInputs =
+    configFile !== undefined
+      ? [configPath]
+      : lintConfigDiscoveryInputs(context, configPath);
   if (!configPath || !fs.existsSync(configPath)) {
-    return { contributors: [], hostInputs: configPath ? [configPath] : [] };
+    return { contributors: [], hostInputs: configInputs };
   }
 
   const evaluation = readConfigPluginEntries(configPath, context);
@@ -266,7 +270,7 @@ function resolveConfigFileContributors(
   return {
     contributors: out,
     hostInputs: [
-      configPath,
+      ...configInputs,
       ...evaluation.dependencies
         .filter(
           (dependency) =>
@@ -275,6 +279,34 @@ function resolveConfigFileContributors(
         .map((dependency) => dependency.path),
     ],
   };
+}
+
+/** Mirror native discovery while retaining missing higher-priority probes. */
+function lintConfigDiscoveryInputs(
+  context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
+  selected: string | undefined,
+): string[] {
+  const inputs: string[] = [];
+  const selectedPath =
+    selected === undefined ? undefined : path.resolve(selected);
+  for (const origin of discoveryConfigBaseDirs(context)) {
+    for (let directory = origin; ; directory = path.dirname(directory)) {
+      const candidates = LINT_CONFIG_FILENAMES.map((name) =>
+        path.join(directory, name),
+      );
+      inputs.push(...candidates);
+      if (
+        selectedPath !== undefined &&
+        candidates.some((candidate) => path.resolve(candidate) === selectedPath)
+      ) {
+        return [...new Set(inputs.map((input) => path.resolve(input)))];
+      }
+      if (candidates.some((candidate) => fs.existsSync(candidate))) break;
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+    }
+  }
+  return [...new Set(inputs.map((input) => path.resolve(input)))];
 }
 
 function assertContributorNamespacesDoNotCollide(

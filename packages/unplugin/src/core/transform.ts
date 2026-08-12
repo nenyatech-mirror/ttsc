@@ -485,10 +485,6 @@ interface TtscEnvelopeDerivation {
    * files, `undefined` until the first completeness predicate.
    */
   dependenciesComplete?: Set<string>;
-  /** Lazily collected identities of universal host inputs. */
-  hostInputs?: Set<string>;
-  /** Host inputs outside the project walk, guarded by exact-path watchers. */
-  externalHostInputs?: Set<string>;
   /**
    * Lazily built identity -> output source index of the `typescript` map (first
    * match wins, mirroring the historical scan). `undefined` until the first
@@ -1166,20 +1162,6 @@ function matchesNarrowPersistentInputs(
     return false;
   }
   const state = envelopeDerivation(cached);
-  const hostInputs = (state.hostInputs ??= new Set(
-    (cached.result.type === "exception"
-      ? []
-      : (cached.result.hostInputs ?? [])
-    ).map((input) => pathIdentityKey(input, state.identityContext)),
-  ));
-  const externalHostInputs = (state.externalHostInputs ??= new Set(
-    (cached.result.type === "exception" ? [] : (cached.result.hostInputs ?? []))
-      .filter(
-        (input) =>
-          !isProjectWalkPath(cached.projectRoot, input, state.identityContext),
-      )
-      .map((input) => pathIdentityKey(input, state.identityContext)),
-  ));
   const inputs = selectWatchInputs({
     file,
     projectRoot: cached.projectRoot,
@@ -1187,10 +1169,6 @@ function matchesNarrowPersistentInputs(
     temporaryTsconfig: cached.temporaryTsconfig,
   });
   for (const input of inputs) {
-    const identity = pathIdentityKey(input, state.identityContext);
-    if (hostInputs.has(identity) && externalHostInputs.has(identity)) {
-      continue;
-    }
     if (!matchesRecordedInput(cached, input)) {
       return false;
     }

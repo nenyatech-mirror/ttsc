@@ -36,6 +36,7 @@ export const test_ttsc_utility_plugins_descriptors_own_separate_native_source_di
           threadingArgs?: boolean;
         };
         reportsTypeScriptDiagnostics?: boolean;
+        reportsHostInputs?: boolean;
       }
     > = {
       lint: {
@@ -49,12 +50,21 @@ export const test_ttsc_utility_plugins_descriptors_own_separate_native_source_di
           threadingArgs: true,
         },
         reportsTypeScriptDiagnostics: true,
+        reportsHostInputs: true,
         source: "plugin",
         stage: "check",
       },
-      banner: { source: "driver", stage: "transform" },
+      banner: {
+        reportsHostInputs: true,
+        source: "driver",
+        stage: "transform",
+      },
       paths: { source: "driver", stage: "transform" },
-      strip: { source: "driver", stage: "transform" },
+      strip: {
+        reportsHostInputs: true,
+        source: "driver",
+        stage: "transform",
+      },
     };
     const seenDirs = new Set();
     for (const [name, expectation] of Object.entries(expectations)) {
@@ -67,6 +77,7 @@ export const test_ttsc_utility_plugins_descriptors_own_separate_native_source_di
       assert.equal(descriptor.stage, expectation.stage);
       assert.deepEqual(Object.keys(descriptor).sort(), [
         ...(expectation.capabilities !== undefined ? ["capabilities"] : []),
+        ...(expectation.reportsHostInputs === true ? ["hostInputs"] : []),
         "name",
         ...(expectation.reportsTypeScriptDiagnostics !== undefined
           ? ["reportsTypeScriptDiagnostics"]
@@ -74,6 +85,15 @@ export const test_ttsc_utility_plugins_descriptors_own_separate_native_source_di
         "source",
         "stage",
       ]);
+      if (expectation.reportsHostInputs === true) {
+        assert.ok(Array.isArray(descriptor.hostInputs));
+        assert.ok(
+          descriptor.hostInputs.every(
+            (input: unknown) =>
+              typeof input === "string" && path.isAbsolute(input),
+          ),
+        );
+      }
       if (expectation.capabilities !== undefined) {
         assert.deepEqual(descriptor.capabilities, expectation.capabilities);
       }

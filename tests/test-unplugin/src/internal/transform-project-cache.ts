@@ -434,6 +434,25 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     partitionGraph: true,
     unrelatedDirectoryCount: 48,
   });
+  const descriptorSelection = path.join(
+    TestProject.tmpdir("ttsc-unplugin-descriptor-selection-"),
+    "selection.cjs",
+  );
+  fs.writeFileSync(descriptorSelection, 'module.exports = "go-plugin";\n');
+  fs.writeFileSync(
+    path.join(project.root, "plugin.cjs"),
+    [
+      'const path = require("node:path");',
+      `const source = require(${JSON.stringify(descriptorSelection)});`,
+      "",
+      "module.exports = (context) => ({",
+      '  name: context.plugin.name ?? "cache-probe",',
+      "  source: path.resolve(context.dirname, source),",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
   const modules = projectModules(project.root);
   const cache = createTtscTransformCache();
   const options = resolveOptions();
@@ -558,10 +577,8 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     "utf8",
   );
   fs.writeFileSync(
-    path.join(project.root, "plugin.cjs"),
-    fs
-      .readFileSync(path.join(project.root, "plugin.cjs"), "utf8")
-      .replace('"go-plugin"', '"go-plugin-next"'),
+    descriptorSelection,
+    'module.exports = "go-plugin-next";\n',
     "utf8",
   );
   const reloaded = await deliver(main);
@@ -569,12 +586,12 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   assert.notEqual(
     [...cache.values()][0],
     membershipGeneration,
-    "an exact host descriptor input edit must replace the generation",
+    "an out-of-project descriptor dependency edit must replace the generation",
   );
   assert.match(
     reloaded.code,
     /DESCRIPTOR-RELOADED/,
-    "the replacement generation must evaluate the changed descriptor module",
+    "the replacement generation must reload the changed descriptor dependency",
   );
 }
 

@@ -783,14 +783,12 @@ function requirePluginEntry(
   }
 }
 
-/** Remove the prior descriptor package's CommonJS module generation. */
+/** Remove the prior descriptor's complete CommonJS dependency generation. */
 function purgePluginDescriptorModules(request: string): void {
-  const rootManifest = findNearestPackageJson(request);
-  const root = path.dirname(rootManifest ?? request);
   const seen = new Set<string>();
   const visit = (id: string): void => {
     const resolved = path.resolve(id);
-    if (seen.has(resolved) || !pathIsWithin(root, resolved)) return;
+    if (seen.has(resolved)) return;
     seen.add(resolved);
     const cached = require.cache[resolved];
     if (cached === undefined) return;
@@ -837,16 +835,6 @@ function validatePluginHostInputs(
     }
     return path.resolve(file);
   });
-}
-
-function pathIsWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return (
-    relative === "" ||
-    (relative !== ".." &&
-      !relative.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relative))
-  );
 }
 
 const TS_SOURCE_PATTERN = /\.(?:[cm]?ts|tsx)$/i;
