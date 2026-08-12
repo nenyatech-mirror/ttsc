@@ -2,6 +2,7 @@ import { TestProject } from "@ttsc/testing";
 
 import {
   assert,
+  buildSourcePlugin,
   computeCacheKey,
   createFakeGoBinary,
   fs,
@@ -17,7 +18,10 @@ import {
  *
  * 1. Compute a key and assert the initial GOROOT contents were read.
  * 2. Recompute unchanged and assert no GOROOT content file was read again.
- * 3. Edit one stdlib file and assert content reads and a new key return.
+ * 3. Build twice through the production entry and assert its permission repair
+ *    does not invalidate the memoized identity.
+ * 4. Edit, add, rename, and delete SDK files; assert each manifest change re-reads
+ *    content and changes the key.
  */
 export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
   () => {
@@ -30,9 +34,10 @@ export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
       "utf8",
     );
     fs.writeFileSync(path.join(plugin, "main.go"), "package main\n", "utf8");
-    const go = createFakeGoBinary(root);
     const goRoot = path.join(root, "go-root");
     const sourceFile = writeGoRoot(goRoot, "alpha");
+    fs.mkdirSync(path.join(goRoot, "bin"), { recursive: true });
+    const go = createFakeGoBinary(path.join(goRoot, "bin"));
     const previous = process.env.FAKE_GO_ENV_GOROOT;
     const originalRead = fs.readFileSync;
     let goRootReads = 0;
@@ -71,6 +76,42 @@ export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
       assert.equal(second, first);
       assert.equal(goRootReads, 0);
 
+      for (const file of [
+        "vendor/local/value.go",
+        "lib/helper.go",
+        "dist/generated.go",
+        "build/generated.go",
+      ]) {
+        fs.mkdirSync(path.dirname(path.join(plugin, file)), {
+          recursive: true,
+        });
+        fs.writeFileSync(path.join(plugin, file), "package main\n", "utf8");
+      }
+      const build = () =>
+        buildSourcePlugin({
+          baseDir: root,
+          cacheDir: path.join(root, "cache"),
+          env: {
+            ...process.env,
+            FAKE_GO_ENV_GOROOT: goRoot,
+            TTSC_GO_BINARY: go,
+          },
+          overlayDirs: [],
+          pluginName: "goroot-memo",
+          quiet: true,
+          source: plugin,
+          ttscVersion: "1.0.0",
+          tsgoVersion: "7.0.0-dev",
+        });
+      build();
+      goRootReads = 0;
+      build();
+      assert.equal(
+        goRootReads,
+        0,
+        "production permission repair must preserve an unchanged GOROOT signature",
+      );
+
       fs.writeFileSync(
         sourceFile,
         'package fmt\nconst marker = "bravo"\n',
@@ -80,6 +121,26 @@ export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
       const third = key();
       assert.notEqual(third, first);
       assert.ok(goRootReads > 0, "a changed manifest must re-read GOROOT");
+
+      const added = path.join(goRoot, "src", "fmt", "added.go");
+      fs.writeFileSync(added, "package fmt\n", "utf8");
+      goRootReads = 0;
+      const fourth = key();
+      assert.notEqual(fourth, third);
+      assert.ok(goRootReads > 0, "an added file must re-read GOROOT");
+
+      const renamed = path.join(goRoot, "src", "fmt", "renamed.go");
+      fs.renameSync(added, renamed);
+      goRootReads = 0;
+      const fifth = key();
+      assert.notEqual(fifth, fourth);
+      assert.ok(goRootReads > 0, "a renamed file must re-read GOROOT");
+
+      fs.rmSync(renamed);
+      goRootReads = 0;
+      const sixth = key();
+      assert.notEqual(sixth, fifth);
+      assert.ok(goRootReads > 0, "a deleted file must re-read GOROOT");
     } finally {
       (fs as { readFileSync: typeof fs.readFileSync }).readFileSync =
         originalRead;

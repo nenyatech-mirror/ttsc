@@ -1946,18 +1946,26 @@ function ensureExecutableGoToolchain(goBinary: string): void {
   if (process.platform === "win32") return;
   if (!path.isAbsolute(goBinary) || !fs.existsSync(goBinary)) return;
   try {
-    fs.chmodSync(goBinary, 0o755);
+    ensureExecutableFile(goBinary);
     const goRoot = inferGoRoot(goBinary);
     if (!goRoot) return;
     const gofmt = path.join(path.dirname(goBinary), "gofmt");
-    if (fs.existsSync(gofmt)) fs.chmodSync(gofmt, 0o755);
+    if (fs.existsSync(gofmt)) ensureExecutableFile(gofmt);
     const toolDir = path.join(goRoot, "pkg", "tool");
     if (!fs.existsSync(toolDir)) return;
     for (const file of walkToolFiles(toolDir)) {
-      fs.chmodSync(file, 0o755);
+      ensureExecutableFile(file);
     }
   } catch {
     // Let the subsequent go build spawn fail with the real OS error.
+  }
+}
+
+/** Add missing execute bits without rewriting already-correct metadata. */
+function ensureExecutableFile(file: string): void {
+  const mode = fs.statSync(file).mode & 0o777;
+  if ((mode & 0o111) !== 0o111) {
+    fs.chmodSync(file, mode | 0o111);
   }
 }
 
