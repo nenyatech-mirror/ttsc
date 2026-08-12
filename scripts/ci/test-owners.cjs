@@ -103,6 +103,7 @@ const OWNERSHIP = {
     "scripts/test-go.cjs harness",
   "node:scripts/go-wasm-exec.test.cjs": "scripts/test-go.cjs harness",
   "node:website/test/rss-autodiscovery.test.cjs": "website postbuild",
+  "node:website/test/slides.test.cjs": "website postbuild",
   "node:website/test/typia-dependency-graph.test.cjs": "website postbuild",
 };
 
