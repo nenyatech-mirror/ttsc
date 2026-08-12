@@ -1,6 +1,7 @@
 // @ts-check
 "use strict";
 
+const fs = require("node:fs");
 const path = require("node:path");
 
 // Keys from the tsconfig plugin entry that @ttsc/strip accepts. All other keys
@@ -29,6 +30,7 @@ module.exports = function createTtscStrip(context) {
     }
   }
   return {
+    hostInputs: stripConfigInputs(context),
     name: "@ttsc/strip",
     // `context.dirname` is this descriptor's own directory in every load mode —
     // the ESM-safe replacement for `__dirname`.
@@ -36,3 +38,38 @@ module.exports = function createTtscStrip(context) {
     stage: "transform",
   };
 };
+
+const STRIP_CONFIG_FILENAMES = [
+  "strip.config.ts",
+  "strip.config.mts",
+  "strip.config.cts",
+  "strip.config.js",
+  "strip.config.mjs",
+  "strip.config.cjs",
+  "strip.config.json",
+];
+
+function stripConfigInputs(context) {
+  const configFile = context.plugin?.configFile;
+  const base = path.resolve(
+    context.pluginConfigDir ?? path.dirname(context.tsconfig),
+  );
+  if (typeof configFile === "string" && configFile.trim() !== "") {
+    return [
+      path.isAbsolute(configFile)
+        ? path.resolve(configFile)
+        : path.resolve(base, configFile),
+    ];
+  }
+  const inputs = [];
+  for (let directory = base; ; directory = path.dirname(directory)) {
+    const candidates = STRIP_CONFIG_FILENAMES.map((name) =>
+      path.join(directory, name),
+    );
+    inputs.push(...candidates);
+    if (candidates.some((file) => fs.existsSync(file))) break;
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+  }
+  return inputs;
+}

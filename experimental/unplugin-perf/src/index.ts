@@ -81,7 +81,7 @@ async function main(): Promise<void> {
     "\nScenario D — graph envelope without a build boundary (Vite serve):",
   );
   console.log(
-    "  invariant: validation reads and directory stats stay bounded per module,",
+    "  invariant: validation reads and synchronous stats stay bounded per module,",
   );
   console.log("  not the whole input union or project directory count\n");
   recordFailure(
@@ -441,7 +441,7 @@ function instrumentReadFileSync(): {
   return counter;
 }
 
-/** Wrap `fs.statSync` to gate directory-membership validation per module. */
+/** Wrap `fs.statSync` to gate synchronous validation work per module. */
 function instrumentStatSync(): { calls: number; restore: () => void } {
   const original = fs.statSync;
   const counter = { calls: 0, restore: () => undefined };

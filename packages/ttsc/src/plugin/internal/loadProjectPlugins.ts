@@ -113,7 +113,7 @@ export function loadProjectPlugins(options: {
   const loadedEntries = entries.map((entry) => {
     const request = resolvePluginEntryRequest(entry.config, entry.baseDir);
     return {
-      plugin: loadPluginEntry(
+      ...loadPluginEntry(
         entry.config,
         { ...context, plugin: entry.config },
         request,
@@ -160,6 +160,10 @@ export function loadProjectPlugins(options: {
       reportsTypeScriptDiagnostics:
         plugin.reportsTypeScriptDiagnostics === true,
       request: loadedEntries[index]!.request,
+      hostInputs: [
+        ...loadedEntries[index]!.hostInputs,
+        ...validatePluginHostInputs(plugin, index),
+      ],
       source,
       stage,
     };
@@ -267,6 +271,7 @@ function collectHostInputs(
   context: { pluginConfigDir?: string },
   records: readonly {
     config: ITtscProjectPluginConfig;
+    hostInputs: readonly string[];
     request: string;
   }[],
 ): string[] {
@@ -274,6 +279,9 @@ function collectHostInputs(
   const configBase = context.pluginConfigDir ?? path.dirname(project.path);
   for (const record of records) {
     inputs.add(path.resolve(record.request));
+    for (const hostInput of record.hostInputs) {
+      inputs.add(path.resolve(hostInput));
+    }
     const descriptorManifest = findNearestPackageJson(record.request);
     if (descriptorManifest !== undefined) {
       inputs.add(path.resolve(descriptorManifest));
@@ -300,6 +308,19 @@ export function collectProjectHostInputs(
   const manifest = findNearestPackageJson(project.root);
   if (manifest !== undefined) {
     inputs.add(path.resolve(manifest));
+    const projectManifest = readPackageManifest(manifest);
+    if (projectManifest !== undefined) {
+      const projectRoot = path.dirname(manifest);
+      for (const dependency of directDependencyNames(projectManifest)) {
+        const dependencyManifest = resolveDependencyPackageJson(
+          dependency,
+          projectRoot,
+        );
+        if (dependencyManifest !== undefined) {
+          inputs.add(path.resolve(dependencyManifest));
+        }
+      }
+    }
   }
   return [...inputs].sort();
 }
@@ -677,7 +698,7 @@ function loadPluginEntry(
   base: Omit<ITtscPluginFactoryContext, "dirname" | "filename">,
   request: string,
   effectiveEnv: NodeJS.ProcessEnv,
-): ITtscPlugin {
+): { hostInputs: string[]; plugin: ITtscPlugin } {
   return withPluginLoaderEnv(() => {
     const specifier = entry.transform;
     if (typeof specifier !== "string" || specifier.length === 0) {
@@ -696,7 +717,8 @@ function loadPluginEntry(
       dirname: path.dirname(request),
       filename: request,
     };
-    const mod = requirePluginEntry(request, context, effectiveEnv) as {
+    const loaded = requirePluginEntry(request, context, effectiveEnv);
+    const mod = loaded.value as {
       createTtscPlugin?: TtscPluginFactory;
       default?: ITtscPlugin | TtscPluginFactory;
     } & Partial<Record<"plugin", ITtscPlugin | TtscPluginFactory>>;
@@ -713,11 +735,11 @@ function loadPluginEntry(
         );
       }
       rejectJsTransformFunctions(specifier, plugin);
-      return plugin;
+      return { hostInputs: loaded.inputs, plugin };
     }
     if (isTtscPlugin(candidate)) {
       rejectJsTransformFunctions(specifier, candidate);
-      return candidate;
+      return { hostInputs: loaded.inputs, plugin: candidate };
     }
     throw new Error(
       `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
@@ -744,9 +766,11 @@ function requirePluginEntry(
   request: string,
   context: ITtscPluginFactoryContext,
   effectiveEnv: NodeJS.ProcessEnv,
-): unknown {
+): { inputs: string[]; value: unknown } {
+  purgePluginDescriptorModules(request);
   try {
-    return require(request);
+    const value = require(request);
+    return { inputs: collectPluginDescriptorModules(request), value };
   } catch (error) {
     if (!TS_SOURCE_PATTERN.test(request)) {
       throw error;
@@ -755,8 +779,74 @@ function requirePluginEntry(
     if (descriptor === undefined) {
       throw error;
     }
-    return { default: descriptor };
+    return { inputs: [path.resolve(request)], value: { default: descriptor } };
   }
+}
+
+/** Remove the prior descriptor package's CommonJS module generation. */
+function purgePluginDescriptorModules(request: string): void {
+  const rootManifest = findNearestPackageJson(request);
+  const root = path.dirname(rootManifest ?? request);
+  const seen = new Set<string>();
+  const visit = (id: string): void => {
+    const resolved = path.resolve(id);
+    if (seen.has(resolved) || !pathIsWithin(root, resolved)) return;
+    seen.add(resolved);
+    const cached = require.cache[resolved];
+    if (cached === undefined) return;
+    for (const child of cached.children) visit(child.id);
+    delete require.cache[resolved];
+  };
+  visit(request);
+}
+
+/** Collect the descriptor's loaded CommonJS dependency graph. */
+function collectPluginDescriptorModules(request: string): string[] {
+  const output = new Set<string>([path.resolve(request)]);
+  const seen = new Set<string>();
+  const visit = (id: string): void => {
+    const resolved = path.resolve(id);
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
+    const cached = require.cache[resolved];
+    if (cached === undefined) return;
+    output.add(resolved);
+    for (const child of cached.children) visit(child.id);
+  };
+  visit(request);
+  return [...output].sort();
+}
+
+/** Validate plugin-declared universal host inputs. */
+function validatePluginHostInputs(
+  plugin: ITtscPlugin,
+  index: number,
+): string[] {
+  const label = plugin.name ?? `#${index + 1}`;
+  if (plugin.hostInputs === undefined) return [];
+  if (!Array.isArray(plugin.hostInputs)) {
+    throw new Error(
+      `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputs"; expected an array of absolute paths`,
+    );
+  }
+  return plugin.hostInputs.map((file) => {
+    if (typeof file !== "string" || !path.isAbsolute(file)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputs" entry ${JSON.stringify(file)}; expected an absolute path`,
+      );
+    }
+    return path.resolve(file);
+  });
+}
+
+function pathIsWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
 }
 
 const TS_SOURCE_PATTERN = /\.(?:[cm]?ts|tsx)$/i;

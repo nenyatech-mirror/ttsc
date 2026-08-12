@@ -165,6 +165,47 @@ async function assertAliasOverlayDiscoversProjectBannerConfig() {
   assert.match(result.code, /Fixture Banner Text/);
 }
 
+/** Assert a persistent generation reloads an implicitly discovered config. */
+async function assertPersistentBannerConfigEditInvalidatesTransform() {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const root = createUtilityPluginProject({
+    files: {
+      "banner.config.json": JSON.stringify({ text: "OLD BANNER" }),
+    },
+    plugin: "banner",
+    source: 'export const value: string = "kept";\n',
+  });
+  const file = TestUnpluginProject.mainFile(root);
+  const source = TestUnpluginProject.mainSource(root);
+  const cache = createTtscTransformCache();
+  const first = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(first);
+  assert.match(first.code, /OLD BANNER/);
+
+  fs.writeFileSync(
+    path.join(root, "banner.config.json"),
+    JSON.stringify({ text: "NEW BANNER" }),
+    "utf8",
+  );
+  const second = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(second);
+  assert.match(second.code, /NEW BANNER/);
+  assert.doesNotMatch(second.code, /OLD BANNER/);
+}
+
 /**
  * Asserts that a relative `configFile` on a tsconfig-declared plugin entry
  * resolves against the project even when the compile runs through the generated
@@ -255,4 +296,5 @@ export {
   assertAliasOverlayIgnoresStripConfigPlantedInTempDir,
   assertAliasOverlayMatchesNoAliasStripOutput,
   assertAliasOverlayResolvesRelativeConfigFile,
+  assertPersistentBannerConfigEditInvalidatesTransform,
 };

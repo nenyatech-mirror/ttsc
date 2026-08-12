@@ -1,3 +1,4 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -51,6 +52,14 @@ interface TtscProjectDirectorySnapshot {
   signature: string;
 }
 
+/** Generation-scoped directory watchers used to detect membership changes. */
+interface TtscProjectMutationTracker {
+  close: () => void;
+  failed: boolean;
+  membershipChanged: boolean;
+  settle?: Promise<void>;
+}
+
 /**
  * A single entry in the project transform cache.
  *
@@ -87,14 +96,12 @@ export interface TtscCachedProjectTransform {
    * transform.
    */
   inputHashes: Record<string, string>;
-  /**
-   * Metadata snapshot of every directory in the project walk. Persistent
-   * validation uses it to detect file/directory creation, deletion, and rename
-   * once per event-loop turn, shared by all sibling module deliveries.
-   */
+  /** Metadata snapshot of every directory in the stable generation walk. */
   projectDirectories?: TtscProjectDirectorySnapshot[];
-  /** True after project membership was validated in the current event turn. */
-  projectMembershipValidated?: boolean;
+  /** Live notification state for universal host-input changes. */
+  hostInputMutationTracker?: TtscProjectMutationTracker;
+  /** Live notification state for file/directory creation, deletion, and rename. */
+  projectMutationTracker?: TtscProjectMutationTracker;
   /**
    * Whether the generation-time project walk observed every directory and file
    * it attempted to snapshot. An incomplete walk may never authorize narrow
@@ -159,7 +166,7 @@ export function createTtscTransformCache(): TtscTransformCache {
  * defines one process-scoped module-loading session.
  */
 export function beginTtscTransformBuild(cache: TtscTransformCache): void {
-  cache.clear();
+  clearTtscTransformCache(cache);
   BUILD_SCOPED_TRANSFORM_CACHES.add(cache);
 }
 
@@ -171,8 +178,17 @@ export function beginTtscTransformBuild(cache: TtscTransformCache): void {
  * many edits, so that callback cannot authorize build-scoped shortcuts.
  */
 export function resetTtscTransformCache(cache: TtscTransformCache): void {
-  cache.clear();
+  clearTtscTransformCache(cache);
   BUILD_SCOPED_TRANSFORM_CACHES.delete(cache);
+}
+
+/** Dispose generation-owned filesystem resources before clearing a cache. */
+function clearTtscTransformCache(cache: TtscTransformCache): void {
+  const generations = [...cache.values()];
+  cache.clear();
+  for (const generation of generations) {
+    void generation.then(disposeCachedTransform, () => undefined);
+  }
 }
 
 /**
@@ -269,6 +285,14 @@ export async function transformTtsc(
       if (cache?.get(key) !== transformed) {
         continue;
       }
+      const buildScoped =
+        cache !== undefined && BUILD_SCOPED_TRANSFORM_CACHES.has(cache);
+      if (!buildScoped) {
+        await settleProjectMutationEvents(cached);
+        if (cache?.get(key) !== transformed) {
+          continue;
+        }
+      }
       if (
         // A file the plugin declared volatile must never be served from the
         // cache: its output depends on non-file inputs, so the input-hash
@@ -278,12 +302,7 @@ export async function transformTtsc(
           projectRoot: cached.projectRoot,
           result: cached.result,
         }) &&
-        matchesCachedSource(
-          cached,
-          file,
-          source,
-          cache !== undefined && BUILD_SCOPED_TRANSFORM_CACHES.has(cache),
-        )
+        matchesCachedSource(cached, file, source, buildScoped)
       ) {
         reportSuccessDiagnostics(cached.result);
         // A resolved `"exception"` / `"failure"` envelope makes this throw;
@@ -319,6 +338,7 @@ export async function transformTtsc(
         currentFile: file,
         currentSource: source,
         plugins: options.plugins,
+        trackProjectMembership: cache !== undefined,
         tsconfig,
       });
       cache?.set(key, transformed);
@@ -405,7 +425,19 @@ function evictGeneration(
 ): void {
   if (cache?.get(key) === generation) {
     cache.delete(key);
+    void generation.then(disposeCachedTransform, () => undefined);
   }
+}
+
+/** Close one generation's directory watchers exactly once. */
+function disposeCachedTransform(cached: TtscCachedProjectTransform): void {
+  const trackers = [
+    cached.projectMutationTracker,
+    cached.hostInputMutationTracker,
+  ];
+  cached.projectMutationTracker = undefined;
+  cached.hostInputMutationTracker = undefined;
+  for (const tracker of trackers) tracker?.close();
 }
 
 /**
@@ -453,6 +485,10 @@ interface TtscEnvelopeDerivation {
    * files, `undefined` until the first completeness predicate.
    */
   dependenciesComplete?: Set<string>;
+  /** Lazily collected identities of universal host inputs. */
+  hostInputs?: Set<string>;
+  /** Host inputs outside the project walk, guarded by exact-path watchers. */
+  externalHostInputs?: Set<string>;
   /**
    * Lazily built identity -> output source index of the `typescript` map (first
    * match wins, mirroring the historical scan). `undefined` until the first
@@ -1099,7 +1135,9 @@ function matchesCachedSource(
     cached.result.type !== "exception" &&
     cached.result.graph !== undefined &&
     cached.projectSnapshotComplete === true &&
-    cached.projectDirectories !== undefined
+    cached.projectDirectories !== undefined &&
+    cached.projectMutationTracker !== undefined &&
+    cached.hostInputMutationTracker !== undefined
   ) {
     return matchesNarrowPersistentInputs(cached, file);
   }
@@ -1119,6 +1157,29 @@ function matchesNarrowPersistentInputs(
   if (!matchesProjectMembership(cached)) {
     return false;
   }
+  const hostTracker = cached.hostInputMutationTracker;
+  if (
+    hostTracker === undefined ||
+    hostTracker.failed ||
+    hostTracker.membershipChanged
+  ) {
+    return false;
+  }
+  const state = envelopeDerivation(cached);
+  const hostInputs = (state.hostInputs ??= new Set(
+    (cached.result.type === "exception"
+      ? []
+      : (cached.result.hostInputs ?? [])
+    ).map((input) => pathIdentityKey(input, state.identityContext)),
+  ));
+  const externalHostInputs = (state.externalHostInputs ??= new Set(
+    (cached.result.type === "exception" ? [] : (cached.result.hostInputs ?? []))
+      .filter(
+        (input) =>
+          !isProjectWalkPath(cached.projectRoot, input, state.identityContext),
+      )
+      .map((input) => pathIdentityKey(input, state.identityContext)),
+  ));
   const inputs = selectWatchInputs({
     file,
     projectRoot: cached.projectRoot,
@@ -1126,6 +1187,10 @@ function matchesNarrowPersistentInputs(
     temporaryTsconfig: cached.temporaryTsconfig,
   });
   for (const input of inputs) {
+    const identity = pathIdentityKey(input, state.identityContext);
+    if (hostInputs.has(identity) && externalHostInputs.has(identity)) {
+      continue;
+    }
     if (!matchesRecordedInput(cached, input)) {
       return false;
     }
@@ -1139,12 +1204,18 @@ function matchesCompleteInputSnapshot(
   currentKey: string,
   source: string,
 ): boolean {
-  const currentHashes = collectProjectInputHashes(
+  if (cached.projectSnapshotComplete !== true) {
+    return false;
+  }
+  const current = collectProjectInputSnapshot(
     cached.projectRoot,
     envelopeDerivation(cached).identityContext,
   );
-  currentHashes[currentKey] = hashText(source);
-  if (!sameHashes(cached.inputHashes, currentHashes)) {
+  if (!current.complete) {
+    return false;
+  }
+  current.hashes[currentKey] = hashText(source);
+  if (!sameHashes(cached.inputHashes, current.hashes)) {
     return false;
   }
   // Re-hash the out-of-walk inputs the compiler reported for this generation
@@ -1203,37 +1274,6 @@ function markCachedSourceServed(
   (cached.servedFiles ??= new Set()).add(
     pathIdentityKey(file, envelopeDerivation(cached).identityContext),
   );
-}
-
-/**
- * Build the input-hash snapshot stored alongside a fresh compiler result.
- *
- * Hashes every file under the project directory (the exact universe
- * {@link matchesCachedSource} re-hashes to validate), then overlays the
- * in-memory source for the module that triggered the compile so unsaved editor
- * content is captured correctly.
- *
- * Only the project's own files are hashed. Out-of-walk program inputs the
- * compiler also read (`node_modules` declarations, sibling-package sources) are
- * deliberately excluded: the validator never reproduces those keys, so keying
- * them here would make every snapshot comparison fail and the cache never hit.
- */
-function collectInputSnapshot(props: {
-  currentFile: string;
-  currentSource: string;
-  projectRoot: string;
-}): {
-  complete: boolean;
-  hashes: Record<string, string>;
-  projectDirectories: TtscProjectDirectorySnapshot[];
-} {
-  const identities = createHostPathIdentityContext();
-  const snapshot = collectProjectInputSnapshot(props.projectRoot, identities);
-  // Overlay the in-memory source so unsaved edits invalidate the cache.
-  snapshot.hashes[
-    toProjectKey(props.projectRoot, props.currentFile, identities)
-  ] = hashText(props.currentSource);
-  return snapshot;
 }
 
 /**
@@ -1357,29 +1397,293 @@ function projectDirectorySignature(directory: string): string | undefined {
   }
 }
 
-/** Prove that the project walk's directory membership has not changed. */
-function matchesProjectDirectorySnapshot(
-  directories: readonly TtscProjectDirectorySnapshot[],
+/** Compare two deterministic project-directory membership snapshots. */
+function sameProjectDirectories(
+  left: readonly TtscProjectDirectorySnapshot[],
+  right: readonly TtscProjectDirectorySnapshot[],
 ): boolean {
-  return directories.every(
-    (directory) =>
-      projectDirectorySignature(directory.path) === directory.signature,
+  return (
+    left.length === right.length &&
+    left.every(
+      (directory, index) =>
+        directory.path === right[index]?.path &&
+        directory.signature === right[index]?.signature,
+    )
   );
 }
 
-/** Share one complete membership check across sibling deliveries in one turn. */
-function matchesProjectMembership(cached: TtscCachedProjectTransform): boolean {
-  if (cached.projectMembershipValidated === true) {
-    return true;
+/** Watch every walked directory for membership changes after generation. */
+async function createProjectMutationTracker(
+  directories: readonly TtscProjectDirectorySnapshot[],
+): Promise<TtscProjectMutationTracker> {
+  const tracker: TtscProjectMutationTracker = {
+    close: () => undefined,
+    failed: false,
+    membershipChanged: false,
+  };
+  if (process.platform === "win32") {
+    await registerWindowsProjectMutationTracker(
+      tracker,
+      directories.map((directory) => directory.path),
+      false,
+    );
+    return tracker;
   }
-  if (!matchesProjectDirectorySnapshot(cached.projectDirectories ?? [])) {
-    return false;
+  const watchers: fs.FSWatcher[] = [];
+  tracker.close = () => {
+    for (const watcher of watchers) watcher.close();
+    watchers.length = 0;
+  };
+  for (const directory of directories) {
+    try {
+      const watcher = fs.watch(
+        directory.path,
+        { persistent: false },
+        (eventType) => {
+          if (eventType === "rename") tracker.membershipChanged = true;
+        },
+      );
+      watcher.on("error", () => {
+        tracker.failed = true;
+      });
+      watchers.push(watcher);
+    } catch {
+      tracker.failed = true;
+    }
   }
-  cached.projectMembershipValidated = true;
-  setImmediate(() => {
-    cached.projectMembershipValidated = false;
+  return tracker;
+}
+
+/** Watch exact universal inputs, or their nearest existing parent if missing. */
+async function createHostInputMutationTracker(
+  inputs: readonly string[],
+): Promise<TtscProjectMutationTracker> {
+  const locations = new Set<string>();
+  for (const input of inputs) {
+    let current = path.resolve(input);
+    while (!fs.existsSync(current)) {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    locations.add(current);
+  }
+  const tracker: TtscProjectMutationTracker = {
+    close: () => undefined,
+    failed: false,
+    membershipChanged: false,
+  };
+  if (process.platform === "win32") {
+    await registerWindowsProjectMutationTracker(tracker, [...locations], true);
+    return tracker;
+  }
+  const watchers: fs.FSWatcher[] = [];
+  tracker.close = () => {
+    for (const watcher of watchers) watcher.close();
+    watchers.length = 0;
+  };
+  for (const location of locations) {
+    try {
+      const watcher = fs.watch(location, { persistent: false }, () => {
+        tracker.membershipChanged = true;
+      });
+      watcher.on("error", () => {
+        tracker.failed = true;
+      });
+      watchers.push(watcher);
+    } catch {
+      tracker.failed = true;
+    }
+  }
+  return tracker;
+}
+
+interface WindowsProjectMutationBroker {
+  child: ChildProcess;
+  nextId: number;
+  pendingRegistrations: number;
+  trackers: Map<
+    number,
+    {
+      ready: () => void;
+      tracker: TtscProjectMutationTracker;
+    }
+  >;
+}
+
+let windowsProjectMutationBroker: WindowsProjectMutationBroker | undefined;
+
+/**
+ * Register directory watches in an isolated Windows process.
+ *
+ * Node's Windows fs-event backend can assert in native code when a watched
+ * temporary tree is deleted. Isolation turns that unrecoverable process abort
+ * into an ordinary broker exit and a conservative cache miss in the host.
+ */
+async function registerWindowsProjectMutationTracker(
+  tracker: TtscProjectMutationTracker,
+  locations: readonly string[],
+  allEvents: boolean,
+): Promise<void> {
+  const broker = getWindowsProjectMutationBroker();
+  broker.pendingRegistrations += 1;
+  broker.child.ref();
+  broker.child.channel?.ref();
+  const id = broker.nextId++;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
   });
-  return true;
+  broker.trackers.set(id, { ready: resolveReady, tracker });
+  tracker.close = () => {
+    const active = broker.trackers.get(id);
+    if (active === undefined) return;
+    broker.trackers.delete(id);
+    active.ready();
+    broker.child.send?.({ id, op: "remove" });
+    if (broker.trackers.size === 0) {
+      broker.child.disconnect?.();
+      broker.child.kill();
+      if (windowsProjectMutationBroker === broker) {
+        windowsProjectMutationBroker = undefined;
+      }
+    }
+  };
+  broker.child.send?.({
+    allEvents,
+    directories: locations,
+    id,
+    op: "add",
+  });
+  try {
+    await ready;
+  } finally {
+    broker.pendingRegistrations -= 1;
+    if (broker.pendingRegistrations === 0) {
+      broker.child.unref();
+      broker.child.channel?.unref();
+    }
+  }
+}
+
+function getWindowsProjectMutationBroker(): WindowsProjectMutationBroker {
+  if (windowsProjectMutationBroker !== undefined) {
+    return windowsProjectMutationBroker;
+  }
+  const child = spawn(process.execPath, ["-e", WINDOWS_WATCH_BROKER_SOURCE], {
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    windowsHide: true,
+  });
+  const broker: WindowsProjectMutationBroker = {
+    child,
+    nextId: 1,
+    pendingRegistrations: 0,
+    trackers: new Map(),
+  };
+  const fail = (): void => {
+    for (const registration of broker.trackers.values()) {
+      registration.tracker.failed = true;
+      registration.ready();
+    }
+    broker.trackers.clear();
+    if (windowsProjectMutationBroker === broker) {
+      windowsProjectMutationBroker = undefined;
+    }
+  };
+  child.on("error", fail);
+  child.on("exit", fail);
+  child.on("message", (message: unknown) => {
+    if (message === null || typeof message !== "object") return;
+    const record = message as {
+      failed?: boolean;
+      id?: number;
+      ready?: boolean;
+    };
+    if (typeof record.id !== "number") return;
+    const registration = broker.trackers.get(record.id);
+    if (registration === undefined) return;
+    if (record.failed === true) registration.tracker.failed = true;
+    if (record.ready === true) registration.ready();
+    if (record.ready !== true && record.failed !== true) {
+      registration.tracker.membershipChanged = true;
+    }
+  });
+  windowsProjectMutationBroker = broker;
+  return broker;
+}
+
+const WINDOWS_WATCH_BROKER_SOURCE = [
+  'const fs = require("node:fs");',
+  "const groups = new Map();",
+  'process.on("message", (message) => {',
+  '  if (message.op === "remove") {',
+  "    close(message.id);",
+  "    return;",
+  "  }",
+  '  if (message.op !== "add") return;',
+  "  const watchers = [];",
+  "  let failed = false;",
+  "  for (const directory of message.directories) {",
+  "    try {",
+  "      const watcher = fs.watch(directory, { persistent: false }, (event) => {",
+  '        if (message.allEvents || event === "rename") process.send?.({ id: message.id });',
+  "      });",
+  '      watcher.on("error", () => process.send?.({ failed: true, id: message.id }));',
+  "      watchers.push(watcher);",
+  "    } catch {",
+  "      failed = true;",
+  "    }",
+  "  }",
+  "  groups.set(message.id, watchers);",
+  "  process.send?.({ failed, id: message.id, ready: true });",
+  "});",
+  'process.on("disconnect", () => {',
+  "  for (const id of groups.keys()) close(id);",
+  "  process.exit(0);",
+  "});",
+  "function close(id) {",
+  "  for (const watcher of groups.get(id) ?? []) watcher.close();",
+  "  groups.delete(id);",
+  "}",
+].join("\n");
+
+/** Report whether live directory notifications preserve project membership. */
+function matchesProjectMembership(cached: TtscCachedProjectTransform): boolean {
+  const tracker = cached.projectMutationTracker;
+  return (
+    tracker !== undefined &&
+    tracker.failed === false &&
+    tracker.membershipChanged === false
+  );
+}
+
+/**
+ * Yield once before persistent validation so synchronous edits can reach the
+ * directory watchers that guard membership. Concurrent sibling deliveries share
+ * the same barrier.
+ */
+async function settleProjectMutationEvents(
+  cached: TtscCachedProjectTransform,
+): Promise<void> {
+  const trackers = [
+    cached.projectMutationTracker,
+    cached.hostInputMutationTracker,
+  ].filter(
+    (tracker): tracker is TtscProjectMutationTracker => tracker !== undefined,
+  );
+  await Promise.all(
+    trackers.map(async (tracker) => {
+      tracker.settle ??= new Promise<void>((resolve) => {
+        const settled = () => {
+          tracker.settle = undefined;
+          resolve();
+        };
+        if (process.platform === "win32") setTimeout(settled, 10);
+        else setImmediate(settled);
+      });
+      await tracker.settle;
+    }),
+  );
 }
 
 /**
@@ -1594,10 +1898,18 @@ async function transformProject(props: {
   currentFile: string;
   currentSource: string;
   plugins?: ResolvedTtscUnpluginOptions["plugins"];
+  trackProjectMembership: boolean;
   tsconfig: string;
 }): Promise<TtscCachedProjectTransform> {
   const configured = createTransformTsconfig(props);
   const projectRoot = path.dirname(props.tsconfig);
+  const identities = createHostPathIdentityContext();
+  const before = collectProjectInputSnapshot(projectRoot, identities);
+  const tracker = props.trackProjectMembership
+    ? await createProjectMutationTracker(before.projectDirectories)
+    : undefined;
+  let retainTracker = false;
+  let hostInputTracker: TtscProjectMutationTracker | undefined;
   try {
     const result = new TtscCompiler({
       cwd: projectRoot,
@@ -1614,16 +1926,38 @@ async function transformProject(props: {
     }).transform();
     const temporaryTsconfig =
       configured.path === props.tsconfig ? undefined : configured.path;
+    hostInputTracker = props.trackProjectMembership
+      ? await createHostInputMutationTracker(
+          result.type === "exception" ? [] : (result.hostInputs ?? []),
+        )
+      : undefined;
     const externalInputPaths = selectExternalInputPaths({
       projectRoot,
       result,
       temporaryTsconfig,
     });
-    const inputSnapshot = collectInputSnapshot({
-      currentFile: props.currentFile,
-      currentSource: props.currentSource,
-      projectRoot,
-    });
+    const inputSnapshot = collectProjectInputSnapshot(projectRoot, identities);
+    const stableProjectSnapshot =
+      before.complete &&
+      inputSnapshot.complete &&
+      sameHashes(before.hashes, inputSnapshot.hashes) &&
+      sameProjectDirectories(
+        before.projectDirectories,
+        inputSnapshot.projectDirectories,
+      ) &&
+      tracker?.failed !== true &&
+      tracker?.membershipChanged !== true &&
+      hostInputTracker?.failed !== true &&
+      hostInputTracker?.membershipChanged !== true;
+    // Overlay the in-memory source only after proving the two on-disk snapshots
+    // stable; an unsaved editor buffer must not look like a compile-time race.
+    inputSnapshot.hashes[
+      toProjectKey(projectRoot, props.currentFile, identities)
+    ] = hashText(props.currentSource);
+    retainTracker =
+      stableProjectSnapshot &&
+      tracker !== undefined &&
+      hostInputTracker !== undefined;
     return {
       // Capture the out-of-walk input hashes while the generation is fresh so
       // cache validation can re-check them; computed before dispose so the
@@ -1632,7 +1966,13 @@ async function transformProject(props: {
       externalInputPaths,
       inputHashes: inputSnapshot.hashes,
       projectDirectories: inputSnapshot.projectDirectories,
-      projectSnapshotComplete: inputSnapshot.complete,
+      ...(stableProjectSnapshot && tracker !== undefined
+        ? { projectMutationTracker: tracker }
+        : {}),
+      ...(stableProjectSnapshot && hostInputTracker !== undefined
+        ? { hostInputMutationTracker: hostInputTracker }
+        : {}),
+      projectSnapshotComplete: stableProjectSnapshot,
       projectRoot,
       result,
       servedFiles: new Set(),
@@ -1642,6 +1982,12 @@ async function transformProject(props: {
       ...(temporaryTsconfig === undefined ? {} : { temporaryTsconfig }),
     };
   } finally {
+    if (!retainTracker && tracker !== undefined) {
+      tracker.close();
+    }
+    if (!retainTracker && hostInputTracker !== undefined) {
+      hostInputTracker.close();
+    }
     configured.dispose();
   }
 }

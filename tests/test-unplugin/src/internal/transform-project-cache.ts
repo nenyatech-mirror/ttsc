@@ -471,6 +471,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   } as typeof fs.statSync;
   try {
     for (const file of modules) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
       assert.ok(await deliver(file));
     }
   } finally {
@@ -532,7 +533,6 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     "declare const newlyIncluded: string;\n",
     "utf8",
   );
-  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(await deliver(main));
   assert.notEqual(
     [...cache.values()][0],
@@ -541,16 +541,40 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   );
 
   const membershipGeneration = [...cache.values()][0];
-  fs.appendFileSync(
-    path.join(project.root, "plugin.cjs"),
-    "\n// descriptor cache invalidation probe\n",
+  const nextPlugin = path.join(project.root, "go-plugin-next");
+  fs.cpSync(path.join(project.root, "go-plugin"), nextPlugin, {
+    recursive: true,
+  });
+  fs.writeFileSync(
+    path.join(nextPlugin, "go.mod"),
+    "module example.com/ttscunplugincacheprobenext\n\ngo 1.26\n",
     "utf8",
   );
-  assert.ok(await deliver(main));
+  fs.writeFileSync(
+    path.join(nextPlugin, "main.go"),
+    fs
+      .readFileSync(path.join(nextPlugin, "main.go"), "utf8")
+      .replace('"PROBED"', '"DESCRIPTOR-RELOADED"'),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(project.root, "plugin.cjs"),
+    fs
+      .readFileSync(path.join(project.root, "plugin.cjs"), "utf8")
+      .replace('"go-plugin"', '"go-plugin-next"'),
+    "utf8",
+  );
+  const reloaded = await deliver(main);
+  assert.ok(reloaded);
   assert.notEqual(
     [...cache.values()][0],
     membershipGeneration,
     "an exact host descriptor input edit must replace the generation",
+  );
+  assert.match(
+    reloaded.code,
+    /DESCRIPTOR-RELOADED/,
+    "the replacement generation must evaluate the changed descriptor module",
   );
 }
 
@@ -606,6 +630,44 @@ async function assertIncompleteProjectSnapshotFallsBackAndRecovers(): Promise<vo
   assert.equal(failed, true, "the generation walk must exercise the failure");
   const incompleteGeneration = [...cache.values()][0];
 
+  let repeatedFailures = 0;
+  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.readdirSync>
+  ) {
+    if (path.resolve(String(args[0])) === transientDirectory) {
+      repeatedFailures += 1;
+      throw new Error("repeated project snapshot failure");
+    }
+    return originalReaddir.apply(this, args as never);
+  } as typeof fs.readdirSync;
+  fs.writeFileSync(
+    path.join(transientDirectory, "hidden.ts"),
+    "declare const changedWhileHidden: string;\n",
+    "utf8",
+  );
+  try {
+    assert.ok(
+      await transformTtsc(
+        main,
+        fs.readFileSync(main, "utf8"),
+        options,
+        undefined,
+        cache,
+      ),
+    );
+  } finally {
+    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
+      originalReaddir;
+  }
+  assert.ok(repeatedFailures >= 2);
+  assert.notEqual(
+    [...cache.values()][0],
+    incompleteGeneration,
+    "two matching partial walks must never authorize the old generation",
+  );
+  const repeatedIncompleteGeneration = [...cache.values()][0];
+
   assert.ok(
     await transformTtsc(
       main,
@@ -617,10 +679,74 @@ async function assertIncompleteProjectSnapshotFallsBackAndRecovers(): Promise<vo
   );
   assert.notEqual(
     [...cache.values()][0],
-    incompleteGeneration,
+    repeatedIncompleteGeneration,
     "a recovered complete walk must replace the partial generation",
   );
-  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 3);
+}
+
+/**
+ * Asserts a project edit between native compilation and snapshot publication
+ * cannot become an authoritative stale generation.
+ */
+async function assertCompileSnapshotRaceCannotAuthorizeStaleOutput(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const project = createCacheProject({ fileCount: 2, graphFanout: 2 });
+  const cache = createTtscTransformCache();
+  const options = resolveOptions();
+  const main = path.join(project.root, "src", "mod0.ts");
+  const lazy = path.join(project.root, "src", "mod1.ts");
+  const originalReaddir = fs.readdirSync;
+  let raced = false;
+  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.readdirSync>
+  ) {
+    if (
+      !raced &&
+      fs.existsSync(project.runLog) &&
+      path.resolve(String(args[0])) === path.dirname(lazy)
+    ) {
+      raced = true;
+      fs.writeFileSync(
+        lazy,
+        'export const value1: string = "PROBE-AFTER";\n',
+        "utf8",
+      );
+    }
+    return originalReaddir.apply(this, args as never);
+  } as typeof fs.readdirSync;
+  try {
+    assert.ok(
+      await transformTtsc(
+        main,
+        fs.readFileSync(main, "utf8"),
+        options,
+        undefined,
+        cache,
+      ),
+    );
+  } finally {
+    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
+      originalReaddir;
+  }
+  assert.equal(raced, true);
+
+  const result = await transformTtsc(
+    lazy,
+    fs.readFileSync(lazy, "utf8"),
+    options,
+    undefined,
+    cache,
+  );
+  assert.ok(result);
+  assert.match(result.code, /AFTER/);
+  assert.equal(
+    fs.readFileSync(project.runLog, "utf8").length,
+    2,
+    "the torn generation must be replaced before its stale sibling output is served",
+  );
 }
 
 /**
@@ -795,7 +921,10 @@ function createCacheProject(options: ICacheProjectOptions): {
   runLog: string;
 } {
   const root = TestProject.tmpdir("ttsc-unplugin-cache-project-");
-  const runLog = path.join(root, "plugin-runs.log");
+  const runLog = path.join(
+    TestProject.tmpdir("ttsc-unplugin-cache-log-"),
+    "plugin-runs.log",
+  );
   const fileCount = options.fileCount ?? 6;
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   for (let index = 0; index < fileCount; index += 1) {
@@ -1043,6 +1172,7 @@ function writeGoPlugin(root: string): void {
 export {
   assertCacheHitsDespiteOutOfWalkOutputKey,
   assertCacheTransformsMultiFileProjectOnce,
+  assertCompileSnapshotRaceCannotAuthorizeStaleOutput,
   assertConcurrentTransformsCompileOnce,
   assertFirstModuleDeliveriesDoNotRehashProject,
   assertHostExceptionTransformIsEvictedAndRecovers,

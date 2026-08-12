@@ -23,6 +23,19 @@ export interface ITtscPlugin {
   name?: string;
 
   /**
+   * Absolute files whose contents or presence influence this descriptor or its
+   * native transform for every project file.
+   *
+   * Ttsc automatically records the descriptor's CommonJS module graph, tsconfig
+   * ancestry, package-discovery manifest, and an explicit `configFile`. Use
+   * this field for additional implicit config discovery and for files a native
+   * plugin reads outside the TypeScript reference graph. Missing paths are
+   * valid: they represent higher-priority discovery candidates whose later
+   * creation must invalidate a resident transform.
+   */
+  hostInputs?: string[];
+
+  /**
    * Go package directory, or a `go.mod` file, that ttsc lazily builds.
    *
    * Ttsc accepts source only. It does not accept a prebuilt binary path: the

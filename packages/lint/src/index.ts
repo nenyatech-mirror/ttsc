@@ -34,6 +34,7 @@ type TtscPluginDescriptor = {
     threadingArgs?: boolean;
   };
   contributors?: TtscPluginContributor[];
+  hostInputs?: string[];
   name: string;
   reportsTypeScriptDiagnostics?: boolean;
   source: string;
@@ -133,7 +134,7 @@ export default function createTtscPlugin(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): TtscPluginDescriptor {
   rejectUnsupportedEntryKeys(context.plugin);
-  const contributors = resolveConfigFileContributors(context);
+  const resolvedConfig = resolveConfigFileContributors(context);
   // Build the descriptor without a `contributors` key when none were
   // declared, so consumers (and the existing key-shape regression
   // tests) see the same surface as before this feature shipped.
@@ -147,6 +148,7 @@ export default function createTtscPlugin(
       residentCheck: true,
       threadingArgs: true,
     },
+    hostInputs: resolvedConfig.hostInputs,
     name: "@ttsc/lint",
     reportsTypeScriptDiagnostics: true,
     // `context.dirname` is this descriptor's own directory in every load mode —
@@ -155,8 +157,8 @@ export default function createTtscPlugin(
     source: path.resolve(context.dirname, "..", "plugin"),
     stage: "check",
   };
-  if (contributors.length > 0) {
-    descriptor.contributors = contributors;
+  if (resolvedConfig.contributors.length > 0) {
+    descriptor.contributors = resolvedConfig.contributors;
   }
   return descriptor;
 }
@@ -237,15 +239,18 @@ type ConfigPluginEvaluation = {
  */
 function resolveConfigFileContributors(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): TtscPluginContributor[] {
+): { contributors: TtscPluginContributor[]; hostInputs: string[] } {
   const configFile = readConfigFileOption(context);
   const configPath =
     configFile !== undefined
       ? path.resolve(pluginConfigBaseDir(context), configFile)
       : findLintConfigFile(context);
-  if (!configPath || !fs.existsSync(configPath)) return [];
+  if (!configPath || !fs.existsSync(configPath)) {
+    return { contributors: [], hostInputs: configPath ? [configPath] : [] };
+  }
 
-  const entries = readConfigPluginEntries(configPath, context);
+  const evaluation = readConfigPluginEntries(configPath, context);
+  const entries = evaluation.entries;
   assertContributorNamespacesDoNotCollide(entries, configPath);
   // Dedup exact repeated namespaces on the Go-subpackage form. Config-array
   // folding can surface the same namespace more than once; that existing
@@ -258,7 +263,18 @@ function resolveConfigFileContributors(
     occupied.add(goName);
     out.push({ name: goName, source: entry.source });
   }
-  return out;
+  return {
+    contributors: out,
+    hostInputs: [
+      configPath,
+      ...evaluation.dependencies
+        .filter(
+          (dependency) =>
+            dependency.scope === "watch" && dependency.kind !== "directory",
+        )
+        .map((dependency) => dependency.path),
+    ],
+  };
 }
 
 function assertContributorNamespacesDoNotCollide(
@@ -429,7 +445,7 @@ function tsconfigBaseDir(
 function readConfigPluginEntries(
   configPath: string,
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): ConfigPluginEntry[] {
+): ConfigPluginEvaluation {
   // A JSON config that can bring no contributor with it — no `plugins` map and
   // no `extends` chain to follow — has nothing to extract, and reading it runs
   // no user code, so the isolated evaluator is not needed to keep its strings
@@ -437,7 +453,9 @@ function readConfigPluginEntries(
   // is a real subprocess, and a host that only wanted to know whether there
   // were contributors would otherwise depend on a launcher being resolvable and
   // on a compiler accepting one more invocation.
-  if (jsonConfigDeclaresNoContributor(configPath)) return [];
+  if (jsonConfigDeclaresNoContributor(configPath)) {
+    return { dependencies: [], entries: [] };
+  }
   // Every other config uses the same isolated evaluator. Executable config can
   // name contributor packages whose top-level code writes to stdout, so loading
   // it in this host process would corrupt CLI JSON or preface the first LSP
@@ -1642,7 +1660,7 @@ function extractPluginSource(value: unknown): string | undefined {
 function readTtsxConfigPlugins(
   configPath: string,
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): ConfigPluginEntry[] {
+): ConfigPluginEvaluation {
   const resolutionRoot = path.resolve(pluginConfigBaseDir(context));
   const cacheKey = configCacheKey(`plugins\0${resolutionRoot}`, configPath);
   if (cacheKey) {
@@ -1656,7 +1674,7 @@ function readTtsxConfigPlugins(
       cached.entries.every(isValidConfigPluginEntry) &&
       configDependenciesAreCurrent(cached.dependencies)
     ) {
-      return cached.entries;
+      return cached;
     }
   }
   // A config can be saved while it is being evaluated. Retry a bounded number
@@ -1668,10 +1686,10 @@ function readTtsxConfigPlugins(
     evaluation = evaluateTtsxConfigPlugins(configPath, context);
     if (configDependenciesAreCurrent(evaluation.dependencies)) {
       if (cacheKey) writeConfigPluginCache(cacheKey, evaluation);
-      return evaluation.entries;
+      return evaluation;
     }
   }
-  return evaluation!.entries;
+  return evaluation!;
 }
 
 /**

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 import type { ITtscBannerPluginConfig } from "./structures";
@@ -12,6 +13,8 @@ export * from "./structures/index";
  * executable sidecar or linked native source.
  */
 type TtscPluginDescriptor = {
+  /** Universal config-discovery inputs consumed by the native transform. */
+  hostInputs?: string[];
   /** Human-readable plugin name used in logs and error messages. */
   name: string;
   /** Absolute path to the Go source directory for this plugin. */
@@ -45,6 +48,8 @@ type TtscPluginFactoryContext<TConfig> = {
    * replacement for `__filename`.
    */
   filename: string;
+  /** Host-declared anchor for implicit plugin config discovery. */
+  pluginConfigDir?: string;
   /** The raw plugin entry from `compilerOptions.plugins[]`. */
   plugin: TConfig;
   /** Absolute path to the project root (directory containing tsconfig). */
@@ -91,6 +96,7 @@ export default function createTtscBanner(
   }
 
   return {
+    hostInputs: bannerConfigInputs(context),
     name: "@ttsc/banner",
     // Point at the `driver/` directory one level above `lib/` in the
     // installed package tree (where the Go sources live). `context.dirname`
@@ -99,4 +105,47 @@ export default function createTtscBanner(
     source: path.resolve(context.dirname, "..", "driver"),
     stage: "transform",
   };
+}
+
+const BANNER_CONFIG_FILENAMES = [
+  "banner.config.json",
+  "banner.config.js",
+  "banner.config.cjs",
+  "banner.config.mjs",
+  "banner.config.ts",
+  "banner.config.cts",
+  "banner.config.mts",
+];
+
+/** Mirror native config resolution while retaining missing priority probes. */
+function bannerConfigInputs(
+  context: TtscPluginFactoryContext<ITtscBannerPluginConfig>,
+): string[] {
+  const configFile = (context.plugin as { configFile?: unknown }).configFile;
+  const base = path.resolve(
+    context.pluginConfigDir ?? path.dirname(context.tsconfig),
+  );
+  if (typeof configFile === "string" && configFile.trim() !== "") {
+    return [
+      path.isAbsolute(configFile)
+        ? path.resolve(configFile)
+        : path.resolve(base, configFile),
+    ];
+  }
+  return configDiscoveryInputs(base, BANNER_CONFIG_FILENAMES);
+}
+
+function configDiscoveryInputs(
+  base: string,
+  names: readonly string[],
+): string[] {
+  const inputs: string[] = [];
+  for (let directory = base; ; directory = path.dirname(directory)) {
+    const candidates = names.map((name) => path.join(directory, name));
+    inputs.push(...candidates);
+    if (candidates.some((file) => fs.existsSync(file))) break;
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+  }
+  return inputs;
 }
