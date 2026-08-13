@@ -315,6 +315,11 @@ const hashes = new Map();
 const realpaths = new Map();
 const unstableHashes = new Set();
 
+function existingFile(file) {
+  try { return fs.statSync(file).isFile(); }
+  catch { return false; }
+}
+
 function recordInput(file) {
   file = path.resolve(file);
   inputs.add(file);
@@ -341,7 +346,7 @@ function recordFile(file) {
   for (let directory = path.dirname(resolvedFile);;) {
     const manifest = path.join(directory, "package.json");
     recordInput(manifest);
-    if (fs.existsSync(manifest)) {
+    if (existingFile(manifest)) {
       break;
     }
     const parent = path.dirname(directory);
@@ -356,7 +361,7 @@ function recordPackageManifests(file) {
   for (let directory = path.dirname(path.resolve(file));;) {
     const manifest = path.join(directory, "package.json");
     recordInput(manifest);
-    if (fs.existsSync(manifest)) return;
+    if (existingFile(manifest)) return;
     const parent = path.dirname(directory);
     if (parent === directory) return;
     directory = parent;
@@ -570,6 +575,11 @@ const hashes = new Map<string, string | null>();
 const realpaths = new Map<string, string | null>();
 const unstableHashes = new Set<string>();
 
+function existingFile(file: string): boolean {
+  try { return fs.statSync(file).isFile(); }
+  catch { return false; }
+}
+
 function recordInput(file: string): void {
   file = path.resolve(file);
   inputs.add(file);
@@ -596,7 +606,7 @@ function recordFile(file: string): void {
   for (let directory = path.dirname(resolvedFile);;) {
     const manifest = path.join(directory, "package.json");
     recordInput(manifest);
-    if (fs.existsSync(manifest)) {
+    if (existingFile(manifest)) {
       break;
     }
     const parent = path.dirname(directory);
@@ -611,7 +621,7 @@ function recordPackageManifests(file: string): void {
   for (let directory = path.dirname(path.resolve(file));;) {
     const manifest = path.join(directory, "package.json");
     recordInput(manifest);
-    if (fs.existsSync(manifest)) return;
+    if (existingFile(manifest)) return;
     const parent = path.dirname(directory);
     if (parent === directory) return;
     directory = parent;
@@ -619,9 +629,23 @@ function recordPackageManifests(file: string): void {
 }
 
 const moduleProbeExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"] as const;
+const jsToTsProbeExtensions = new Map<string, readonly string[]>([
+  [".js", [".ts", ".tsx"]],
+  [".jsx", [".tsx"]],
+  [".mjs", [".mts"]],
+  [".cjs", [".cts"]],
+]);
+function sourceSubstitutionCandidates(base: string): string[] {
+  const extension = path.extname(base).toLowerCase();
+  const substitutions = jsToTsProbeExtensions.get(extension);
+  if (substitutions === undefined) return [];
+  const stem = base.slice(0, base.length - extension.length);
+  return substitutions.map((candidate) => stem + candidate);
+}
 function moduleCandidates(base: string): string[] {
   return [
     base,
+    ...sourceSubstitutionCandidates(base),
     ...moduleProbeExtensions.map((extension) => base + extension),
     path.join(base, "package.json"),
     ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension)),

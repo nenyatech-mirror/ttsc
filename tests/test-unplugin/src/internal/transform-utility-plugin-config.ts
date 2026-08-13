@@ -234,11 +234,17 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
           ? 'export const value: string = "kept";\n'
           : STRIP_SOURCE,
     });
-    const external = path.join(
-      TestProject.tmpdir(`ttsc-${plugin}-${format}-external-config-`),
-      `selection.${format}`,
+    const externalRoot = TestProject.tmpdir(
+      `ttsc-${plugin}-${format}-external-config-`,
     );
-    const externalManifest = path.join(path.dirname(external), "package.json");
+    const externalDirectory = path.join(externalRoot, "nested");
+    const external = path.join(externalDirectory, `selection.${format}`);
+    const externalManifest = path.join(externalRoot, "package.json");
+    const nearerManifestCandidate = path.join(
+      externalDirectory,
+      "package.json",
+    );
+    fs.mkdirSync(nearerManifestCandidate, { recursive: true });
     fs.writeFileSync(
       externalManifest,
       JSON.stringify({ private: true, type: "module" }),
@@ -253,11 +259,23 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
       .relative(path.dirname(config), importedExternal)
       .split(path.sep)
       .join("/");
+    const explicitSelection = path.join(externalDirectory, "explicit.tsx");
+    const explicitSpecifier = path
+      .relative(
+        path.dirname(config),
+        explicitSelection.slice(0, -path.extname(explicitSelection).length) +
+          ".js",
+      )
+      .split(path.sep)
+      .join("/");
+    if (format === "ts") {
+      fs.writeFileSync(explicitSelection, "export default true;\n", "utf8");
+    }
     fs.writeFileSync(
       config,
       format === "cjs"
         ? `module.exports = require(${JSON.stringify(external)});\n`
-        : `import selection from ${JSON.stringify(specifier.startsWith(".") ? specifier : `./${specifier}`)};\nexport default selection;\n`,
+        : `import selection from ${JSON.stringify(specifier.startsWith(".") ? specifier : `./${specifier}`)};\nimport explicit from ${JSON.stringify(explicitSpecifier.startsWith(".") ? explicitSpecifier : `./${explicitSpecifier}`)};\nif (!explicit) throw new Error("explicit JavaScript substitution failed");\nexport default selection;\n`,
       "utf8",
     );
     const configValue = (phase: "NEW" | "OLD") =>
@@ -285,7 +303,10 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
     assert.ok(first);
     const firstGeneration = [...cache.values()][0];
     const cached = (await firstGeneration) as {
-      result?: { hostInputs?: string[] };
+      result?: {
+        hostInputHashes?: Record<string, string | null>;
+        hostInputs?: string[];
+      };
     };
     assert.ok(
       cached.result?.hostInputs?.some(
@@ -299,6 +320,13 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
       ),
       `${plugin}.${format} omitted the package boundary used to resolve its config dependency`,
     );
+    assert.ok(
+      cached.result?.hostInputs?.some(
+        (input) =>
+          path.resolve(input) === path.resolve(nearerManifestCandidate),
+      ),
+      `${plugin}.${format} stopped at a package.json directory instead of retaining the ancestor manifest`,
+    );
     if (format === "ts") {
       assert.ok(
         cached.result?.hostInputs?.some(
@@ -308,6 +336,14 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
         ),
         `${plugin}.ts omitted a superseding extensionless-import candidate`,
       );
+      const missingExplicitTs = path.join(externalDirectory, "explicit.ts");
+      assert.ok(
+        cached.result?.hostInputs?.some(
+          (input) => path.resolve(input) === missingExplicitTs,
+        ),
+        `${plugin}.ts omitted a superseding explicit-JavaScript substitution candidate`,
+      );
+      assert.equal(cached.result?.hostInputHashes?.[missingExplicitTs], null);
     }
     assert.equal(
       cached.result?.hostInputs?.some((input) =>
