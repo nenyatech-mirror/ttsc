@@ -2633,7 +2633,7 @@ function resolvePluginExportCondition(
     return null;
   }
   const file = path.resolve(path.dirname(packageJson), resolved);
-  return fs.existsSync(file) ? resolveRealPath(file) : null;
+  return existingFile(file) ? resolveRealPath(file) : null;
 }
 
 /**
