@@ -210,6 +210,70 @@ export const test_buildsourceplugin_sets_ttsc_owned_go_build_cache = () => {
       /unsafe plugin cache entry/,
     );
     assert.equal(fs.readFileSync(outsideEntrySentinel, "utf8"), "keep\n");
+
+    for (const protocol of ["legacy", "v2"] as const) {
+      const linkedLockRoot = path.join(root, `linked-${protocol}-lock`);
+      fs.mkdirSync(path.join(linkedLockRoot, "node_modules"), {
+        recursive: true,
+      });
+      writePluginSource(linkedLockRoot);
+      const linkedLockCache = path.join(
+        linkedLockRoot,
+        "node_modules",
+        ".cache",
+        "ttsc",
+        "plugins",
+      );
+      fs.mkdirSync(linkedLockCache, { recursive: true });
+      const linkedLockKey = computeCacheKey({
+        dir: linkedLockRoot,
+        entry: ".",
+        env: process.env,
+        goBinary: fakeGo,
+        overlayDirs: [],
+        ttscVersion: "1.0.0",
+        tsgoVersion: "7.0.0-dev",
+      });
+      const outsideLock = path.join(root, `outside-${protocol}-lock`);
+      fs.mkdirSync(outsideLock, { recursive: true });
+      fs.writeFileSync(path.join(outsideLock, "keep.txt"), "keep\n", "utf8");
+      if (protocol === "v2") {
+        fs.mkdirSync(path.join(outsideLock, "retired"));
+        fs.writeFileSync(
+          path.join(outsideLock, "protocol-v2"),
+          "ttsc-plugin-build-lock-v2\n",
+          "utf8",
+        );
+      } else {
+        const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        fs.utimesSync(outsideLock, old, old);
+      }
+      const externalEntries = fs.readdirSync(outsideLock).sort();
+      fs.symlinkSync(
+        outsideLock,
+        `${path.join(linkedLockCache, linkedLockKey)}.lock${protocol === "v2" ? ".v2" : ""}`,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      const binary = buildSourcePlugin({
+        baseDir: linkedLockRoot,
+        overlayDirs: [],
+        pluginName: `linked-${protocol}-lock`,
+        source: linkedLockRoot,
+        quiet: true,
+        ttscVersion: "1.0.0",
+        tsgoVersion: "7.0.0-dev",
+      });
+      assert.equal(fs.existsSync(binary), true);
+      assert.deepEqual(
+        fs.readdirSync(outsideLock).sort(),
+        externalEntries,
+        `${protocol} lock coordination escaped through a junction`,
+      );
+      if (protocol === "v2") {
+        assert.deepEqual(fs.readdirSync(path.join(outsideLock, "retired")), []);
+      }
+    }
   } finally {
     if (previousGo === undefined) delete process.env.TTSC_GO_BINARY;
     else process.env.TTSC_GO_BINARY = previousGo;

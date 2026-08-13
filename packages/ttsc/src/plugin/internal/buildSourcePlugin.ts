@@ -615,6 +615,8 @@ function ensurePluginBuildLockProtocol(protocolDir: string): void {
 
 function isPluginBuildLockProtocolV2(lockDir: string): boolean {
   try {
+    const stats = fs.lstatSync(lockDir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
     return (
       fs.readFileSync(
         path.join(lockDir, PLUGIN_BUILD_LOCK_PROTOCOL_FILE),
@@ -1117,7 +1119,10 @@ function pluginBuildLockAgeMs(lockDir: string, now: number): number | null {
 
 function pluginBuildLockPathExists(lockDir: string): boolean {
   try {
-    fs.statSync(lockDir);
+    const stats = fs.lstatSync(lockDir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`ttsc: unsafe plugin build lock path: ${lockDir}`);
+    }
     return true;
   } catch (error) {
     if (isMissingPathError(error)) return false;
