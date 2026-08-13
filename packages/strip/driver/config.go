@@ -220,16 +220,65 @@ func reportStripConfigInputs(inputs []string, hashes, realpaths map[string]*stri
 }
 
 func stripPhysicalHostInput(file string) *string {
-  resolved, err := filepath.EvalSymlinks(file)
-  if err != nil {
-    return nil
-  }
-  resolved, err = filepath.Abs(resolved)
+  resolved, err := filepath.Abs(file)
   if err != nil {
     return nil
   }
   resolved = filepath.Clean(resolved)
-  return &resolved
+  seen := make(map[string]struct{})
+  for range 255 {
+    if _, exists := seen[resolved]; exists {
+      return nil
+    }
+    seen[resolved] = struct{}{}
+    if evaluated, evalErr := filepath.EvalSymlinks(resolved); evalErr == nil {
+      evaluated, evalErr = filepath.Abs(evaluated)
+      if evalErr != nil {
+        return nil
+      }
+      evaluated = filepath.Clean(evaluated)
+      if _, statErr := os.Stat(evaluated); statErr != nil {
+        return nil
+      }
+      return &evaluated
+    }
+    next, ok := stripResolveHostInputLinkAncestor(resolved)
+    if !ok {
+      return nil
+    }
+    resolved = next
+  }
+  return nil
+}
+
+// stripResolveHostInputLinkAncestor follows the nearest link-like ancestor and
+// reattaches its remaining suffix. Windows junction children can be opened and
+// os.Readlink exposes the junction itself even when EvalSymlinks rejects the
+// complete child path.
+func stripResolveHostInputLinkAncestor(location string) (string, bool) {
+  probe := filepath.Clean(location)
+  suffix := make([]string, 0)
+  for {
+    if target, err := os.Readlink(probe); err == nil {
+      if !filepath.IsAbs(target) {
+        target = filepath.Join(filepath.Dir(probe), target)
+      }
+      for i := len(suffix) - 1; i >= 0; i-- {
+        target = filepath.Join(target, suffix[i])
+      }
+      absolute, absErr := filepath.Abs(target)
+      if absErr != nil {
+        return "", false
+      }
+      return filepath.Clean(absolute), true
+    }
+    parent := filepath.Dir(probe)
+    if parent == probe {
+      return "", false
+    }
+    suffix = append(suffix, filepath.Base(probe))
+    probe = parent
+  }
 }
 
 // loadStripJSONConfigFile reads and JSON-parses a strip config file. A leading
