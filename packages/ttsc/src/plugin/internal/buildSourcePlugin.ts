@@ -356,10 +356,7 @@ function compileSourcePlugin(opts: {
         },
       );
     } finally {
-      if (
-        opts.manageGoBuildCache &&
-        attemptedGoBuildCacheRoot !== undefined
-      ) {
+      if (opts.manageGoBuildCache && attemptedGoBuildCacheRoot !== undefined) {
         // The daily pre-build pass cannot see objects the build is about to
         // add, including objects left behind by a failed compile. Enforce the
         // size policy after every actual cold-build attempt so churn cannot
@@ -3112,7 +3109,7 @@ function shouldHashGoRootPath(rel: string, isDir: boolean): boolean {
 function touchCacheEntry(cacheDir: string): void {
   try {
     fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(
+    replaceCacheMetadataFile(
       path.join(cacheDir, CACHE_LAST_USED_FILE),
       `${Date.now()}\n`,
     );
@@ -3134,7 +3131,7 @@ function prunePluginCacheRoot(root: string): void {
     ) {
       return;
     }
-    fs.writeFileSync(marker, `${now}\n`);
+    replaceCacheMetadataFile(marker, `${now}\n`);
     prunePluginCacheEntries(root, now);
   } catch {
     // Plugin-cache GC is opportunistic; builds still proceed when it fails.
@@ -3244,7 +3241,7 @@ export function pruneGoBuildCacheRoot(
       remainingBytes > maxBytes
         ? now - GO_BUILD_CACHE_GC_INTERVAL_MS + protectedAgeMs
         : now;
-    fs.writeFileSync(marker, `${markerTimestamp}\n`, "utf8");
+    replaceCacheMetadataFile(marker, `${markerTimestamp}\n`);
   } catch {
     // Go-cache GC is opportunistic; builds still proceed when it fails.
   } finally {
@@ -3754,6 +3751,26 @@ function readTimestamp(file: string): number | null {
     return fs.statSync(file).mtimeMs;
   } catch {
     return null;
+  }
+}
+
+/** Replace cache metadata without following a pre-existing link or hard link. */
+function replaceCacheMetadataFile(file: string, contents: string): void {
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}-${crypto
+      .randomBytes(16)
+      .toString("hex")}.tmp`,
+  );
+  try {
+    fs.writeFileSync(temporary, contents, { encoding: "utf8", flag: "wx" });
+    // rename replaces the directory entry itself. Unlike writeFile(file), it
+    // cannot follow a symlink or mutate another hard link to the old inode.
+    fs.renameSync(temporary, file);
+  } finally {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {}
   }
 }
 

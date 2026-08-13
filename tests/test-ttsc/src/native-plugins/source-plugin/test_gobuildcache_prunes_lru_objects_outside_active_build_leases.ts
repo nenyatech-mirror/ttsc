@@ -22,15 +22,15 @@ import {
  * 3. Seed four recent objects and assert the newest target-sized cohort is
  *    protected.
  * 4. Prove a future-dated GC marker cannot suppress maintenance after a clock
- *    rollback or restored cache.
+ *    rollback or restored cache, or mutate an external hard-linked file.
  * 5. Prove completed and stale intents cannot poison a live process, while a
  *    future-dated intent and fresh orphan lease retain a conservative grace.
  * 6. Deny Worker permission and prove the IPC heartbeat fallback cleans up its
  *    lease after running the callback.
- * 7. Reject cache-root and coordination-directory junctions without deleting
- *    their external objects or JSON files.
- * 8. Resolve user and explicitly named cache layouts and assert their objects
- *    and maintenance metadata remain untouched at the exact resolved roots.
+ * 7. Reject cache-root and coordination-directory junctions without deleting their
+ *    external objects or JSON files.
+ * 8. Resolve user and explicitly named cache layouts and assert their objects and
+ *    maintenance metadata remain untouched at the exact resolved roots.
  */
 export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
   () => {
@@ -106,11 +106,9 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       "future-marker",
       now - 30_000,
     );
-    fs.writeFileSync(
-      path.join(futureMarkerCache, ".ttsc-gc"),
-      `${now + 24 * 60 * 60 * 1000}\n`,
-      "utf8",
-    );
+    const externalMarker = path.join(root, "external-go-cache-marker.txt");
+    fs.writeFileSync(externalMarker, `${now + 24 * 60 * 60 * 1000}\n`, "utf8");
+    fs.linkSync(externalMarker, path.join(futureMarkerCache, ".ttsc-gc"));
     pruneGoBuildCacheRoot(futureMarkerCache, {
       maxBytes: 0,
       now,
@@ -118,6 +116,11 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       targetBytes: 0,
     });
     assert.equal(fs.existsSync(futureMarkerObject), false);
+    assert.equal(
+      fs.readFileSync(externalMarker, "utf8"),
+      `${now + 24 * 60 * 60 * 1000}\n`,
+      "Go cache GC followed its marker outside the owned cache",
+    );
 
     const staleIntent = writeCoordinationRecord(
       goCache,

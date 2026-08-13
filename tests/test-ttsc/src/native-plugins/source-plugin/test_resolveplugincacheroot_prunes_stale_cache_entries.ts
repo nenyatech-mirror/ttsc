@@ -17,8 +17,8 @@ import {
  * project cache root only — never a shared/global location.
  *
  * 1. Seed stale/fresh entries plus generation-fencing lock artifacts.
- * 2. Seed a future-dated GC marker, as can happen after a clock rollback or
- *    restored cache.
+ * 2. Seed a future-dated GC marker hard-linked to an external sentinel, as can
+ *    happen in a pre-populated project cache.
  * 3. Resolve the default plugin cache root (no cacheDir/TTSC_CACHE_DIR override).
  * 4. Assert the stale entry is removed while fresh data and fences remain.
  */
@@ -59,11 +59,10 @@ export const test_resolveplugincacheroot_prunes_stale_cache_entries = () => {
       "utf8",
     );
     fs.writeFileSync(path.join(fresh, ".last-used"), `${now}\n`, "utf8");
-    fs.writeFileSync(
-      path.join(pluginCache, ".gc-last-run"),
-      `${now + 24 * 60 * 60 * 1000}\n`,
-      "utf8",
-    );
+    const externalMarker = path.join(root, "external-plugin-marker.txt");
+    const futureMarker = `${now + 24 * 60 * 60 * 1000}\n`;
+    fs.writeFileSync(externalMarker, futureMarker, "utf8");
+    fs.linkSync(externalMarker, path.join(pluginCache, ".gc-last-run"));
 
     assert.equal(resolvePluginCacheRoot(root), pluginCache);
     assert.equal(fs.existsSync(stale), false);
@@ -71,6 +70,11 @@ export const test_resolveplugincacheroot_prunes_stale_cache_entries = () => {
     assert.equal(fs.existsSync(lock), true);
     assert.equal(fs.existsSync(v2Lock), true);
     assert.equal(fs.existsSync(retiredLegacy), true);
+    assert.equal(
+      fs.readFileSync(externalMarker, "utf8"),
+      futureMarker,
+      "plugin cache GC mutated an external hard-linked marker",
+    );
   } finally {
     if (saved.cache === undefined) delete process.env.TTSC_CACHE_DIR;
     else process.env.TTSC_CACHE_DIR = saved.cache;
