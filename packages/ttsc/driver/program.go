@@ -263,6 +263,23 @@ func ParseTSConfig(fs vfs.FS, cwd, tsconfigPath string, host shimcompiler.Compil
   return parsed, nil, nil
 }
 
+// resolveTsgoArgs picks the forwarded tsgo argv for this load: the caller's
+// explicit LoadProgramOptions.TsgoArgs when it has one, otherwise whatever the
+// launcher published in TsgoArgsEnv.
+//
+// The explicit value wins so a host that declares its own `--tsgo-args` flag
+// (cmd/ttsc, the utility host, @ttsc/lint) keeps deciding for itself, and an
+// embedder that deliberately passes an empty argv is not overridden by an
+// environment variable an ancestor ttsc process happened to set. The fallback
+// is what carries the payload into a third-party sidecar whose flag set does
+// not declare `--tsgo-args` at all — see TsgoArgsEnv and issue #1188.
+func resolveTsgoArgs(explicit []string) ([]string, error) {
+  if len(explicit) > 0 {
+    return explicit, nil
+  }
+  return TsgoArgsFromEnv()
+}
+
 // parseTsgoArgs runs forwarded tsgo CLI flags through TypeScript-Go's own
 // command-line parser, yielding a CompilerOptions overlay ParseTSConfig merges
 // over the tsconfig. This is how a plugin build — which constructs its Program
@@ -365,7 +382,11 @@ func LoadProgram(cwd, tsconfigPath string, options LoadProgramOptions) (*Program
   }
   host := DefaultHost(cwd, fs)
 
-  cliOptions, cliDiags, err := parseTsgoArgs(options.TsgoArgs, host)
+  tsgoArgs, err := resolveTsgoArgs(options.TsgoArgs)
+  if err != nil {
+    return nil, nil, err
+  }
+  cliOptions, cliDiags, err := parseTsgoArgs(tsgoArgs, host)
   if err != nil {
     return nil, nil, err
   }

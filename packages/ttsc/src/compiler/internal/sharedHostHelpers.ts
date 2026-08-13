@@ -3,6 +3,50 @@ import path from "node:path";
 import type { ITtscLoadedNativePlugin } from "../../structures/internal/ITtscLoadedNativePlugin";
 
 /**
+ * Environment channel carrying the JSON-encoded tsgo argv ttsc forwards to a
+ * native sidecar. Mirrors `driver.TsgoArgsEnv` on the Go side; see
+ * `runBuild.ts::createNativeTsgoArgs` for why the payload is not a CLI flag.
+ */
+export const TSGO_ARGS_ENV = "TTSC_TSGO_ARGS";
+
+/**
+ * Drop a forwarded-tsgo payload this invocation did not publish itself.
+ *
+ * Every sidecar env starts from `process.env`, so a ttsc that is itself running
+ * inside a plugin sidecar — `@ttsc/lint` evaluating a config file through
+ * `ttsx`, for instance — would otherwise hand the outer run's `--strict` to its
+ * own sidecars, and `driver.LoadProgram` would apply it. The forwarded argv is
+ * per-invocation state the spawning host owns, the same rule
+ * `TTSC_PLUGIN_CONFIG_DIR` already follows. A caller that named the variable
+ * explicitly keeps it.
+ */
+export function clearInheritedTsgoArgs(
+  env: NodeJS.ProcessEnv,
+  callerEnv: NodeJS.ProcessEnv | undefined,
+): void {
+  if (callerEnv?.[TSGO_ARGS_ENV] === undefined) {
+    delete env[TSGO_ARGS_ENV];
+  }
+}
+
+/**
+ * The `{ ...process.env, ...callerEnv }` a child process inherits, minus a
+ * forwarded-tsgo payload this lane never published.
+ *
+ * Use it at every spawn whose child can reach `driver.LoadProgram` — the
+ * `api-compile` / `api-transform` hosts, and the plugin loader, whose `ttsx`
+ * descriptor evaluation compiles a project of its own. One rule at every site
+ * beats four sites each reasoning about whether the variable could be present.
+ */
+export function inheritedSidecarEnv(
+  callerEnv: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...callerEnv };
+  clearInheritedTsgoArgs(env, callerEnv);
+  return env;
+}
+
+/**
  * Resolve the caller-declared plugin config anchor to an absolute path, or
  * `undefined` when the caller did not declare one.
  *

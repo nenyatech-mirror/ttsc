@@ -511,45 +511,45 @@
       "coverage": {
         "arm": "plain",
         "measured": true,
-        "score": 0.5001382824573022,
+        "score": 0.49075808848248204,
         "wholeness": {
           "test": 1,
           "journey": 1,
           "property": 1,
-          "dto": 0.7051671732522796,
+          "dto": 0.711864406779661,
           "screen": 1,
-          "hook": 0.05011389521640091,
-          "api": 0.5092677433390495,
-          "model": 0.6019939977530551
+          "hook": 0.05466970387243736,
+          "api": 0.5102914287465398,
+          "model": 0.605804848083251
         },
         "obligations": [
           {
             "name": "model",
             "edge": "requirementToModel",
-            "rate": 0.9900990099009901,
-            "wholeness": 0.6019939977530551,
-            "value": 0.5960336611416387
+            "rate": 0.9702970297029703,
+            "wholeness": 0.605804848083251,
+            "value": 0.5878106446748376
           },
           {
             "name": "operation",
             "edge": "requirementToOperation",
-            "rate": 0.9897959183673469,
-            "wholeness": 0.5092677433390495,
-            "value": 0.5040711337131408
+            "rate": 0.9693877551020408,
+            "wholeness": 0.5102914287465398,
+            "value": 0.4946702625604212
           },
           {
             "name": "dto",
             "edge": "requirementToDto",
-            "rate": 0.984375,
-            "wholeness": 0.7051671732522796,
-            "value": 0.6941489361702128
+            "rate": 0.96875,
+            "wholeness": 0.711864406779661,
+            "value": 0.6896186440677966
           },
           {
             "name": "test",
             "edge": "requirementToTest",
-            "rate": 0.9365079365079365,
+            "rate": 0.8928571428571429,
             "wholeness": 1,
-            "value": 0.9365079365079365
+            "value": 0.8928571428571429
           },
           {
             "name": "screen",
@@ -561,17 +561,17 @@
           {
             "name": "journey",
             "edge": "requirementToJourney",
-            "rate": 0.0761904761904762,
+            "rate": 0.08571428571428572,
             "wholeness": 1,
-            "value": 0.0761904761904762
+            "value": 0.08571428571428572
           }
         ],
         "edges": [
           {
             "name": "columnToProperty",
-            "eligible": 1316,
-            "reached": 928,
-            "rate": 0.7051671732522796
+            "eligible": 1357,
+            "reached": 966,
+            "rate": 0.711864406779661
           },
           {
             "name": "screenToJourney",
@@ -582,20 +582,20 @@
           {
             "name": "hookToScreen",
             "eligible": 439,
-            "reached": 22,
-            "rate": 0.05011389521640091
+            "reached": 24,
+            "rate": 0.05466970387243736
           },
           {
             "name": "accessorToTest",
-            "eligible": 445,
+            "eligible": 446,
             "reached": 432,
-            "rate": 0.9707865168539326
+            "rate": 0.968609865470852
           },
           {
             "name": "accessorToHook",
-            "eligible": 445,
+            "eligible": 446,
             "reached": 424,
-            "rate": 0.952808988764045
+            "rate": 0.9506726457399103
           },
           {
             "name": "modelToOperation",
@@ -612,26 +612,26 @@
           {
             "name": "requirementToModel",
             "eligible": 101,
-            "reached": 100,
-            "rate": 0.9900990099009901
+            "reached": 98,
+            "rate": 0.9702970297029703
           },
           {
             "name": "requirementToOperation",
             "eligible": 98,
-            "reached": 97,
-            "rate": 0.9897959183673469
+            "reached": 95,
+            "rate": 0.9693877551020408
           },
           {
             "name": "requirementToDto",
             "eligible": 192,
-            "reached": 189,
-            "rate": 0.984375
+            "reached": 186,
+            "rate": 0.96875
           },
           {
             "name": "requirementToTest",
             "eligible": 252,
-            "reached": 236,
-            "rate": 0.9365079365079365
+            "reached": 225,
+            "rate": 0.8928571428571429
           },
           {
             "name": "requirementToScreen",
@@ -642,8 +642,8 @@
           {
             "name": "requirementToJourney",
             "eligible": 105,
-            "reached": 8,
-            "rate": 0.0761904761904762
+            "reached": 9,
+            "rate": 0.08571428571428572
           }
         ]
       },
@@ -679,6 +679,6 @@
     "method": "Thirteen reference-graph edges read from each completed Plain workspace of round two, composed so serial hops multiply and branches average. See ttsc#1088 for the derivation.",
     "precision": "Each requirement-rooted edge was counted twice, broad and narrow, and the lower rate kept; no requirement identifier appears in a Plain workspace, so its eligibility is a judgement and the two passes differed by up to a quarter on some denominators. Read a score as a whole percent. The per-subject inputs, their eligibility rules, their unreached members, and the judgements that could move a figure are retained beside this file as coverage-input-<subject>.round-two.json.",
     "evidenceArm": "Complete by construction and never counted.",
-    "erp": "Counted on a snapshot of the erp workspace taken while its cell was still running, so its figure moves when the cell completes. Its six requirement-rooted edges are counted over the 253 families the requirements document declares, not its 1487 anchors."
+    "erp": "Counted twice on two frozen snapshots of the erp workspace taken while its cell was still running, the second after a further 1418M tokens and 20h 46m of work. The eligible sets are held at the first count, whose requirement corpus and screen plan are byte-identical in both snapshots, and only reach was re-derived. Its six requirement-rooted edges are counted over the 253 families the requirements document declares, not its 1487 anchors. The figure moves again when the cell completes."
   }
 }

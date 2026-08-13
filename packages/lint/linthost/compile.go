@@ -283,16 +283,32 @@ func parseSubcommandFlagsWithIO(name string, args []string, stdout, stderr io.Wr
   }, nil
 }
 
+// tsgoArgsEnv mirrors `driver.TsgoArgsEnv`: the environment channel the ttsc
+// launcher publishes forwarded tsgo argv on. The name is duplicated rather
+// than imported because this host deliberately does not depend on the ttsc
+// driver module (see host.go).
+const tsgoArgsEnv = "TTSC_TSGO_ARGS"
+
 // decodeTsgoArgs decodes the JSON-array value of the `--tsgo-args` flag — the
-// tsgo CLI flags the `ttsc` launcher forwarded — into a string slice. An empty
-// flag yields a nil slice.
+// tsgo CLI flags the `ttsc` launcher forwarded — into a string slice.
+//
+// When the flag is absent the value is read from `TTSC_TSGO_ARGS` instead. The
+// launcher moved the payload to the environment because a `--tsgo-args` flag
+// is fatal to any sidecar whose `flag.FlagSet` predates it (issue #1188); the
+// flag stays accepted so an older launcher paired with this host still works.
+// An absent flag and an absent variable yield a nil slice.
 func decodeTsgoArgs(raw string) ([]string, error) {
+  source := "--tsgo-args"
+  if raw == "" {
+    raw = strings.TrimSpace(os.Getenv(tsgoArgsEnv))
+    source = tsgoArgsEnv
+  }
   if raw == "" {
     return nil, nil
   }
   var args []string
   if err := json.Unmarshal([]byte(raw), &args); err != nil {
-    return nil, fmt.Errorf("@ttsc/lint: invalid --tsgo-args: %w", err)
+    return nil, fmt.Errorf("@ttsc/lint: invalid %s: %w", source, err)
   }
   return args, nil
 }

@@ -129,7 +129,7 @@ func (p *Program) EmitAllRaw(writeFile shimcompiler.WriteFile) (*shimcompiler.Em
     }
     return DefaultWriteFile(fileName, text)
   }
-  result := p.TSProgram.Emit(context.Background(), shimcompiler.EmitOptions{
+  result := p.emitProgram(shimcompiler.EmitOptions{
     WriteFile: wf,
   })
   return result, p.convertProgramDiagnostics(result.Diagnostics), nil
@@ -197,11 +197,54 @@ func (p *Program) emit(rs *RewriteSet, target *ast.SourceFile, writeFile shimcom
     return DefaultWriteFile(fileName, patched)
   }
 
-  result := p.TSProgram.Emit(context.Background(), shimcompiler.EmitOptions{
+  result := p.emitProgram(shimcompiler.EmitOptions{
     TargetSourceFile: target,
     WriteFile:        wf,
   })
   return result, p.convertProgramDiagnostics(result.Diagnostics), nil
+}
+
+// emitProgram runs one whole-program or single-file emit, taking tsgo's
+// incremental lane when the resolved compiler options ask for build
+// information.
+//
+// tsgo's own CLI branches the same way — `performIncrementalCompilation` vs
+// `performCompilation`, on `CompilerOptions.IsIncremental()` — but it branches
+// in `internal/execute`, which a host constructing its Program in-process never
+// enters. ttsc always took the plain branch, so `incremental`, `composite`, and
+// `tsBuildInfoFile` parsed, resolved, and then vanished: a plugin-carrying
+// project emitted its JavaScript and no `.tsbuildinfo` at all (issue #1188).
+// `driver/emit_containment.go` had already exempted `.tsbuildinfo` from the
+// outDir guard for a write that could not happen.
+//
+// A single-file emit stays on the plain lane. Build information describes a
+// whole program, and tsgo's incremental program returns early on a
+// `TargetSourceFile` request without writing any, so routing it there would
+// only add a snapshot computation nothing reads.
+func (p *Program) emitProgram(options shimcompiler.EmitOptions) *shimcompiler.EmitResult {
+  ctx := context.Background()
+  if options.TargetSourceFile == nil && p.emitsBuildInfo() {
+    return shimcompiler.EmitFreshWithBuildInfo(ctx, p.TSProgram, options)
+  }
+  return p.TSProgram.Emit(ctx, options)
+}
+
+// emitsBuildInfo reports whether this program's resolved options ask tsgo to
+// write build information.
+//
+// The question is delegated to `CompilerOptions.IsIncremental`, the same
+// predicate tsgo's own CLI branches on, rather than restated as
+// `Incremental || Composite` here: a second copy of the rule is a second thing
+// to keep in step with upstream.
+func (p *Program) emitsBuildInfo() bool {
+  if p == nil || p.TSProgram == nil {
+    return false
+  }
+  options := p.TSProgram.Options()
+  if options == nil {
+    return false
+  }
+  return options.IsIncremental()
 }
 
 // DefaultWriteFile is the default disk writer used when EmitAll's caller does not
