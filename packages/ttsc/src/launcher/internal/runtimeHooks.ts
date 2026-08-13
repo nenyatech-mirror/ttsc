@@ -2519,11 +2519,17 @@ function nearestTsconfig(file: string): string | null {
   for (;;) {
     const cached = tsconfigCache.get(directory);
     if (cached !== undefined) {
-      if (
-        process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1" ||
-        nearestExistingTsconfig(cached.candidates) === cached.result
-      ) {
-        recordPluginDescriptorTsconfigCandidates(cached.candidates);
+      if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") {
+        return rememberTsconfig(chain, cached.result, cached.candidates);
+      }
+      // Bracket the cached selection with the same candidate observations the
+      // parent later reconciles. A nearer config created between a liveness
+      // check and reporting must conflict, not be paired with the cached
+      // farther result and certified as current.
+      recordPluginDescriptorTsconfigCandidates(cached.candidates);
+      const current = nearestExistingTsconfig(cached.candidates);
+      recordPluginDescriptorTsconfigCandidates(cached.candidates);
+      if (current === cached.result) {
         return rememberTsconfig(chain, cached.result, cached.candidates);
       }
       // Descriptor factories can deliberately create a config before a lazy
