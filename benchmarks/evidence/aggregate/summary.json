@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-13T15:45:37.406Z",
+  "generatedAt": "2026-08-13T20:48:09.515Z",
   "origin": "samchon/ttsc",
   "cells": [
     {
@@ -1600,14 +1600,14 @@
       "status": "running",
       "stage": "overall-remind-2",
       "launchedAt": "2026-08-09T18:17:34.421Z",
-      "tokens": 4732890206,
+      "tokens": 5099483010,
       "tokenUsage": {
-        "totalTokens": 4732890206,
-        "inputTokens": 4725711581,
-        "cachedInputTokens": 4624351488,
+        "totalTokens": 5099483010,
+        "inputTokens": 5091871313,
+        "cachedInputTokens": 4983105792,
         "cacheWriteInputTokens": 0,
-        "outputTokens": 7178625,
-        "reasoningOutputTokens": 1623003
+        "outputTokens": 7611697,
+        "reasoningOutputTokens": 1714159
       },
       "inspection": {
         "attempts": 12,
@@ -1627,19 +1627,19 @@
         "pricingAsOf": "2026-08-01",
         "priceSource": "https://openrouter.ai/api/v1/models",
         "currency": "USD",
-        "amountUsd": 59.9570107,
-        "requests": 35219,
-        "shortContextRequests": 35218,
+        "amountUsd": 64.54493974,
+        "requests": 37975,
+        "shortContextRequests": 37974,
         "longContextRequests": 1,
         "longContextThresholdTokens": 272000,
         "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],
-      "workElapsedMs": 325654065.9746,
+      "workElapsedMs": 343219060.2921,
       "worktree": {
         "files": 452,
-        "additions": 87400,
+        "additions": 87735,
         "deletions": 136
       },
       "reviewVerdicts": [
@@ -1830,14 +1830,14 @@
           "tokens": 544228917,
           "elapsedMs": 55121000,
           "tokenPercent": 11,
-          "timePercent": 17
+          "timePercent": 16
         },
         {
           "name": "backend-review",
           "tokens": 523010157,
           "elapsedMs": 42027654.7284,
-          "tokenPercent": 11,
-          "timePercent": 13
+          "tokenPercent": 10,
+          "timePercent": 12
         },
         {
           "name": "backend-remind-1",
@@ -1900,7 +1900,7 @@
           "tokens": 140351522,
           "elapsedMs": 8549493.7308,
           "tokenPercent": 3,
-          "timePercent": 3
+          "timePercent": 2
         },
         {
           "name": "frontend-remind-3",
@@ -1934,15 +1934,15 @@
           "name": "overall-remind-1",
           "tokens": 2955860040,
           "elapsedMs": 177354104.0307,
-          "tokenPercent": 62,
-          "timePercent": 54
+          "tokenPercent": 58,
+          "timePercent": 52
         },
         {
           "name": "overall-remind-2",
-          "tokens": 46303859,
-          "elapsedMs": 3826473.278600037,
-          "tokenPercent": 1,
-          "timePercent": 1
+          "tokens": 412896663,
+          "elapsedMs": 21391467.596100032,
+          "tokenPercent": 8,
+          "timePercent": 6
         }
       ]
     },
