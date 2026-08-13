@@ -54,6 +54,42 @@ export const test_computecachekey_changes_when_go_compiler_identity_changes =
 
     assert.notEqual(first, second);
 
+    const replacedGo = createFakeGoBinary(root);
+    fs.appendFileSync(
+      replacedGo,
+      process.platform === "win32" ? "\r\nrem a\r\n" : "\n# a\n",
+      "utf8",
+    );
+    const fixedTime = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    fs.utimesSync(replacedGo, fixedTime, fixedTime);
+    const replacedBefore = fs.statSync(replacedGo, { bigint: true });
+    const beforeReplacement = computeCacheKey({
+      dir: plugin,
+      entry: ".",
+      goBinary: replacedGo,
+      ttscVersion: "1.0.0",
+      tsgoVersion: "7.0.0-dev",
+    });
+    const replacement = `${replacedGo}.replacement`;
+    fs.writeFileSync(
+      replacement,
+      fs.readFileSync(replacedGo, "utf8").replace(/a(\r?\n)$/, "b$1"),
+      "utf8",
+    );
+    fs.utimesSync(replacement, fixedTime, fixedTime);
+    fs.renameSync(replacement, replacedGo);
+    const replacedAfter = fs.statSync(replacedGo, { bigint: true });
+    assert.equal(replacedAfter.size, replacedBefore.size);
+    assert.equal(replacedAfter.mtimeNs, replacedBefore.mtimeNs);
+    const afterReplacement = computeCacheKey({
+      dir: plugin,
+      entry: ".",
+      goBinary: replacedGo,
+      ttscVersion: "1.0.0",
+      tsgoVersion: "7.0.0-dev",
+    });
+    assert.notEqual(beforeReplacement, afterReplacement);
+
     if (process.platform === "win32") return;
     const cwdGo = createFakeGoBinary(plugin);
     fs.renameSync(cwdGo, path.join(plugin, "go"));

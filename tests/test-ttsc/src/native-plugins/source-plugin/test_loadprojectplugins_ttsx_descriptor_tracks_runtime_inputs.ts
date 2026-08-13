@@ -1,4 +1,5 @@
 import { TestProject } from "@ttsc/testing";
+import { pathToFileURL } from "node:url";
 
 import {
   assert,
@@ -68,11 +69,42 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
       `export const source = ${JSON.stringify(source)};\n`,
       "utf8",
     );
+    const nearModules = path.join(root, "near", "node_modules");
+    const farModules = path.join(root, "far", "node_modules");
+    fs.mkdirSync(path.join(nearModules, "descriptor-probe"), {
+      recursive: true,
+    });
+    const probePackage = path.join(farModules, "descriptor-probe");
+    fs.mkdirSync(probePackage, { recursive: true });
+    fs.writeFileSync(
+      path.join(probePackage, "package.json"),
+      JSON.stringify({ main: "entry" }),
+      "utf8",
+    );
+    const probeEntryJson = path.join(probePackage, "entry.json");
+    fs.writeFileSync(probeEntryJson, JSON.stringify("probe"), "utf8");
+    const orphanPackage = path.join(
+      TestProject.tmpdir("ttsc-ttsx-orphan-input-"),
+      "node_modules",
+      "orphan-source",
+    );
+    fs.mkdirSync(orphanPackage, { recursive: true });
+    const orphanSource = path.join(orphanPackage, "selection.ts");
+    fs.writeFileSync(
+      path.join(orphanPackage, "package.json"),
+      JSON.stringify({ private: true, type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(orphanSource, 'export const orphan = "orphan";\n');
     const entry = path.join(descriptor, "index.ts");
     fs.writeFileSync(
       entry,
       [
+        `import { createRequire } from "node:module";`,
         `import { source } from "./selection";`,
+        `import { orphan } from ${JSON.stringify(pathToFileURL(orphanSource).href)};`,
+        `const require = createRequire(import.meta.url);`,
+        `if (require("descriptor-probe") !== "probe" || orphan !== "orphan") throw new Error("descriptor probe failed");`,
         `export default () => ({ name: "ttsx-inputs", source });`,
         "",
       ].join("\n"),
@@ -103,6 +135,7 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
         TTSC_GO_BINARY: createFakeGoBinary(root),
         TTSC_GO_CACHE_DIR: path.join(root, "go-cache"),
         TTSC_TSGO_BINARY: TestProject.TSGO_BINARY,
+        NODE_PATH: [nearModules, farModules].join(path.delimiter),
       },
       script: worker,
     });
@@ -120,6 +153,20 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
     const missingMts = `${canonicalSelection.slice(0, -path.extname(canonicalSelection).length)}.mts`;
     assert.ok(inputs.includes(missingMts), JSON.stringify(inputs));
     assert.equal(loaded.hostInputHashes[missingMts], null);
+    const missingPackageEntry = inputs.find(
+      (input) =>
+        path.basename(input) === "entry.js" &&
+        sameExistingFile(path.dirname(input), probePackage),
+    );
+    assert.ok(missingPackageEntry, JSON.stringify(inputs));
+    assert.equal(loaded.hostInputHashes[missingPackageEntry], null);
+    const missingOrphanConfig = inputs.find(
+      (input) =>
+        path.basename(input) === "tsconfig.json" &&
+        sameExistingFile(path.dirname(input), orphanPackage),
+    );
+    assert.ok(missingOrphanConfig, JSON.stringify(inputs));
+    assert.equal(loaded.hostInputHashes[missingOrphanConfig], null);
     assert.ok(
       Object.entries(loaded.hostInputHashes).some(
         ([input, hash]) =>

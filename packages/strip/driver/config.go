@@ -251,7 +251,7 @@ function recordInput(file) {
   inputs.add(file);
   if (unstableHashes.has(file)) return;
   let observed;
-  try { observed = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+  try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
   if (hashes.has(file) && hashes.get(file) !== observed) {
     hashes.delete(file);
@@ -505,7 +505,7 @@ function recordInput(file: string): void {
   inputs.add(file);
   if (unstableHashes.has(file)) return;
   let observed: string | null;
-  try { observed = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+  try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
   if (hashes.has(file) && hashes.get(file) !== observed) {
     hashes.delete(file);

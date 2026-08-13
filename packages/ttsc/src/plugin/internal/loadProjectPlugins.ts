@@ -498,6 +498,12 @@ function revalidateHostInputHashes(
 
 function hashHostInput(file: string): string | null {
   try {
+    if (fs.statSync(file).isDirectory()) {
+      return crypto
+        .createHash("sha256")
+        .update("ttsc:host-input:directory\0")
+        .digest("hex");
+    }
     return crypto
       .createHash("sha256")
       .update(fs.readFileSync(file))
@@ -1505,7 +1511,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    inputs.add(file);`,
   `    if (unstableInputHashes.has(file)) return;`,
   `    let observed;`,
-  `    try { observed = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); } catch { observed = null; }`,
+  `    try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); } catch { observed = null; }`,
   `    if (inputHashes.has(file) && inputHashes.get(file) !== observed) { inputHashes.delete(file); unstableInputHashes.add(file); return; }`,
   `    inputHashes.set(file, observed);`,
   `  }`,
@@ -1920,6 +1926,7 @@ interface TtsxDescriptorResolutionRecord {
   parent?: string;
   resolved?: string;
   specifier?: string;
+  unstable?: boolean;
 }
 
 /**
@@ -1954,6 +1961,11 @@ function readTtsxDescriptorInputs(
     if (typeof record.resolved === "string") {
       const resolved = path.resolve(record.resolved);
       inputs.add(resolved);
+      if (record.unstable === true) {
+        hashes.delete(resolved);
+        unstableInputs.add(resolved);
+        continue;
+      }
       if (typeof record.hash === "string" || record.hash === null) {
         if (unstableInputs.has(resolved)) {
           // Keep a previously observed contradiction unstable.

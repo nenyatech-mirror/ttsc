@@ -444,6 +444,8 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   for (const probe of descriptorProbes.filter((_, index) => index % 2 === 0)) {
     fs.writeFileSync(probe, "{}\n", "utf8");
   }
+  const directoryProbe = descriptorProbes[3]!;
+  fs.mkdirSync(directoryProbe);
   const brokenTarget =
     process.platform === "win32"
       ? undefined
@@ -467,6 +469,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
       `const source = require(${JSON.stringify(descriptorSelection)});`,
       `const hostInputs = ${JSON.stringify(descriptorProbes)};`,
       "const hostInputHashes = Object.fromEntries(hostInputs.map((file) => {",
+      '  try { if (fs.statSync(file).isDirectory()) return [file, crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex")]; } catch {}',
       '  try { return [file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")]; }',
       "  catch { return [file, null]; }",
       "}));",
@@ -519,6 +522,8 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
               path.resolve(input),
             ),
         );
+  assert.equal(capturedGeneration.projectSnapshotComplete, true);
+  assert.match(publishedHashes[directoryProbe] ?? "", /^[0-9a-f]{64}$/);
 
   const originalRead = fs.readFileSync;
   const originalLstat = fs.lstatSync;
@@ -572,7 +577,35 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   );
 
   const main = modules[0]!;
-  const originalGeneration = [...cache.values()][0];
+  let originalGeneration = [...cache.values()][0];
+  const originalReaddir = fs.readdirSync;
+  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
+    this: unknown,
+    ...args: Parameters<typeof fs.readdirSync>
+  ) {
+    if (
+      path.resolve(String(args[0])) ===
+      path.resolve(path.dirname(directoryProbe))
+    ) {
+      const error = new Error("permission denied") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    }
+    return originalReaddir.apply(this, args as never);
+  } as typeof fs.readdirSync;
+  try {
+    assert.ok(await deliver(main));
+  } finally {
+    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
+      originalReaddir;
+  }
+  const permissionRetryGeneration = [...cache.values()][0];
+  assert.notEqual(
+    permissionRetryGeneration,
+    originalGeneration,
+    "an unreadable proving directory cannot certify that candidates remain missing",
+  );
+  originalGeneration = permissionRetryGeneration;
   fs.writeFileSync(
     path.join(project.root, "node_modules", "dep1", "index.d.ts"),
     "export declare const unrelated: string;\n",

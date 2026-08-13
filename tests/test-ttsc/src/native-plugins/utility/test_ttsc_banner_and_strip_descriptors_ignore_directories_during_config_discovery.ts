@@ -48,6 +48,10 @@ export const test_ttsc_banner_and_strip_descriptors_ignore_directories_during_co
       });
 
       assert.ok(descriptor.hostInputs.includes(localCandidate));
+      assert.match(
+        descriptor.hostInputHashes[localCandidate],
+        /^[0-9a-f]{64}$/,
+      );
       assert.ok(descriptor.hostInputs.includes(selected));
       assert.equal(
         descriptor.hostInputs.includes(

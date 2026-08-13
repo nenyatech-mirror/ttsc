@@ -523,11 +523,10 @@ function recordPluginDescriptorResolutionCandidates(
     if (subpath.length !== 0) {
       recordBase(path.join(packageDirectory, ...subpath));
     }
-    try {
-      if (fs.statSync(packageDirectory).isDirectory()) break;
-    } catch {
-      // Keep probing the next package search root.
-    }
+    // CommonJS resolution continues past an existing but unusable package
+    // directory. Record every search root before the resolver runs so a
+    // farther selected package retains evaluation-time hashes for its
+    // superseding candidates.
   }
 }
 
@@ -576,6 +575,7 @@ function recordPluginDescriptorInput(record: {
   parent?: string;
   resolved: string;
   specifier?: string;
+  unstable?: boolean;
 }): void {
   if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
   const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
@@ -590,6 +590,9 @@ function recordPluginDescriptorInput(record: {
 
 function pluginDescriptorInputHash(file: string): string | null {
   try {
+    if (fs.statSync(file).isDirectory()) {
+      return pluginDescriptorDirectoryHash();
+    }
     return crypto
       .createHash("sha256")
       .update(fs.readFileSync(file))
@@ -597,6 +600,14 @@ function pluginDescriptorInputHash(file: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Stable public fingerprint for an existing directory candidate's kind. */
+function pluginDescriptorDirectoryHash(): string {
+  return crypto
+    .createHash("sha256")
+    .update("ttsc:host-input:directory\0")
+    .digest("hex");
 }
 
 function runtimeFilePath(value: string | undefined): string | undefined {
@@ -777,17 +788,13 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
   if (tsconfig === null) {
     return null;
   }
-  recordPluginDescriptorProjectConfig(tsconfig);
   const cached = moduleOptionsCache.get(tsconfig);
   if (cached !== undefined) {
     return cached;
   }
   let options: OwningModuleOptions = {};
   try {
-    const project = readProjectConfig({
-      cwd: path.dirname(tsconfig),
-      tsconfig,
-    });
+    const project = readPluginDescriptorProjectConfig(tsconfig);
     options = projectModuleOptions(project.compilerOptions);
   } catch {
     // The owning project cannot be read, so nothing is known about the format
@@ -801,31 +808,105 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
   return options;
 }
 
-/** Record the owning config chain that controls a served TypeScript module. */
-function recordPluginDescriptorProjectConfig(tsconfig: string): void {
-  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
-  const resolvedTsconfig = path.resolve(tsconfig);
-  recordPluginDescriptorInput({
-    hash: pluginDescriptorInputHash(resolvedTsconfig),
-    resolved: resolvedTsconfig,
-  });
+/**
+ * Read one owning config while its discovered chain stays unchanged.
+ *
+ * A preliminary read discovers `extends`; an accepted read is bracketed by
+ * equal fingerprints over that exact chain. If churn never settles, ttsx can
+ * still execute the last project but reports every observed config as unstable,
+ * preventing a later snapshot from certifying the torn result.
+ */
+function readPluginDescriptorProjectConfig(
+  tsconfig: string,
+): ReturnType<typeof readProjectConfig> {
+  const read = () =>
+    readProjectConfig({ cwd: path.dirname(tsconfig), tsconfig });
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return read();
+
+  const observed = new Set<string>([path.resolve(tsconfig)]);
+  let project: ReturnType<typeof readProjectConfig>;
   try {
-    const project = readProjectConfig({
-      cwd: path.dirname(tsconfig),
-      tsconfig,
-    });
-    for (const configPath of project.configPaths) {
-      const resolved = path.resolve(configPath);
-      recordPluginDescriptorInput({
-        hash: pluginDescriptorInputHash(resolved),
-        resolved,
-      });
+    project = read();
+  } catch (error) {
+    recordPluginDescriptorProjectInputs(observed, true);
+    throw error;
+  }
+  let inputs = normalizedProjectConfigPaths(project);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (const input of inputs) observed.add(input);
+    const before = pluginDescriptorInputHashes(inputs);
+    let candidate: ReturnType<typeof readProjectConfig>;
+    try {
+      candidate = read();
+    } catch (error) {
+      recordPluginDescriptorProjectInputs(observed, true);
+      throw error;
     }
-  } catch {
-    const resolved = path.resolve(tsconfig);
+    const candidateInputs = normalizedProjectConfigPaths(candidate);
+    for (const input of candidateInputs) observed.add(input);
+    const after = pluginDescriptorInputHashes(candidateInputs);
+    if (
+      equalPluginDescriptorInputLists(inputs, candidateInputs) &&
+      equalPluginDescriptorInputHashes(before, after)
+    ) {
+      for (const input of candidateInputs) {
+        recordPluginDescriptorInput({ hash: after[input]!, resolved: input });
+      }
+      return candidate;
+    }
+    project = candidate;
+    inputs = candidateInputs;
+  }
+  recordPluginDescriptorProjectInputs(observed, true);
+  return project;
+}
+
+function normalizedProjectConfigPaths(
+  project: ReturnType<typeof readProjectConfig>,
+): string[] {
+  return [
+    ...new Set(project.configPaths.map((file) => path.resolve(file))),
+  ].sort();
+}
+
+function pluginDescriptorInputHashes(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => [input, pluginDescriptorInputHash(input)]),
+  );
+}
+
+function equalPluginDescriptorInputLists(
+  first: readonly string[],
+  second: readonly string[],
+): boolean {
+  return (
+    first.length === second.length &&
+    first.every((input, index) => input === second[index])
+  );
+}
+
+function equalPluginDescriptorInputHashes(
+  first: Readonly<Record<string, string | null>>,
+  second: Readonly<Record<string, string | null>>,
+): boolean {
+  return (
+    Object.keys(first).length === Object.keys(second).length &&
+    Object.entries(first).every(([input, hash]) => second[input] === hash)
+  );
+}
+
+function recordPluginDescriptorProjectInputs(
+  inputs: Iterable<string>,
+  unstable: boolean,
+): void {
+  for (const input of inputs) {
+    const resolved = path.resolve(input);
     recordPluginDescriptorInput({
       hash: pluginDescriptorInputHash(resolved),
       resolved,
+      ...(unstable ? { unstable: true } : {}),
     });
   }
 }
@@ -1764,6 +1845,16 @@ function dependencyCachePaths(tsconfig: string): DependencyCachePaths {
   const key = crypto
     .createHash("sha256")
     .update(tsconfig)
+    // Descriptor evaluation promises a result bound to this process's exact
+    // input observations. Reusing an emit another evaluator built can pair
+    // that process's old source/config bytes with this process's later hashes.
+    // Keep ordinary ttsx worker sharing, but isolate descriptor builds; the
+    // in-process `builtProjects` map still compiles each owning project once.
+    .update(
+      process.env.TTSC_PLUGIN_DESCRIPTOR_LOAD === "1"
+        ? `\0descriptor-process:${process.pid}`
+        : "",
+    )
     .digest("hex")
     .slice(0, 16);
   const root = dependencyCacheRoot();
@@ -1927,19 +2018,7 @@ function buildDependency(
   cacheDir: string,
   metaPath: string,
 ): BuiltProject {
-  const resolvedTsconfig = path.resolve(tsconfig);
-  recordPluginDescriptorInput({
-    hash: pluginDescriptorInputHash(resolvedTsconfig),
-    resolved: resolvedTsconfig,
-  });
-  const project = readProjectConfig({ cwd: path.dirname(tsconfig), tsconfig });
-  for (const configPath of project.configPaths) {
-    const resolved = path.resolve(configPath);
-    recordPluginDescriptorInput({
-      hash: pluginDescriptorInputHash(resolved),
-      resolved,
-    });
-  }
+  const project = readPluginDescriptorProjectConfig(tsconfig);
   const generation = newDependencyGeneration();
   const emitDir = dependencyGenerationDir(cacheDir, generation);
   fs.rmSync(emitDir, { force: true, recursive: true });
@@ -2414,7 +2493,12 @@ function formatDuration(ms: number): string {
 }
 
 /** Owning-tsconfig cache keyed by directory, mirroring `packageTypeCache`. */
-const tsconfigCache = new Map<string, string | null>();
+interface ITsconfigLookup {
+  candidates: readonly string[];
+  result: string | null;
+}
+
+const tsconfigCache = new Map<string, ITsconfigLookup>();
 const moduleOptionsCache = new Map<string, OwningModuleOptions | null>();
 
 /**
@@ -2435,13 +2519,15 @@ function nearestTsconfig(file: string): string | null {
   for (;;) {
     const cached = tsconfigCache.get(directory);
     if (cached !== undefined) {
-      return rememberTsconfig(chain, cached);
+      recordPluginDescriptorTsconfigCandidates(cached.candidates);
+      return rememberTsconfig(chain, cached.result, cached.candidates);
     }
     if (path.basename(directory) === "node_modules") {
       return rememberTsconfig(chain, null);
     }
     chain.push(directory);
     const candidate = path.join(directory, "tsconfig.json");
+    recordPluginDescriptorTsconfigCandidates([candidate]);
     if (isFile(candidate)) {
       return rememberTsconfig(chain, candidate);
     }
@@ -2456,11 +2542,29 @@ function nearestTsconfig(file: string): string | null {
 function rememberTsconfig(
   directories: readonly string[],
   result: string | null,
+  tailCandidates: readonly string[] = [],
 ): string | null {
-  for (const directory of directories) {
-    tsconfigCache.set(directory, result);
+  let candidates = [...tailCandidates];
+  for (let index = directories.length - 1; index >= 0; index -= 1) {
+    const directory = directories[index]!;
+    candidates = [path.join(directory, "tsconfig.json"), ...candidates];
+    tsconfigCache.set(directory, { candidates, result });
   }
   return result;
+}
+
+/** Report every owning-config candidate observed by the nearest-config walk. */
+function recordPluginDescriptorTsconfigCandidates(
+  candidates: readonly string[],
+): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    recordPluginDescriptorInput({
+      hash: pluginDescriptorInputHash(resolved),
+      resolved,
+    });
+  }
 }
 
 function readFileOrNull(file: string | null): string | null {

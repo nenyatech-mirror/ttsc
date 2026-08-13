@@ -83,6 +83,12 @@ function stripConfigInputs(context) {
 /** Hash the exact candidate state observed before discovery selects a file. */
 function hostInputHash(file) {
   try {
+    if (fs.statSync(file).isDirectory()) {
+      return crypto
+        .createHash("sha256")
+        .update("ttsc:host-input:directory\0")
+        .digest("hex");
+    }
     return crypto
       .createHash("sha256")
       .update(fs.readFileSync(file))

@@ -1235,10 +1235,18 @@ function matchesUniversalHostInputs(
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      // If the proving ancestor disappeared, every path below it remains
-      // missing. A later recreation is visible when this listing succeeds.
-      continue;
+    } catch (error) {
+      // Only a provably absent/non-directory ancestor keeps every descendant
+      // unreachable. Permission and transient I/O failures cannot prove that
+      // a candidate is still missing, while replacing the proving directory
+      // with an exact file can itself redirect module resolution.
+      try {
+        if (!fs.statSync(directory).isDirectory()) return false;
+      } catch (statError) {
+        if (!isMissingPathError(statError)) return false;
+        continue;
+      }
+      return false;
     }
     const identities = envelopeDerivation(cached).identityContext;
     const caseSensitive = identities.caseSensitive(directory);
@@ -1251,6 +1259,12 @@ function matchesUniversalHostInputs(
     }
   }
   return true;
+}
+
+/** True only for errors that prove a path cannot currently be traversed. */
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /** Capture the universal-input manifest while the generation is still fresh. */
@@ -1283,19 +1297,8 @@ function captureUniversalHostInputValidation(
       // The current module may be supplied from an unsaved editor buffer. Its
       // generation snapshot is overlaid below from `currentSource`, so a disk
       // fingerprint would be both unavailable and the wrong authority.
-    } else if (expected === null) {
-      try {
-        fs.accessSync(input);
-        return undefined;
-      } catch {
-        // Still missing exactly as it was during descriptor evaluation.
-      }
-    } else {
-      try {
-        if (hashText(fs.readFileSync(input)) !== expected) return undefined;
-      } catch {
-        return undefined;
-      }
+    } else if (expected !== hostInputStateHash(input)) {
+      return undefined;
     }
     const identity = derivationIdentity(state, input);
     if (validation.identities.has(identity)) continue;
@@ -1377,6 +1380,21 @@ function inputMetadataSignature(file: string): string | undefined {
     ].join(":");
   } catch {
     return undefined;
+  }
+}
+
+/** Content/kind fingerprint matching the compiler host-input contract. */
+function hostInputStateHash(file: string): string | null {
+  try {
+    return hashText(fs.readFileSync(file));
+  } catch {
+    try {
+      return fs.statSync(file).isDirectory()
+        ? hashText("ttsc:host-input:directory\0")
+        : null;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -1469,7 +1487,8 @@ function matchesRecordedInput(
     return false;
   }
   try {
-    return recorded === hashText(fs.readFileSync(input));
+    const current = hostInputStateHash(input);
+    return recorded === (current ?? "missing");
   } catch {
     return recorded === "missing";
   }
@@ -2000,12 +2019,13 @@ export function isProjectWalkPath(
 
 /**
  * Hash a list of absolute out-of-walk input paths: content SHA-256 for a
- * readable file, a stable `missing` marker otherwise. Keys use filesystem
- * identity so case-only spellings share one snapshot entry, while reads retain
- * the original path supplied by the compiler. The marker is state, not an error
- * — a recorded input disappearing (or reappearing) must change the comparison
- * exactly like a content edit. Exported so `@ttsc/metro` can re-hash its
- * recorded snapshot with identical semantics at cache-key time.
+ * readable file, a stable directory-kind digest for a directory candidate, and
+ * a stable `missing` marker otherwise. Keys use filesystem identity so
+ * case-only spellings share one snapshot entry, while reads retain the original
+ * path supplied by the compiler. The marker is state, not an error — a recorded
+ * input disappearing (or reappearing) must change the comparison exactly like a
+ * content edit. Exported so `@ttsc/metro` can re-hash its recorded snapshot
+ * with identical semantics at cache-key time.
  */
 export function collectExternalInputHashes(
   paths: readonly string[],
@@ -2017,11 +2037,7 @@ export function collectExternalInputHashes(
     if (identity in hashes) {
       continue;
     }
-    try {
-      hashes[identity] = hashText(fs.readFileSync(file));
-    } catch {
-      hashes[identity] = "missing";
-    }
+    hashes[identity] = hostInputStateHash(file) ?? "missing";
   }
   return hashes;
 }

@@ -2521,8 +2521,9 @@ function isHashableFile(name: string): boolean {
 // binary hashes for a value that does not change between plugins. The result
 // is a pure function of the go binary's resolved real path plus its on-disk
 // content; the memo key therefore mixes the resolved real path with a cheap
-// content signature (byte size + nanosecond mtime). That signature changes if
-// a long-lived host rewrites the binary in place between calls, so the memo
+// content signature (filesystem identity, mode, byte size, and nanosecond
+// change/modify times). That signature changes if a long-lived host rewrites
+// or atomically replaces the binary between calls, so the memo
 // re-derives the identity exactly as the un-memoized code would and the
 // cache-key bytes stay byte-for-byte identical to today. The selected compiler
 // path is shared by every build subprocess on Windows, while `go version` uses
@@ -2576,7 +2577,7 @@ function goCompilerIdentityMemoKey(
   cwd: string,
 ): string | null {
   try {
-    const stat = fs.statSync(resolved);
+    const stat = fs.statSync(resolved, { bigint: true });
     const context = crypto.createHash("sha256");
     context.update(cwd);
     for (const [key, value] of Object.entries(env).sort(([left], [right]) =>
@@ -2585,7 +2586,17 @@ function goCompilerIdentityMemoKey(
       if (value === undefined) continue;
       context.update(`\0${key.length}:${key}${value.length}:${value}`);
     }
-    return `${goBinary}\0${resolved}\0${stat.size}\0${stat.mtimeMs}\0${context.digest("hex")}`;
+    return [
+      goBinary,
+      resolved,
+      stat.dev,
+      stat.ino,
+      stat.mode,
+      stat.size,
+      stat.mtimeNs,
+      stat.ctimeNs,
+      context.digest("hex"),
+    ].join("\0");
   } catch {
     return null;
   }

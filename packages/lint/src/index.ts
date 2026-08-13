@@ -340,6 +340,14 @@ function hashHostInputPaths(
     inputs.map((input) => {
       const file = path.resolve(input);
       try {
+        if (fs.statSync(file).isDirectory()) {
+          return [
+            file,
+            createHash("sha256")
+              .update("ttsc:host-input:directory\0")
+              .digest("hex"),
+          ] as const;
+        }
         return [
           file,
           createHash("sha256").update(fs.readFileSync(file)).digest("hex"),

@@ -39,10 +39,12 @@ export interface ITtscPlugin {
    * Evaluation-time SHA-256 fingerprints for entries in {@link hostInputs}.
    *
    * Use a lowercase 64-digit digest for a file observed during descriptor
-   * evaluation and `null` for a missing candidate. The map is optional: ttsc
-   * still watches unhashed inputs, but persistent adapters conservatively
-   * decline narrow generation reuse because a later host snapshot cannot prove
-   * which state produced the descriptor.
+   * evaluation and `null` for a missing candidate. Ttsc's generated resolution
+   * loaders also digest the stable kind marker for an existing directory
+   * candidate, so replacing that directory with a file invalidates the
+   * generation. The map is optional: ttsc still watches unhashed inputs, but
+   * persistent adapters conservatively decline narrow generation reuse because
+   * a later host snapshot cannot prove which state produced the descriptor.
    */
   hostInputHashes?: Record<string, string | null>;
 
