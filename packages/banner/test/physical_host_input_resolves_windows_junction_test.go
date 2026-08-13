@@ -30,11 +30,15 @@ func TestPhysicalHostInputResolvesWindowsJunction(t *testing.T) {
   }
 
   got := bannerPhysicalHostInput(filepath.Join(link, filepath.Base(file)))
-  want, err := filepath.Abs(file)
+  want, err := filepath.EvalSymlinks(file)
   if err != nil {
     t.Fatal(err)
   }
   if got == nil || filepath.Clean(*got) != filepath.Clean(want) {
-    t.Fatalf("physical host input = %v, want %q", got, want)
+    value := "<nil>"
+    if got != nil {
+      value = *got
+    }
+    t.Fatalf("physical host input = %q, want %q", value, want)
   }
 }
