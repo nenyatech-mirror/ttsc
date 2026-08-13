@@ -886,6 +886,7 @@ func stripTypeScriptLoaderTsconfig(loader, location, outDir string) string {
       // resolving either way.
       "module":                          stripConfigModuleOption(location),
       "moduleResolution":                "bundler",
+      "jsx":                             "preserve",
       "noImplicitAny":                   false,
       "outDir":                          filepath.ToSlash(filepath.Join(outDir, "out")),
       "rewriteRelativeImportExtensions": true,

@@ -1032,6 +1032,7 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
       // resolving either way.
       "module":                          configModuleOption(location),
       "moduleResolution":                "bundler",
+      "jsx":                             "preserve",
       "outDir":                          filepath.ToSlash(filepath.Join(outDir, "out")),
       "rewriteRelativeImportExtensions": true,
       "rootDir":                         loaderRootDir(outDir),
