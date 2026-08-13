@@ -7,17 +7,18 @@ import path from "node:path";
  * Verifies descriptor failures propagate across setup surfaces and clean up.
  *
  * The generated loader lives in a private temporary directory and executable
- * descriptor evaluation precedes CLI, API, and LSP setup. The fixture imports
- * an unsupported extension so Node itself emits the loader-classified error
- * that forces the `ttsx` fallback. Each returned failure must preserve its
- * cause without leaving loader artifacts; a successful evaluator must clean up
- * before later descriptor validation too.
+ * descriptor evaluation precedes CLI, API, and LSP setup. The fixture imports a
+ * TSX dependency so Node itself emits the loader-classified error that forces
+ * the `ttsx` fallback. Each returned failure must preserve its cause without
+ * leaving loader artifacts; a successful evaluator must clean up before later
+ * descriptor validation too.
  *
  * 1. Drive non-zero, stdout-only, enveloped, foreign-result, missing, malformed,
  *    and successful results.
  * 2. Assert each API result is distinct and its loader directory is removed.
  * 3. Assert only a well-formed envelope becomes the failure reason.
  * 4. Assert the non-zero cause also reaches CLI and LSP startup unchanged.
+ * 5. Assert an unrelated unknown extension never reruns descriptor side effects.
  */
 export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
   (): void => {
@@ -32,14 +33,14 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
     fs.writeFileSync(
       path.join(descriptorRoot, "index.ts"),
       [
-        'import "./unsupported.xyz";',
+        'import "./unsupported.tsx";',
         'export default { name: "unreached", source: "./absent" };',
         "",
       ].join("\n"),
       "utf8",
     );
     fs.writeFileSync(
-      path.join(descriptorRoot, "unsupported.xyz"),
+      path.join(descriptorRoot, "unsupported.tsx"),
       "export default 1;\n",
       "utf8",
     );
@@ -230,7 +231,83 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
       /ttscserver: plugin descriptor .* failed with exit code 2/,
     );
     assertLoaderRemoved(lspMarker, "LSP");
+
+    assertUnrelatedUnknownExtensionDoesNotRetry(fakeTtsx);
   };
+
+function assertUnrelatedUnknownExtensionDoesNotRetry(fakeTtsx: string): void {
+  const root = TestProject.tmpdir("ttsc-descriptor-no-retry-");
+  const descriptorRoot = path.join(root, "descriptor");
+  fs.mkdirSync(descriptorRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ private: true, type: "module" }),
+    "utf8",
+  );
+  const sideEffectMarker = path.join(root, "side-effect.txt");
+  fs.writeFileSync(
+    path.join(descriptorRoot, "index.ts"),
+    [
+      'import fs from "node:fs";',
+      `fs.appendFileSync(${JSON.stringify(sideEffectMarker)}, "run\\n");`,
+      'await import("./unsupported.xyz");',
+      'export default { name: "unreached", source: "./absent" };',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(descriptorRoot, "unsupported.xyz"),
+    "export default 1;\n",
+    "utf8",
+  );
+  const tsconfig = path.join(root, "tsconfig.json");
+  fs.writeFileSync(
+    tsconfig,
+    JSON.stringify({
+      compilerOptions: {
+        plugins: [{ transform: "./descriptor/index.ts" }],
+      },
+    }),
+    "utf8",
+  );
+  const worker = path.join(root, "worker.cjs");
+  fs.writeFileSync(
+    worker,
+    [
+      `const { TtscCompiler } = require(${JSON.stringify(path.join(TestProject.WORKSPACE_ROOT, "packages", "ttsc", "lib", "index.js"))});`,
+      "try {",
+      `  new TtscCompiler({ cwd: ${JSON.stringify(root)}, env: process.env, tsconfig: ${JSON.stringify(tsconfig)} }).prepare();`,
+      '  process.stderr.write("NO_ERROR\\n");',
+      "  process.exitCode = 2;",
+      "} catch (error) {",
+      '  process.stderr.write(String(error?.message ?? error) + "\\n");',
+      "  process.exitCode = 1;",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const retryMarker = path.join(root, "unexpected-ttsx.txt");
+  const result = runNodeSurface({
+    args: [worker],
+    fakeTtsx,
+    marker: retryMarker,
+    mode: "nonzero",
+    root,
+  });
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /ERR_UNKNOWN_FILE_EXTENSION|Unknown file extension/,
+  );
+  assert.equal(
+    fs.existsSync(retryMarker),
+    false,
+    "unrelated load failure retried through ttsx",
+  );
+  assert.equal(fs.readFileSync(sideEffectMarker, "utf8"), "run\n");
+}
 
 function runNodeSurface(options: {
   args: string[];
