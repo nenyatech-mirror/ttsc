@@ -514,7 +514,12 @@ interface TtscHostInputValidation {
   /** Files/non-files that existed when the generation was captured. */
   readonly entries: Map<
     string,
-    { path: string; signature: string; strict?: true }
+    {
+      path: string;
+      realpath: string | null;
+      signature: string;
+      strict?: true;
+    }
   >;
   /** Identities omitted from the per-module dependency loop below. */
   readonly identities: Set<string>;
@@ -1225,6 +1230,7 @@ function matchesUniversalHostInputs(
     const signature = inputMetadataSignature(entry.path);
     if (signature === entry.signature) continue;
     if (entry.strict === true) return false;
+    if (hostInputRealpath(entry.path) !== entry.realpath) return false;
     if (!matchesRecordedInput(cached, entry.path)) {
       return false;
     }
@@ -1324,7 +1330,11 @@ function captureUniversalHostInputValidation(
     const after = inputMetadataSignature(input);
     if (before !== after) return undefined;
     if (after !== undefined) {
-      validation.entries.set(identity, { path: input, signature: after });
+      validation.entries.set(identity, {
+        path: input,
+        realpath: hostInputRealpath(input),
+        signature: after,
+      });
       continue;
     }
     const probe = missingPathProbe(input);
@@ -1334,6 +1344,7 @@ function captureUniversalHostInputValidation(
       if (signature === undefined) return undefined;
       validation.entries.set(blockerIdentity, {
         path: probe.blocker,
+        realpath: hostInputRealpath(probe.blocker),
         signature,
         strict: true,
       });

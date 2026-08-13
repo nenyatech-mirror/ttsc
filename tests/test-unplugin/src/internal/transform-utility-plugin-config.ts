@@ -563,6 +563,28 @@ async function assertPersistentUtilityConfigLinkRetargetInvalidatesTransform() {
   assert.notEqual([...cache.values()][0], firstGeneration);
   assert.match(second.code, /NEW LINK TARGET/);
   assert.doesNotMatch(second.code, /OLD LINK TARGET/);
+
+  const secondGeneration = [...cache.values()][0]!;
+  // Filesystem notifications are advisory. Close the exact-input watcher to
+  // prove metadata validation independently rejects a same-byte link retarget.
+  secondGeneration.hostInputMutationTracker?.close();
+  fs.rmSync(link, { force: true, recursive: true });
+  fs.symlinkSync(
+    oldTarget,
+    link,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const third = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(third);
+  assert.notEqual([...cache.values()][0], secondGeneration);
+  assert.match(third.code, /OLD LINK TARGET/);
+  assert.doesNotMatch(third.code, /NEW LINK TARGET/);
 }
 
 /** Assert Node's inherited NODE_PATH ordering contributes missing candidates. */
