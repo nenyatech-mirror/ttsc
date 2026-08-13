@@ -29,7 +29,10 @@ export const test_plugin_corpus_prepare_loads_typescript_lint_config_without_pat
     const root = setupLintProject("lint-violations");
     fs.writeFileSync(
       path.join(root, "package.json"),
-      JSON.stringify({ devDependencies: { "@ttsc/lint": "*" } }),
+      JSON.stringify({
+        devDependencies: { "@ttsc/lint": "*" },
+        type: "module",
+      }),
     );
     const selectionPackage = path.join(
       root,
@@ -58,6 +61,10 @@ export const test_plugin_corpus_prepare_loads_typescript_lint_config_without_pat
       path.join(selectionPackage, "inactive", "index.mjs"),
       `throw new Error("inactive exports condition loaded");\n`,
     );
+    // The shared fixture starts with a JSON config. This scenario replaces it
+    // with TypeScript; retaining both would be the ambiguity native discovery
+    // deliberately rejects before evaluating either file.
+    fs.rmSync(path.join(root, "lint.config.json"));
     fs.writeFileSync(
       path.join(root, "lint.config.ts"),
       `import type { ITtscLintConfig } from "@ttsc/lint";

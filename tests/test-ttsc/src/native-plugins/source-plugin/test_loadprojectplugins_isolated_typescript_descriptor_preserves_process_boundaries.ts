@@ -22,6 +22,8 @@ import { assert, fs, path, spawnNodeWorker } from "../../internal/source-build";
  *    cannot trigger the fallback or duplicate its side effect.
  * 5. Create a TypeScript candidate only after a genuine resolution failure and
  *    assert retry classification remains bound to the failure-time snapshot.
+ * 6. Put a directory at a TypeScript candidate path and assert it is not mistaken
+ *    for source that the fallback could load.
  */
 export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_process_boundaries =
   async () => {
@@ -269,4 +271,40 @@ export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_pr
     assert.equal(fs.existsSync(lateCandidate), true);
     assert.equal(fs.existsSync(fallbackMarker), false);
     assert.match(lateResult.stderr, /Cannot find module '\.\/late-candidate'/);
+
+    const directoryCounter = path.join(root, "directory-candidate-runs.txt");
+    const directoryCandidate = path.join(root, "directory-candidate.ts");
+    const directoryDescriptor = path.join(root, "directory-candidate-race.cts");
+    fs.mkdirSync(directoryCandidate);
+    fs.writeFileSync(
+      directoryDescriptor,
+      [
+        `const fs = require("node:fs");`,
+        `fs.appendFileSync(${JSON.stringify(directoryCounter)}, "run\\n");`,
+        `require("./directory-candidate");`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { plugins: [{ transform: directoryDescriptor }] },
+      }),
+      "utf8",
+    );
+    const directoryResult = await spawnNodeWorker({
+      env: {
+        TTSC_BINARY: TestProject.NATIVE_BINARY,
+        TTSC_TSGO_BINARY: TestProject.TSGO_BINARY,
+        TTSC_TTSX_BINARY: fakeTtsx,
+      },
+      script,
+    });
+    assert.equal(fs.readFileSync(directoryCounter, "utf8"), "run\n");
+    assert.equal(fs.existsSync(fallbackMarker), false);
+    assert.match(
+      directoryResult.stderr,
+      /Cannot find module '\.\/directory-candidate'/,
+    );
   };
