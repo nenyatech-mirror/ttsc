@@ -3121,7 +3121,15 @@ function touchCacheEntry(cacheDir: string): void {
 function prunePluginCacheRoot(root: string): void {
   try {
     fs.mkdirSync(root, { recursive: true });
-    const marker = path.join(root, CACHE_GC_MARKER_FILE);
+    const stats = fs.lstatSync(root);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`ttsc: unsafe plugin cache root: ${root}`);
+    }
+    // Pin every later read and recursive removal to the directory validated
+    // above. If an ancestor alias is retargeted after this point, GC must stay
+    // on the original physical cache rather than follow the mutable spelling.
+    const cacheRoot = fs.realpathSync.native(root);
+    const marker = path.join(cacheRoot, CACHE_GC_MARKER_FILE);
     const now = Date.now();
     const lastRun = readTimestamp(marker);
     if (
@@ -3132,7 +3140,7 @@ function prunePluginCacheRoot(root: string): void {
       return;
     }
     replaceCacheMetadataFile(marker, `${now}\n`);
-    prunePluginCacheEntries(root, now);
+    prunePluginCacheEntries(cacheRoot, now);
   } catch {
     // Plugin-cache GC is opportunistic; builds still proceed when it fails.
   }
