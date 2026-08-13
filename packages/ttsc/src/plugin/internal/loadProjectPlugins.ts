@@ -1334,7 +1334,7 @@ function loadCommonJsDescriptor(
     runtimeCapabilities.executable !== undefined
       ? runtimeCapabilities.executable
       : resolveNodeBinary(effectiveEnv, context.projectRoot);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
+  const dir = createEvaluationTempDir();
   const out = path.join(dir, "descriptor.json");
   const inputsOut = path.join(dir, "descriptor-inputs.ndjson");
   const diagnostics = path.join(dir, "descriptor.stderr");
@@ -2017,25 +2017,25 @@ function loadDescriptorViaTtsx(
   if (node === undefined || ttsx === undefined || ttsx.length === 0) {
     return undefined;
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
+  const dir = createEvaluationTempDir();
   const out = path.join(dir, "descriptor.json");
   const inputsOut = path.join(dir, "descriptor-inputs.ndjson");
   const shim = path.join(dir, "load-descriptor.mts");
   // ttsx type-checks and builds the shim's own project, so it needs a tsconfig
   // to anchor on; a minimal one is enough (the shim is `@ts-nocheck`).
-  fs.writeFileSync(
-    path.join(dir, "tsconfig.json"),
-    JSON.stringify({
-      compilerOptions: {
-        module: "nodenext",
-        moduleResolution: "nodenext",
-        skipLibCheck: true,
-        target: "es2022",
-      },
-    }),
-  );
-  fs.writeFileSync(shim, PLUGIN_DESCRIPTOR_SHIM_SOURCE);
   try {
+    fs.writeFileSync(
+      path.join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          skipLibCheck: true,
+          target: "es2022",
+        },
+      }),
+    );
+    fs.writeFileSync(shim, PLUGIN_DESCRIPTOR_SHIM_SOURCE);
     const result = childProcess.spawnSync(node, [ttsx, "--no-plugins", shim], {
       cwd: context.projectRoot,
       encoding: "utf8",
@@ -2835,6 +2835,20 @@ function readTsgoVersion(projectRoot: string): string {
   } catch {
     return "unknown";
   }
+}
+
+/**
+ * Create an evaluator directory whose cleanup path cannot follow a retargeted
+ * parent alias.
+ */
+function createEvaluationTempDir(): string {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "ttsc-plugin-descriptor-"),
+  );
+  // Keep the physical spelling selected immediately after creation. Removing
+  // the alias spelling later could follow a retargeted TEMP/TMPDIR junction or
+  // symlink into an unrelated directory with the same generated basename.
+  return fs.realpathSync.native(directory);
 }
 
 /**
