@@ -302,6 +302,9 @@ function resolveConfigFileContributors(
   const missingOptionalDigest = createHash("sha256")
     .update("missing\0")
     .digest("hex");
+  const directoryCandidateDigest = createHash("sha256")
+    .update("ttsc:host-input:directory\0")
+    .digest("hex");
   for (const dependency of evaluation.dependencies) {
     if (dependency.scope !== "watch" || dependency.kind === "directory") {
       continue;
@@ -335,6 +338,10 @@ function resolveConfigFileContributors(
       // The evaluator's optional-file digest includes a state prefix. The
       // public host-input contract uses null for the observed missing state.
       hash = null;
+    } else if (dependency.digest === directoryCandidateDigest) {
+      // A path that is currently a directory is still an exact file candidate:
+      // replacing it with a file changes module/config selection.
+      hash = directoryCandidateDigest;
     }
     if (hash === undefined) {
       delete hostInputHashes[input];
@@ -737,6 +744,11 @@ declare const process: {
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
+    const requestedParent =
+      context.parentURL && new URL(context.parentURL).href;
+    if (requestedParent !== undefined && graphNodes.has(requestedParent)) {
+      recordLocalResolutionCandidates(specifier, requestedParent);
+    }
     const resolved = nextResolve(specifier, context);
     if (typeof resolved.url !== "string" || !resolved.url.startsWith("file:")) {
       return resolved;
@@ -1017,6 +1029,11 @@ function optionalFileDigest(location: string): string {
         .update(Buffer.concat([Buffer.from("file\\0"), fs.readFileSync(location)]))
         .digest("hex");
     }
+    if (fs.statSync(location).isDirectory()) {
+      return createHash("sha256")
+        .update("ttsc:host-input:directory\0")
+        .digest("hex");
+    }
   } catch {
     // Missing, unreadable, and non-file candidates share the absent state.
   }
@@ -1042,6 +1059,87 @@ function recordOptionalFileDependency(
   }
   recordDependency("optional-file", location, optionalFileDigest(location), owners);
   return false;
+}
+
+const moduleProbeExtensions = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".node",
+] as const;
+const jsToTsProbeExtensions = new Map<string, readonly string[]>([
+  [".js", [".ts", ".tsx"]],
+  [".jsx", [".tsx"]],
+  [".mjs", [".mts"]],
+  [".cjs", [".cts"]],
+]);
+
+function moduleResolutionCandidates(base: string): string[] {
+  const extension = path.extname(base).toLowerCase();
+  const substitutions = jsToTsProbeExtensions.get(extension) ?? [];
+  const stem = base.slice(0, base.length - extension.length);
+  return [
+    base,
+    ...substitutions.map((candidate) => stem + candidate),
+    ...moduleProbeExtensions.map((candidate) => base + candidate),
+    path.join(base, "package.json"),
+    ...moduleProbeExtensions.map((candidate) =>
+      path.join(base, "index" + candidate),
+    ),
+  ];
+}
+
+/** Record exact local probes before the runtime resolver chooses one. */
+function recordLocalResolutionCandidates(
+  specifier: string,
+  parentUrl: string,
+): void {
+  if (!isLocalModuleSpecifier(specifier)) return;
+  let base: string;
+  try {
+    base = specifier.startsWith("file:")
+      ? fileURLToPath(specifier)
+      : path.resolve(path.dirname(fileURLToPath(parentUrl)), specifier);
+  } catch {
+    return;
+  }
+  const owners = [parentUrl];
+  try {
+    if (fs.statSync(base).isFile()) {
+      recordOptionalFileDependency(base, owners);
+      return;
+    }
+  } catch {
+    // A missing exact spelling falls through to source/extension/directory
+    // probes, all of which can redirect a later evaluation.
+  }
+  for (const candidate of moduleResolutionCandidates(base)) {
+    recordOptionalFileDependency(candidate, owners);
+  }
+}
+
+/** CommonJS LOAD_AS_FILE / LOAD_AS_DIRECTORY candidates for one legacy path. */
+function recordLegacyPackagePathCandidates(
+  candidate: string,
+  owners: readonly string[],
+): void {
+  for (const file of [
+    candidate,
+    candidate + ".js",
+    candidate + ".json",
+    candidate + ".node",
+    path.join(candidate, "package.json"),
+    path.join(candidate, "index.js"),
+    path.join(candidate, "index.json"),
+    path.join(candidate, "index.node"),
+  ]) {
+    recordOptionalFileDependency(file, owners);
+  }
 }
 
 function recordPackageManifests(
@@ -1089,25 +1187,25 @@ function recordNodeModulesSearchDirectories(
             // The directory digest of node_modules records a missing scope.
           }
         }
-        if (packageName !== undefined) {
-          const selected = recordPackageCandidateTopology(
-            modules,
-            packageName,
-            specifier,
-            childLocation,
-            owners,
-            conditions,
-          );
-          if (
-            selected ||
-            resolvedPackageContains(modules, packageName, childLocation)
-          ) {
-            return;
-          }
-        }
       }
     } catch {
       // Missing search levels do not participate in the current resolution.
+    }
+    if (packageName !== undefined) {
+      const selected = recordPackageCandidateTopology(
+        modules,
+        packageName,
+        specifier,
+        childLocation,
+        owners,
+        conditions,
+      );
+      if (
+        selected ||
+        resolvedPackageContains(modules, packageName, childLocation)
+      ) {
+        return;
+      }
     }
     if (
       packageName === undefined &&
@@ -1130,14 +1228,32 @@ function recordPackageCandidateTopology(
   conditions: readonly string[],
 ): boolean {
   const packageRoot = path.join(modules, packageName);
-  try {
-    if (!fs.statSync(packageRoot).isDirectory()) return false;
-  } catch {
-    return false;
-  }
   const subpath = specifier
     .slice(packageName.length)
     .replace(/^[/\\\\]+/, "");
+  try {
+    if (!fs.statSync(packageRoot).isDirectory()) {
+      recordOptionalFileDependency(
+        path.join(packageRoot, "package.json"),
+        owners,
+      );
+      recordLegacyPackagePathCandidates(
+        subpath === "" ? packageRoot : path.join(packageRoot, subpath),
+        owners,
+      );
+      return false;
+    }
+  } catch {
+    recordOptionalFileDependency(
+      path.join(packageRoot, "package.json"),
+      owners,
+    );
+    recordLegacyPackagePathCandidates(
+      subpath === "" ? packageRoot : path.join(packageRoot, subpath),
+      owners,
+    );
+    return false;
+  }
   const rootTopology = recordPackageRootTopology(
     packageRoot,
     owners,
@@ -1172,6 +1288,7 @@ function recordPackageRootTopology(
   const legacySelected = (): boolean =>
     useMain &&
     packagePathCandidateMatchesChild(normalizedRoot, childLocation, true);
+  if (useMain) recordLegacyPackagePathCandidates(normalizedRoot, owners);
   if (!recordOptionalFileDependency(manifest, owners)) {
     const selected = legacySelected();
     if (!selected) {
@@ -1218,6 +1335,7 @@ function recordPackageRootTopology(
         // it literally and permits absolute paths and paths outside the package.
         const main = path.resolve(normalizedRoot, metadata.main);
         recordPackagePathCandidate(main, owners);
+        recordLegacyPackagePathCandidates(main, owners);
         selected =
           packagePathCandidateMatchesChild(main, childLocation, true) ||
           selected;
@@ -1465,6 +1583,7 @@ function recordPackageSubpathTopology(
   const candidate = boundedPackageTarget(packageRoot, subpath);
   if (candidate === undefined) return false;
   recordPackagePathCandidate(candidate, owners);
+  recordLegacyPackagePathCandidates(candidate, owners);
   let selected = packagePathCandidateMatchesChild(
     candidate,
     childLocation,
@@ -1484,6 +1603,7 @@ function recordPackageSubpathTopology(
       if (typeof metadata.main === "string") {
         const main = path.resolve(candidate, metadata.main);
         recordPackagePathCandidate(main, owners);
+        recordLegacyPackagePathCandidates(main, owners);
         selected =
           packagePathCandidateMatchesChild(main, childLocation, true) ||
           selected;

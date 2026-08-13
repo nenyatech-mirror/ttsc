@@ -66,6 +66,87 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
       false,
     );
 
+    const resolutionWorkspace = TestProject.tmpdir(
+      "ttsc-lint-resolution-inputs-",
+    );
+    const resolutionProject = path.join(
+      resolutionWorkspace,
+      "apps",
+      "app",
+    );
+    const outerPackage = path.join(
+      resolutionWorkspace,
+      "node_modules",
+      "hoisted-selection",
+    );
+    fs.mkdirSync(resolutionProject, { recursive: true });
+    fs.mkdirSync(outerPackage, { recursive: true });
+    fs.writeFileSync(
+      path.join(outerPackage, "package.json"),
+      JSON.stringify({ main: "index.cjs" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(outerPackage, "index.cjs"),
+      'module.exports = "warning";\n',
+      "utf8",
+    );
+    const resolutionConfig = path.join(
+      resolutionProject,
+      "lint.config.ts",
+    );
+    const selectedModule = path.join(resolutionProject, "selection.mjs");
+    fs.writeFileSync(
+      selectedModule,
+      'export default "warning";\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      resolutionConfig,
+      [
+        'import local from "./selection";',
+        'import hoisted from "hoisted-selection";',
+        'export default { rules: { "no-var": local === hoisted ? local : "error" } };',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const resolutionDescriptor = factory({
+      ...context,
+      cwd: resolutionProject,
+      plugin: {
+        configFile: resolutionConfig,
+        transform: "@ttsc/lint",
+      },
+      pluginConfigDir: resolutionProject,
+      projectRoot: resolutionProject,
+      tsconfig: path.join(resolutionProject, "tsconfig.json"),
+    });
+    const missingLocalCandidate = path.join(resolutionProject, "selection.ts");
+    const missingNearerPackageManifest = path.join(
+      resolutionWorkspace,
+      "apps",
+      "node_modules",
+      "hoisted-selection",
+      "package.json",
+    );
+    assert.ok(
+      resolutionDescriptor.hostInputs.includes(missingLocalCandidate),
+      "extensionless local resolution omitted a higher-priority file candidate",
+    );
+    assert.equal(
+      resolutionDescriptor.hostInputHashes[missingLocalCandidate],
+      null,
+    );
+    assert.ok(
+      resolutionDescriptor.hostInputs.includes(missingNearerPackageManifest),
+      "bare resolution omitted a nearer package manifest below a missing node_modules level",
+    );
+    assert.equal(
+      resolutionDescriptor.hostInputHashes[missingNearerPackageManifest],
+      null,
+    );
+
     fs.writeFileSync(path.join(project, "lint.config.json"), "{}\n", "utf8");
     fs.writeFileSync(
       path.join(project, "ttsc-lint.config.json"),
