@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-13T10:15:44.594Z",
+  "generatedAt": "2026-08-13T15:45:37.406Z",
   "origin": "samchon/ttsc",
   "cells": [
     {
@@ -1598,48 +1598,48 @@
       "model": "gpt-5.6-luna",
       "effort": "high",
       "status": "running",
-      "stage": "overall-remind-1",
+      "stage": "overall-remind-2",
       "launchedAt": "2026-08-09T18:17:34.421Z",
-      "tokens": 4421326468,
+      "tokens": 4732890206,
       "tokenUsage": {
-        "totalTokens": 4421326468,
-        "inputTokens": 4414559396,
-        "cachedInputTokens": 4321676800,
+        "totalTokens": 4732890206,
+        "inputTokens": 4725711581,
+        "cachedInputTokens": 4624351488,
         "cacheWriteInputTokens": 0,
-        "outputTokens": 6767072,
-        "reasoningOutputTokens": 1519867
+        "outputTokens": 7178625,
+        "reasoningOutputTokens": 1623003
       },
       "inspection": {
-        "attempts": 11,
+        "attempts": 12,
         "failures": 0,
         "tokenUsage": {
-          "totalTokens": 40736231,
-          "inputTokens": 40591483,
-          "cachedInputTokens": 38189056,
+          "totalTokens": 42139142,
+          "inputTokens": 41988374,
+          "cachedInputTokens": 39444224,
           "cacheWriteInputTokens": 0,
-          "outputTokens": 144748,
-          "reasoningOutputTokens": 78065
+          "outputTokens": 150768,
+          "reasoningOutputTokens": 80838
         },
-        "elapsedMs": 4124488.6652999995
+        "elapsedMs": 4488592.6959999995
       },
       "apiCost": {
         "provider": "openrouter",
         "pricingAsOf": "2026-08-01",
         "priceSource": "https://openrouter.ai/api/v1/models",
         "currency": "USD",
-        "amountUsd": 55.8659183,
-        "requests": 32878,
-        "shortContextRequests": 32877,
+        "amountUsd": 59.9570107,
+        "requests": 35219,
+        "shortContextRequests": 35218,
         "longContextRequests": 1,
         "longContextThresholdTokens": 272000,
         "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],
-      "workElapsedMs": 306547646.15860003,
+      "workElapsedMs": 325654065.9746,
       "worktree": {
         "files": 452,
-        "additions": 87395,
+        "additions": 87400,
         "deletions": 136
       },
       "reviewVerdicts": [
@@ -1807,6 +1807,21 @@
           "verdictRelativePath": "supervision/10-overall-0-verdict.json",
           "verdictSha256": "77fd3407109fe438c27d455545a82f96dc44adfb3985857991690aad068a7229",
           "workspaceMaterialSha256": "ae785cd377d8702a73a577a086e8902272d4ca68aa828d273f0ee675522510cf"
+        },
+        {
+          "scope": "overall",
+          "attempt": 1,
+          "decision": "fail",
+          "action": "retry",
+          "goalIndex": 15,
+          "terminalTurnId": "1b40eb7e-394f-4aa8-8968-6dd7c889b84b",
+          "rationale": "The review loop did not reach a valid dry round. The stream’s purported final-dry report still says the backend development gate could not bind and that backend tests failed (overall-remind-1.log:5238872); its final report explicitly lists remaining findings—failed backend integration tests, missing live E2E fixtures, @ts-nocheck providers, and an in-memory pagination path (overall-remind-1.log:5239148). Any remaining finding or failed required gate invalidates dryness. A complete one-file-per-command manifest/read is unverified; the stream describes seven bounded ranges rather than proving the required command discipline (overall-remind-1.log:5236760). The tests also fail the workspace testing rules: testing.md requires persisted mutations to have observable follow-up state, list/search tests to prove filter/order/pagination, and every test to assert business behavior (lines 138-139, 158). Yet test_api_erp_operation_coverage.ts claims item erasure deactivates while only checking the returned ID (lines 23-30), claims a listing while only checking pagination.current (lines 32-37), and tests invitation acceptance only with an unknown token/refusal and no successful acceptance path (lines 39-42).",
+          "pausedAt": "2026-08-13T14:56:18.037Z",
+          "decidedAt": "2026-08-13T15:02:30.757Z",
+          "resumedAt": "2026-08-13T15:02:30.786Z",
+          "verdictRelativePath": "supervision/11-overall-1-verdict.json",
+          "verdictSha256": "ee85b9b74f755d4de0aadf87e7c3b19902e7301ea3c63bd6574830680af0cbc2",
+          "workspaceMaterialSha256": "ec1821b136367368c83feb8e93fca697cbbf7197a147c20f2b388a97670e2250"
         }
       ],
       "stages": [
@@ -1814,15 +1829,15 @@
           "name": "backend-start",
           "tokens": 544228917,
           "elapsedMs": 55121000,
-          "tokenPercent": 12,
-          "timePercent": 18
+          "tokenPercent": 11,
+          "timePercent": 17
         },
         {
           "name": "backend-review",
           "tokens": 523010157,
           "elapsedMs": 42027654.7284,
-          "tokenPercent": 12,
-          "timePercent": 14
+          "tokenPercent": 11,
+          "timePercent": 13
         },
         {
           "name": "backend-remind-1",
@@ -1877,7 +1892,7 @@
           "name": "frontend-remind-1",
           "tokens": 67847130,
           "elapsedMs": 3687617.0896,
-          "tokenPercent": 2,
+          "tokenPercent": 1,
           "timePercent": 1
         },
         {
@@ -1917,10 +1932,17 @@
         },
         {
           "name": "overall-remind-1",
-          "tokens": 2690600161,
-          "elapsedMs": 162074157.49330002,
-          "tokenPercent": 61,
-          "timePercent": 53
+          "tokens": 2955860040,
+          "elapsedMs": 177354104.0307,
+          "tokenPercent": 62,
+          "timePercent": 54
+        },
+        {
+          "name": "overall-remind-2",
+          "tokens": 46303859,
+          "elapsedMs": 3826473.278600037,
+          "tokenPercent": 1,
+          "timePercent": 1
         }
       ]
     },
