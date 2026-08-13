@@ -19,7 +19,10 @@ func (plugin invalidHostInputHashPlugin) SourcePreamble(ctx driver.PluginContext
   ctx.ReportHostInputHash(plugin.input, stringPointer("NOT-A-SHA256"))
   ctx.ReportHostInputHash(plugin.input, stringPointer(strings.Repeat("a", 64)))
   ctx.ReportHostInputRealpath(plugin.input, stringPointer(filepath.Join(filepath.Dir(plugin.input), "selected")))
-  ctx.ReportHostInputRealpath(plugin.input, stringPointer(" "))
+  // This spelling would resolve to the same target if the driver silently
+  // anchored it at ctx.Cwd. The public contract requires an absolute identity,
+  // so it must invalidate the earlier observation instead.
+  ctx.ReportHostInputRealpath(plugin.input, stringPointer("selected"))
   ctx.ReportHostInputRealpath(plugin.input, stringPointer(filepath.Join(filepath.Dir(plugin.input), "selected")))
   return "", nil
 }

@@ -146,7 +146,7 @@ func (ctx PluginContext) ReportHostInputRealpath(file string, realpath *string) 
   }
   file = filepath.Clean(file)
   if realpath != nil {
-    if strings.TrimSpace(*realpath) == "" {
+    if strings.TrimSpace(*realpath) == "" || !filepath.IsAbs(*realpath) {
       if ctx.reportHostInputRealpathUnknown != nil {
         ctx.reportHostInputRealpathUnknown(file)
       } else if ctx.reportHostInput != nil {
@@ -154,11 +154,7 @@ func (ctx PluginContext) ReportHostInputRealpath(file string, realpath *string) 
       }
       return
     }
-    resolved := *realpath
-    if !filepath.IsAbs(resolved) {
-      resolved = filepath.Join(ctx.Cwd, resolved)
-    }
-    resolved = filepath.Clean(resolved)
+    resolved := filepath.Clean(*realpath)
     realpath = &resolved
   }
   ctx.reportHostInputRealpath(file, realpath)
