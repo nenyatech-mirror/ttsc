@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 
 import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
@@ -734,15 +733,8 @@ function parseHostInputRealpaths(
     ) {
       continue;
     }
-    if (realpath === null) {
-      output[path.resolve(file)] = null;
-      continue;
-    }
-    try {
-      output[path.resolve(file)] = fs.realpathSync.native(realpath as string);
-    } catch {
-      output[path.resolve(file)] = path.resolve(realpath as string);
-    }
+    output[path.resolve(file)] =
+      realpath === null ? null : path.resolve(realpath as string);
   }
   return Object.keys(output).length === 0 ? undefined : output;
 }
