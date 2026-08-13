@@ -1294,10 +1294,12 @@ func loadConfigFile(location string) (any, error) {
 }
 
 type configDependencyFingerprint struct {
-  Path   string `json:"path"`
-  Digest string `json:"digest"`
-  Kind   string `json:"kind"`
-  Scope  string `json:"scope"`
+  Path           string  `json:"path"`
+  Digest         string  `json:"digest"`
+  IdentityStable bool    `json:"identityStable"`
+  Kind           string  `json:"kind"`
+  Realpath       *string `json:"realpath"`
+  Scope          string  `json:"scope"`
 }
 
 const (
@@ -1367,10 +1369,10 @@ func loadConfigFileEvaluationWithin(
 // configCacheVersion namespaces the on-disk config cache. Bump it whenever
 // the shape of a cached config object changes so that entries written by an
 // older @ttsc/lint binary are treated as a miss rather than silently reused.
-// v6 adds the `entry` dependency kind. A v5 cache records a resolution trace's
-// ancestors as directory digests, so reusing it would keep republishing the
-// filesystem root as a watch input for as long as the entry survives.
-const configCacheVersion = "v6"
+// v7 pairs each dependency digest with its evaluation-time physical identity.
+// A v6 cache can otherwise survive a symlink or junction retarget when the new
+// target has equal bytes.
+const configCacheVersion = "v7"
 
 // configEvalCache memoizes evaluated .ts/.js lint config objects for the
 // lifetime of one process; the on-disk cache (configCacheDir) extends the
@@ -1557,6 +1559,10 @@ func configDependencyDigestsAreCurrent(
   dependencies []configDependencyFingerprint,
 ) bool {
   for _, dependency := range dependencies {
+    if !dependency.IdentityStable ||
+      !sameConfigDependencyRealpath(dependency.Realpath, configDependencyRealpath(dependency.Path)) {
+      return false
+    }
     digest, err := configDependencyDigest(dependency)
     if err != nil {
       return false
@@ -1566,6 +1572,19 @@ func configDependencyDigestsAreCurrent(
     }
   }
   return true
+}
+
+func configDependencyRealpath(location string) *string {
+  absolute, err := filepath.Abs(location)
+  if err != nil {
+    return nil
+  }
+  resolved := realProjectPath(absolute)
+  if _, statErr := os.Stat(resolved); statErr != nil {
+    return nil
+  }
+  resolved = filepath.Clean(resolved)
+  return &resolved
 }
 
 func configDependencyDigest(
@@ -1848,6 +1867,7 @@ func normalizeConfigDependencyFingerprints(
   for _, dependency := range input {
     if strings.TrimSpace(dependency.Path) == "" ||
       !filepath.IsAbs(dependency.Path) ||
+      (dependency.Realpath != nil && !filepath.IsAbs(*dependency.Realpath)) ||
       (dependency.Digest != "" && len(dependency.Digest) != sha256.Size*2) ||
       strings.ToLower(dependency.Digest) != dependency.Digest ||
       (dependency.Kind != configDependencyFile &&
@@ -1867,17 +1887,21 @@ func normalizeConfigDependencyFingerprints(
     key := dependency.Kind + "\x00" + absolute
     if previous, exists := seen[key]; exists {
       if previous.Digest != dependency.Digest ||
+        previous.IdentityStable != dependency.IdentityStable ||
         previous.Kind != dependency.Kind ||
+        !sameConfigDependencyRealpath(previous.Realpath, dependency.Realpath) ||
         previous.Scope != dependency.Scope {
         return nil, false
       }
       continue
     }
     fingerprint := configDependencyFingerprint{
-      Path:   absolute,
-      Digest: dependency.Digest,
-      Kind:   dependency.Kind,
-      Scope:  dependency.Scope,
+      Path:           absolute,
+      Digest:         dependency.Digest,
+      IdentityStable: dependency.IdentityStable,
+      Kind:           dependency.Kind,
+      Realpath:       cloneConfigDependencyRealpath(dependency.Realpath),
+      Scope:          dependency.Scope,
     }
     seen[key] = fingerprint
     normalized = append(normalized, fingerprint)
@@ -1886,6 +1910,21 @@ func normalizeConfigDependencyFingerprints(
     return normalized[left].Path < normalized[right].Path
   })
   return normalized, true
+}
+
+func cloneConfigDependencyRealpath(value *string) *string {
+  if value == nil {
+    return nil
+  }
+  cloned := filepath.Clean(*value)
+  return &cloned
+}
+
+func sameConfigDependencyRealpath(left, right *string) bool {
+  if left == nil || right == nil {
+    return left == nil && right == nil
+  }
+  return filepath.Clean(*left) == filepath.Clean(*right)
 }
 
 // loadScriptConfigFile evaluates a .js/.cjs/.mjs config file by running a
@@ -2111,12 +2150,26 @@ function recordDependency(kind, location, digest, owners) {
   const previous = dependencies.get(key);
   const mergedOwners = previous ? previous.owners : new Set();
   for (const owner of owners) mergedOwners.add(owner);
+  const realpath = dependencyRealpath(location);
+  const identityStable =
+    (!previous || previous.identityStable) &&
+    (!previous || previous.realpath === realpath);
   dependencies.set(key, {
-    digest: previous && previous.digest !== digest ? "" : digest,
+    digest: !identityStable || (previous && previous.digest !== digest) ? "" : digest,
+    identityStable,
     kind,
     owners: mergedOwners,
     path: location,
+    realpath,
   });
+}
+
+function dependencyRealpath(location) {
+  try {
+    return realPath(location);
+  } catch {
+    return null;
+  }
 }
 
 function isLocalModuleSpecifier(specifier) {
@@ -3123,9 +3176,11 @@ const resolutionRoot = path.resolve(%s);
 const CONFIG_KEYS = new Set<string>([%s]);
 const dependencies = new Map<string, {
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "entry" | "file" | "optional-file";
   path: string;
   owners: Set<string>;
+  realpath: string | null;
 }>();
 const graphNodes = new Map<string, string>();
 const graphEdges: Array<{
@@ -3308,12 +3363,30 @@ function recordDependency(
   const previous = dependencies.get(key);
   const mergedOwners = previous?.owners ?? new Set<string>();
   for (const owner of owners) mergedOwners.add(owner);
+  const realpath = dependencyRealpath(location);
+  const identityStable =
+    previous?.identityStable !== false &&
+    (previous === undefined || previous.realpath === realpath);
   dependencies.set(key, {
-    digest: previous !== undefined && previous.digest !== digest ? "" : digest,
+    digest:
+      !identityStable ||
+      (previous !== undefined && previous.digest !== digest)
+        ? ""
+        : digest,
+    identityStable,
     kind,
     owners: mergedOwners,
     path: location,
+    realpath,
   });
+}
+
+function dependencyRealpath(location: string): string | null {
+  try {
+    return realPath(location);
+  } catch {
+    return null;
+  }
 }
 
 function isLocalModuleSpecifier(specifier: string): boolean {
@@ -4117,8 +4190,10 @@ function realPath(location: string): string {
 
 function finalizeDependencies(): Array<{
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "entry" | "file" | "optional-file";
   path: string;
+  realpath: string | null;
   scope: "cache" | "watch";
 }> {
   const watched = graphWatchReachability();

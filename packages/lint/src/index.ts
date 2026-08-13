@@ -216,8 +216,10 @@ type ConfigPluginEntry = { namespace: string; source: string };
 
 type ConfigDependencyFingerprint = {
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "file" | "optional-file";
   path: string;
+  realpath: string | null;
   scope: "cache" | "watch";
 };
 
@@ -305,7 +307,14 @@ function resolveConfigFileContributors(
       continue;
     }
     const input = path.resolve(dependency.path);
-    const realpath = hostInputRealpath(input);
+    const realpath = dependency.realpath;
+    if (!dependency.identityStable) {
+      delete hostInputRealpaths[input];
+      delete hostInputHashes[input];
+      unstableRealpaths.add(input);
+      unprovenInputs.add(input);
+      continue;
+    }
     if (
       Object.prototype.hasOwnProperty.call(hostInputRealpaths, input) &&
       hostInputRealpaths[input] !== realpath
@@ -672,9 +681,11 @@ const CONFIG_KEYS = new Set<string>([
 ]);
 const dependencies = new Map<string, {
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "file" | "optional-file";
   path: string;
   owners: Set<string>;
+  realpath: string | null;
 }>();
 const graphNodes = new Map<string, string>();
 const graphEdges: Array<{
@@ -858,12 +869,30 @@ function recordDependency(
   const previous = dependencies.get(key);
   const mergedOwners = previous?.owners ?? new Set<string>();
   for (const owner of owners) mergedOwners.add(owner);
+  const realpath = dependencyRealpath(location);
+  const identityStable =
+    previous?.identityStable !== false &&
+    (previous === undefined || previous.realpath === realpath);
   dependencies.set(key, {
-    digest: previous !== undefined && previous.digest !== digest ? "" : digest,
+    digest:
+      !identityStable ||
+      (previous !== undefined && previous.digest !== digest)
+        ? ""
+        : digest,
+    identityStable,
     kind,
     owners: mergedOwners,
     path: location,
+    realpath,
   });
+}
+
+function dependencyRealpath(location: string): string | null {
+  try {
+    return realPath(location);
+  } catch {
+    return null;
+  }
 }
 
 function isLocalModuleSpecifier(specifier: string): boolean {
@@ -1625,8 +1654,10 @@ function realPath(location: string): string {
 
 function finalizeDependencies(): Array<{
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "file" | "optional-file";
   path: string;
+  realpath: string | null;
   scope: "cache" | "watch";
 }> {
   const watched = graphWatchReachability();
@@ -2052,7 +2083,7 @@ function evaluateTtsxConfigPlugins(
  * Namespaces the on-disk config cache. Kept in lockstep with the Go sidecar's
  * `configCacheVersion`; bump both when the cached shape changes.
  */
-const CONFIG_CACHE_VERSION = "v5";
+const CONFIG_CACHE_VERSION = "v7";
 
 /**
  * Directory shared by this factory and the Go sidecar for cached lint configs.
@@ -2176,6 +2207,14 @@ function normalizeConfigDependencyFingerprints(
       typeof candidate !== "object" ||
       typeof (candidate as ConfigDependencyFingerprint).path !== "string" ||
       typeof (candidate as ConfigDependencyFingerprint).digest !== "string" ||
+      typeof (candidate as ConfigDependencyFingerprint).identityStable !==
+        "boolean" ||
+      ((candidate as ConfigDependencyFingerprint).realpath !== null &&
+        (typeof (candidate as ConfigDependencyFingerprint).realpath !==
+          "string" ||
+          !path.isAbsolute(
+            (candidate as ConfigDependencyFingerprint).realpath as string,
+          ))) ||
       !["directory", "file", "optional-file"].includes(
         (candidate as ConfigDependencyFingerprint).kind,
       ) ||
@@ -2188,6 +2227,9 @@ function normalizeConfigDependencyFingerprints(
     const candidatePath = (candidate as ConfigDependencyFingerprint).path;
     const digest = (candidate as ConfigDependencyFingerprint).digest;
     const kind = (candidate as ConfigDependencyFingerprint).kind;
+    const identityStable = (candidate as ConfigDependencyFingerprint)
+      .identityStable;
+    const realpath = (candidate as ConfigDependencyFingerprint).realpath;
     const scope = (candidate as ConfigDependencyFingerprint).scope;
     if (
       !path.isAbsolute(candidatePath) ||
@@ -2200,15 +2242,19 @@ function normalizeConfigDependencyFingerprints(
     if (
       previous !== undefined &&
       (previous.digest !== digest ||
+        previous.identityStable !== identityStable ||
         previous.kind !== kind ||
+        previous.realpath !== realpath ||
         previous.scope !== scope)
     ) {
       return undefined;
     }
     dependencies.set(location, {
       digest,
+      identityStable,
       kind,
       path: location,
+      realpath,
       scope,
     });
   }
@@ -2222,6 +2268,12 @@ function configDependenciesAreCurrent(
 ): boolean {
   if (dependencies.length === 0) return false;
   return dependencies.every((dependency) => {
+    if (
+      !dependency.identityStable ||
+      dependency.realpath !== hostInputRealpath(dependency.path)
+    ) {
+      return false;
+    }
     if (!/^[0-9a-f]{64}$/.test(dependency.digest)) return false;
     try {
       const digest =

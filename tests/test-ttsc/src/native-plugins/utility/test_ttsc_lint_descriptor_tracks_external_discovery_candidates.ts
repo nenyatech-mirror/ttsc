@@ -105,4 +105,69 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
         false,
       );
     }
+
+    const identityWorkspace = TestProject.tmpdir("ttsc-lint-config-identity-");
+    const oldIdentity = path.join(identityWorkspace, "old");
+    const newIdentity = path.join(identityWorkspace, "new");
+    const identityLink = path.join(identityWorkspace, "linked");
+    const configSource = [
+      'const path = require("node:path");',
+      "module.exports = {",
+      "  plugins: {",
+      '    physical: { source: path.join(__dirname, "plugin") },',
+      "  },",
+      "};",
+      "",
+    ].join("\n");
+    for (const target of [oldIdentity, newIdentity]) {
+      fs.mkdirSync(path.join(target, "plugin"), { recursive: true });
+      fs.writeFileSync(
+        path.join(target, "lint.config.cjs"),
+        configSource,
+        "utf8",
+      );
+    }
+    fs.symlinkSync(
+      oldIdentity,
+      identityLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const identityConfig = path.join(identityLink, "lint.config.cjs");
+    const identityContext = {
+      ...context,
+      cwd: identityWorkspace,
+      plugin: {
+        configFile: identityConfig,
+        transform: "@ttsc/lint",
+      },
+      pluginConfigDir: identityWorkspace,
+      projectRoot: identityWorkspace,
+      tsconfig: path.join(identityWorkspace, "tsconfig.json"),
+    };
+    const oldDescriptor = factory(identityContext);
+    assert.equal(
+      oldDescriptor.contributors?.[0]?.source,
+      path.join(oldIdentity, "plugin"),
+    );
+    assert.equal(
+      oldDescriptor.hostInputRealpaths[identityConfig],
+      fs.realpathSync.native(identityConfig),
+    );
+
+    fs.rmSync(identityLink, { force: true, recursive: true });
+    fs.symlinkSync(
+      newIdentity,
+      identityLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const newDescriptor = factory(identityContext);
+    assert.equal(
+      newDescriptor.contributors?.[0]?.source,
+      path.join(newIdentity, "plugin"),
+      "equal config bytes at a new physical target must not reuse stale evaluation",
+    );
+    assert.equal(
+      newDescriptor.hostInputRealpaths[identityConfig],
+      fs.realpathSync.native(identityConfig),
+    );
   };
