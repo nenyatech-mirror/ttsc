@@ -34,6 +34,7 @@ type TtscPluginDescriptor = {
     threadingArgs?: boolean;
   };
   contributors?: TtscPluginContributor[];
+  hostInputHashes?: Record<string, string | null>;
   hostInputs?: string[];
   name: string;
   reportsTypeScriptDiagnostics?: boolean;
@@ -148,6 +149,7 @@ export default function createTtscPlugin(
       residentCheck: true,
       threadingArgs: true,
     },
+    hostInputHashes: resolvedConfig.hostInputHashes,
     hostInputs: resolvedConfig.hostInputs,
     name: "@ttsc/lint",
     reportsTypeScriptDiagnostics: true,
@@ -239,19 +241,31 @@ type ConfigPluginEvaluation = {
  */
 function resolveConfigFileContributors(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): { contributors: TtscPluginContributor[]; hostInputs: string[] } {
+): {
+  contributors: TtscPluginContributor[];
+  hostInputHashes: Record<string, string | null>;
+  hostInputs: string[];
+} {
   const configFile = readConfigFileOption(context);
   const explicitConfigPath =
     configFile === undefined
       ? undefined
       : path.resolve(pluginConfigBaseDir(context), configFile);
-  const configPath = explicitConfigPath ?? findLintConfigFile(context);
-  const configInputs =
-    explicitConfigPath !== undefined
-      ? [explicitConfigPath]
-      : lintConfigDiscoveryInputs(context, configPath);
+  const discovery =
+    explicitConfigPath === undefined
+      ? discoverLintConfigFile(context)
+      : {
+          configPath: explicitConfigPath,
+          hostInputHashes: hashHostInputPaths([explicitConfigPath]),
+          hostInputs: [explicitConfigPath],
+        };
+  const { configPath } = discovery;
   if (!configPath || !fs.existsSync(configPath)) {
-    return { contributors: [], hostInputs: configInputs };
+    return {
+      contributors: [],
+      hostInputHashes: discovery.hostInputHashes,
+      hostInputs: discovery.hostInputs,
+    };
   }
 
   const evaluation = readConfigPluginEntries(configPath, context);
@@ -268,46 +282,94 @@ function resolveConfigFileContributors(
     occupied.add(goName);
     out.push({ name: goName, source: entry.source });
   }
+  const dependencyInputs = evaluation.dependencies
+    .filter(
+      (dependency) =>
+        dependency.scope === "watch" && dependency.kind !== "directory",
+    )
+    .map((dependency) => dependency.path);
+  const dependencyHashes: Record<string, string | null> = {};
+  const missingOptionalDigest = createHash("sha256")
+    .update("missing\0")
+    .digest("hex");
+  for (const dependency of evaluation.dependencies) {
+    if (dependency.scope !== "watch" || dependency.kind === "directory") {
+      continue;
+    }
+    const input = path.resolve(dependency.path);
+    if (dependency.kind === "file") {
+      dependencyHashes[input] = dependency.digest;
+    } else if (dependency.digest === missingOptionalDigest) {
+      // The evaluator's optional-file digest includes a state prefix. The
+      // public host-input contract uses null for the observed missing state.
+      dependencyHashes[input] = null;
+    }
+  }
   return {
     contributors: out,
-    hostInputs: [
-      ...configInputs,
-      ...evaluation.dependencies
-        .filter(
-          (dependency) =>
-            dependency.scope === "watch" && dependency.kind !== "directory",
-        )
-        .map((dependency) => dependency.path),
-    ],
+    hostInputHashes: {
+      ...discovery.hostInputHashes,
+      ...dependencyHashes,
+    },
+    hostInputs: [...discovery.hostInputs, ...dependencyInputs],
   };
 }
 
-/** Mirror native discovery while retaining missing higher-priority probes. */
-function lintConfigDiscoveryInputs(
+/** Snapshot config candidates before any discovery/evaluation side effect. */
+function hashHostInputPaths(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => {
+      const file = path.resolve(input);
+      try {
+        return [
+          file,
+          createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+        ] as const;
+      } catch {
+        return [file, null] as const;
+      }
+    }),
+  );
+}
+
+/** Mirror native discovery and fingerprint every candidate before selecting. */
+function discoverLintConfigFile(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-  selected: string | undefined,
-): string[] {
-  const inputs: string[] = [];
-  const selectedPath =
-    selected === undefined ? undefined : path.resolve(selected);
+): {
+  configPath?: string;
+  hostInputHashes: Record<string, string | null>;
+  hostInputs: string[];
+} {
+  const hostInputHashes: Record<string, string | null> = {};
+  const hostInputs: string[] = [];
+  const recordCandidates = (candidates: readonly string[]): void => {
+    for (const candidate of candidates) {
+      const absolute = path.resolve(candidate);
+      if (Object.prototype.hasOwnProperty.call(hostInputHashes, absolute)) {
+        continue;
+      }
+      hostInputs.push(absolute);
+      Object.assign(hostInputHashes, hashHostInputPaths([absolute]));
+    }
+  };
   for (const origin of discoveryConfigBaseDirs(context)) {
     for (let directory = origin; ; directory = path.dirname(directory)) {
       const candidates = LINT_CONFIG_FILENAMES.map((name) =>
         path.join(directory, name),
       );
-      inputs.push(...candidates);
-      if (
-        selectedPath !== undefined &&
-        candidates.some((candidate) => path.resolve(candidate) === selectedPath)
-      ) {
-        return [...new Set(inputs.map((input) => path.resolve(input)))];
+      recordCandidates(candidates);
+      const matches = lintConfigMatchesIn(directory);
+      if (matches.length === 1) {
+        return { configPath: matches[0], hostInputHashes, hostInputs };
       }
-      if (lintConfigMatchesIn(directory).length !== 0) break;
+      if (matches.length > 1) break;
       const parent = path.dirname(directory);
       if (parent === directory) break;
     }
   }
-  return [...new Set(inputs.map((input) => path.resolve(input)))];
+  return { hostInputHashes, hostInputs };
 }
 
 function assertContributorNamespacesDoNotCollide(
@@ -377,26 +439,6 @@ function readConfigFileOption(
   return value;
 }
 
-function findLintConfigFile(
-  context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): string | undefined {
-  // Mirror the Go side (driver.PluginConfigBaseDir): the caller-declared
-  // pluginConfigDir is the single walk origin when present — it names the
-  // real project when the resolved tsconfig is a generated wrapper in a temp
-  // dir (@ttsc/unplugin's alias overlay), and it keeps the wrapper's temp
-  // ancestry out of the walk so a stray config planted there is never
-  // honored. Otherwise walk upward from the tsconfig directory first, then
-  // fall back to the working directory: that covers callers that point at an
-  // out-of-tree tsconfig without declaring an anchor.
-  for (const origin of discoveryConfigBaseDirs(context)) {
-    const discovered = findLintConfigFileFrom(origin);
-    if (discovered !== undefined) {
-      return discovered;
-    }
-  }
-  return undefined;
-}
-
 function discoveryConfigBaseDirs(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): string[] {
@@ -406,28 +448,6 @@ function discoveryConfigBaseDirs(
   const tsconfigDir = tsconfigBaseDir(context);
   const cwd = path.resolve(context.cwd ?? context.projectRoot);
   return tsconfigDir === cwd ? [tsconfigDir] : [tsconfigDir, cwd];
-}
-
-function findLintConfigFileFrom(origin: string): string | undefined {
-  // Mirror the Go-side discovery loop: walk from `origin` upward, returning
-  // the first directory that has exactly one of the candidate filenames.
-  // Multiple files in the same directory is treated as ambiguous and skipped
-  // (the Go side raises a hard error on the duplicate; here we leave it to
-  // the binary's own discovery to surface the issue once with one canonical
-  // message).
-  let dir = origin;
-  while (true) {
-    const matches = lintConfigMatchesIn(dir);
-    if (matches.length === 1) {
-      return matches[0];
-    }
-    if (matches.length > 1) {
-      return undefined; // ambiguous — defer to the Go side's error
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
 }
 
 /** Return the regular-file/symlink candidates native discovery recognizes. */

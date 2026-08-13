@@ -3,6 +3,7 @@ package banner
 import (
   "bytes"
   "context"
+  "crypto/sha256"
   "encoding/json"
   "fmt"
   "os"
@@ -61,7 +62,7 @@ func validateBannerConfig(config map[string]any) error {
 // SourcePreamble resolves the banner text from the plugin config and returns it
 // formatted as a JSDoc block comment suitable for prepending to each emitted file.
 func (plugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
-  return parseBannerWithReporter(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput)
+  return parseBannerWithReporters(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput, ctx.ReportHostInputHash)
 }
 
 // parseBanner resolves and formats banner text into a JSDoc block comment.
@@ -71,7 +72,11 @@ func parseBanner(config map[string]any, cwd, tsconfigPath string) (string, error
 }
 
 func parseBannerWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
-  text, err := resolveBannerTextWithReporter(config, cwd, tsconfigPath, reporter)
+  return parseBannerWithReporters(config, cwd, tsconfigPath, reporter, nil)
+}
+
+func parseBannerWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string)) (string, error) {
+  text, err := resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, hashReporter)
   if err != nil {
     return "", err
   }
@@ -116,6 +121,10 @@ func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string,
 }
 
 func resolveBannerTextWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
+  return resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, nil)
+}
+
+func resolveBannerTextWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string)) (string, error) {
   if err := validateBannerConfig(config); err != nil {
     return "", err
   }
@@ -131,7 +140,7 @@ func resolveBannerTextWithReporter(config map[string]any, cwd, tsconfigPath stri
     if err != nil {
       return "", err
     }
-    reportBannerConfigInputs(loaded.inputs, reporter)
+    reportBannerConfigInputs(loaded.inputs, loaded.hashes, reporter, hashReporter)
     text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
     if err != nil {
       return "", err
@@ -153,7 +162,7 @@ func resolveBannerTextWithReporter(config map[string]any, cwd, tsconfigPath stri
   if err != nil {
     return "", err
   }
-  reportBannerConfigInputs(loaded.inputs, reporter)
+  reportBannerConfigInputs(loaded.inputs, loaded.hashes, reporter, hashReporter)
   text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
   if err != nil {
     return "", err
@@ -268,6 +277,7 @@ func loadBannerConfigFile(location, resolutionRoot string) (any, error) {
 }
 
 type bannerLoadedConfig struct {
+  hashes map[string]*string
   inputs []string
   value  any
 }
@@ -279,20 +289,32 @@ func loadBannerConfigFileWithInputs(location, resolutionRoot string) (bannerLoad
   ext := strings.ToLower(filepath.Ext(location))
   switch ext {
   case ".json":
-    value, err := loadBannerJSONConfigFile(location)
-    return bannerLoadedConfig{inputs: []string{location}, value: value}, err
+    body, err := os.ReadFile(location)
+    if err != nil {
+      return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: read config file %s: %w", location, err)
+    }
+    value, err := parseBannerJSONConfigFile(location, body)
+    digest := fmt.Sprintf("%x", sha256.Sum256(body))
+    return bannerLoadedConfig{hashes: map[string]*string{location: &digest}, inputs: []string{location}, value: value}, err
   case ".js", ".cjs", ".mjs":
     return loadBannerScriptConfigFileWithInputs(location)
   }
   return loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot)
 }
 
-func reportBannerConfigInputs(inputs []string, reporter func(string)) {
-  if reporter == nil {
+func reportBannerConfigInputs(inputs []string, hashes map[string]*string, reporter func(string), hashReporter func(string, *string)) {
+  if reporter == nil && hashReporter == nil {
     return
   }
   for _, input := range inputs {
-    reporter(input)
+    if reporter != nil {
+      reporter(input)
+    }
+    if hashReporter != nil {
+      if hash, ok := hashes[input]; ok {
+        hashReporter(input, hash)
+      }
+    }
   }
 }
 
@@ -320,6 +342,10 @@ func loadBannerJSONConfigFile(location string) (any, error) {
   if err != nil {
     return nil, fmt.Errorf("@ttsc/banner: read config file %s: %w", location, err)
   }
+  return parseBannerJSONConfigFile(location, body)
+}
+
+func parseBannerJSONConfigFile(location string, body []byte) (any, error) {
   // Strip a leading UTF-8 BOM so files saved by Windows editors round
   // trip through json.Unmarshal without an opaque "invalid character" failure.
   body = bytes.TrimPrefix(body, []byte{0xEF, 0xBB, 0xBF})
@@ -341,17 +367,27 @@ func loadBannerScriptConfigFile(location string) (any, error) {
 func loadBannerScriptConfigFileWithInputs(location string) (bannerLoadedConfig, error) {
   const script = `
 const { createRequire, isBuiltin, registerHooks } = require("node:module");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const inputs = new Set();
+const hashes = new Map();
+
+function recordInput(file) {
+  file = path.resolve(file);
+  inputs.add(file);
+  if (hashes.has(file)) return;
+  try { hashes.set(file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")); }
+  catch { hashes.set(file, null); }
+}
 
 function recordFile(file) {
   const resolvedFile = path.resolve(file);
-  inputs.add(resolvedFile);
+  recordInput(resolvedFile);
   for (let directory = path.dirname(resolvedFile);;) {
     const manifest = path.join(directory, "package.json");
-    inputs.add(manifest);
+    recordInput(manifest);
     if (fs.existsSync(manifest)) {
       break;
     }
@@ -363,7 +399,18 @@ function recordFile(file) {
   }
 }
 
-const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"];
+function recordPackageManifests(file) {
+  for (let directory = path.dirname(path.resolve(file));;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (fs.existsSync(manifest)) return;
+    const parent = path.dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
+}
+
+const moduleProbeExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"];
 function moduleCandidates(base) {
   return [
     base,
@@ -373,16 +420,29 @@ function moduleCandidates(base) {
   ];
 }
 const recordedModuleBases = new Set();
+function recordManifestTargets(value, directory) {
+  if (typeof value === "string") {
+    if (value.startsWith("./") || value.startsWith("../")) recordModuleCandidates(path.resolve(directory, value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) recordManifestTargets(item, directory);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) recordManifestTargets(item, directory);
+  }
+}
 function recordModuleCandidates(base) {
   const resolvedBase = path.resolve(base);
   if (recordedModuleBases.has(resolvedBase)) return;
   recordedModuleBases.add(resolvedBase);
-  for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
+  for (const candidate of moduleCandidates(resolvedBase)) recordInput(candidate);
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
-    if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
-      recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
-    }
+    recordManifestTargets(manifest.exports, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase);
+    recordManifestTargets(manifest.main, resolvedBase);
   } catch {}
 }
 function candidateSelected(base, resolvedFile) {
@@ -409,6 +469,7 @@ function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
       const base = specifier.startsWith("file:")
         ? fileURLToPath(specifier)
         : path.resolve(parentDirectory, specifier);
+      recordPackageManifests(base);
       recordModuleCandidates(base);
     } catch {}
     return;
@@ -431,9 +492,9 @@ function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
 recordFile(process.argv[1]);
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    recordResolutionCandidates(specifier, context.parentURL, undefined);
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved && resolved.url;
-    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
@@ -455,7 +516,7 @@ registerHooks({
     break;
   }
   const value = typeof current === "function" ? await current() : current;
-  process.stdout.write(JSON.stringify({ value: toSerializableBanner(value), inputs: [...inputs].sort() }));
+  process.stdout.write(JSON.stringify({ value: toSerializableBanner(value), hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
   // The stack above is for the reader. This is for the caller: the parent reads
@@ -507,9 +568,10 @@ function toSerializableBanner(value) {
 
 func decodeBannerConfigLoaderOutput(output []byte) (bannerLoadedConfig, error) {
   var envelope struct {
-    Error  string          `json:"__ttscLoaderError"`
-    Inputs []string        `json:"inputs"`
-    Value  json.RawMessage `json:"value"`
+    Error  string             `json:"__ttscLoaderError"`
+    Hashes map[string]*string `json:"hashes"`
+    Inputs []string           `json:"inputs"`
+    Value  json.RawMessage    `json:"value"`
   }
   if err := json.Unmarshal(output, &envelope); err != nil {
     return bannerLoadedConfig{}, err
@@ -531,7 +593,7 @@ func decodeBannerConfigLoaderOutput(output []byte) (bannerLoadedConfig, error) {
   if err := json.Unmarshal(envelope.Value, &value); err != nil {
     return bannerLoadedConfig{}, err
   }
-  return bannerLoadedConfig{inputs: envelope.Inputs, value: value}, nil
+  return bannerLoadedConfig{hashes: envelope.Hashes, inputs: envelope.Inputs, value: value}, nil
 }
 
 // loadBannerTypeScriptConfigFile compiles and runs a TypeScript banner config
@@ -617,18 +679,28 @@ func loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot string) (
 func bannerTypeScriptConfigLoaderSource(importLiteral string) string {
   return fmt.Sprintf(`// @ts-nocheck
 import { createRequire, isBuiltin, registerHooks } from "node:module";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const inputs = new Set<string>();
+const hashes = new Map<string, string | null>();
+
+function recordInput(file: string): void {
+  file = path.resolve(file);
+  inputs.add(file);
+  if (hashes.has(file)) return;
+  try { hashes.set(file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")); }
+  catch { hashes.set(file, null); }
+}
 
 function recordFile(file: string): void {
   const resolvedFile = path.resolve(file);
-  inputs.add(resolvedFile);
+  recordInput(resolvedFile);
   for (let directory = path.dirname(resolvedFile);;) {
     const manifest = path.join(directory, "package.json");
-    inputs.add(manifest);
+    recordInput(manifest);
     if (fs.existsSync(manifest)) {
       break;
     }
@@ -640,7 +712,18 @@ function recordFile(file: string): void {
   }
 }
 
-const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"] as const;
+function recordPackageManifests(file: string): void {
+  for (let directory = path.dirname(path.resolve(file));;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (fs.existsSync(manifest)) return;
+    const parent = path.dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
+}
+
+const moduleProbeExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"] as const;
 function moduleCandidates(base: string): string[] {
   return [
     base,
@@ -650,16 +733,29 @@ function moduleCandidates(base: string): string[] {
   ];
 }
 const recordedModuleBases = new Set<string>();
+function recordManifestTargets(value: unknown, directory: string): void {
+  if (typeof value === "string") {
+    if (value.startsWith("./") || value.startsWith("../")) recordModuleCandidates(path.resolve(directory, value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) recordManifestTargets(item, directory);
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) recordManifestTargets(item, directory);
+  }
+}
 function recordModuleCandidates(base: string): void {
   const resolvedBase = path.resolve(base);
   if (recordedModuleBases.has(resolvedBase)) return;
   recordedModuleBases.add(resolvedBase);
-  for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
+  for (const candidate of moduleCandidates(resolvedBase)) recordInput(candidate);
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
-    if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
-      recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
-    }
+    recordManifestTargets(manifest.exports, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase);
+    recordManifestTargets(manifest.main, resolvedBase);
   } catch {}
 }
 function candidateSelected(base: string, resolvedFile: string): boolean {
@@ -686,6 +782,7 @@ function recordResolutionCandidates(specifier: string, parentURL: string | undef
       const base = specifier.startsWith("file:")
         ? fileURLToPath(specifier)
         : path.resolve(parentDirectory, specifier);
+      recordPackageManifests(base);
       recordModuleCandidates(base);
     } catch {}
     return;
@@ -707,9 +804,9 @@ function recordResolutionCandidates(specifier: string, parentURL: string | undef
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    recordResolutionCandidates(specifier, context.parentURL, undefined);
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved?.url;
-    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
@@ -735,6 +832,7 @@ declare const process: {
     const value = await resolveConfig(importedConfig);
     process.stdout.write(JSON.stringify({
       value: toSerializableBanner(value),
+      hashes: Object.fromEntries(hashes),
       inputs: [...inputs].sort(),
     }));
   } catch (error) {

@@ -118,7 +118,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       ].join("\n"),
       "utf8",
     );
-    const workerEnv = {
+    const workerEnv: NodeJS.ProcessEnv = {
       ...process.env,
       TTSC_GO_BINARY: createFakeGoBinary(fakeGo),
       TTSC_GO_CACHE_DIR: path.join(root, "go-cache"),

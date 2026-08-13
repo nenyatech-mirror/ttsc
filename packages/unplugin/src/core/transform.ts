@@ -152,6 +152,14 @@ function createHostPathIdentityContext(): FilesystemPathIdentityContext {
   });
 }
 
+/** Normalize one directory entry under the owning filesystem's case policy. */
+export function normalizeHostInputName(
+  name: string,
+  caseSensitive: boolean,
+): string {
+  return caseSensitive ? name : name.toLowerCase();
+}
+
 /** Create an empty persistent transform cache. */
 export function createTtscTransformCache(): TtscTransformCache {
   return new Map();
@@ -504,7 +512,10 @@ interface TtscEnvelopeDerivation {
 
 interface TtscHostInputValidation {
   /** Files/non-files that existed when the generation was captured. */
-  readonly entries: Map<string, { path: string; signature: string }>;
+  readonly entries: Map<
+    string,
+    { path: string; signature: string; strict?: true }
+  >;
   /** Identities omitted from the per-module dependency loop below. */
   readonly identities: Set<string>;
   /**
@@ -1213,7 +1224,10 @@ function matchesUniversalHostInputs(
   for (const entry of validation.entries.values()) {
     const signature = inputMetadataSignature(entry.path);
     if (signature === entry.signature) continue;
-    if (!matchesRecordedInput(cached, entry.path)) return false;
+    if (entry.strict === true) return false;
+    if (!matchesRecordedInput(cached, entry.path)) {
+      return false;
+    }
     if (signature === undefined) return false;
     entry.signature = signature;
   }
@@ -1226,7 +1240,15 @@ function matchesUniversalHostInputs(
       // missing. A later recreation is visible when this listing succeeds.
       continue;
     }
-    if (entries.some((entry) => names.has(entry.name))) return false;
+    const identities = envelopeDerivation(cached).identityContext;
+    const caseSensitive = identities.caseSensitive(directory);
+    if (
+      entries.some((entry) =>
+        names.has(normalizeHostInputName(entry.name, caseSensitive)),
+      )
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -1234,6 +1256,7 @@ function matchesUniversalHostInputs(
 /** Capture the universal-input manifest while the generation is still fresh. */
 function captureUniversalHostInputValidation(
   cached: TtscCachedProjectTransform,
+  currentFile: string,
 ): TtscHostInputValidation | undefined {
   const state = envelopeDerivation(cached);
   const validation: TtscHostInputValidation = {
@@ -1246,6 +1269,34 @@ function captureUniversalHostInputValidation(
     result: cached.result,
     temporaryTsconfig: cached.temporaryTsconfig,
   })) {
+    const generationHashes =
+      cached.result.type === "exception"
+        ? undefined
+        : cached.result.hostInputHashes;
+    const expected = generationHashes?.[path.resolve(input)];
+    // Every persistent universal input must carry an evaluation-time
+    // fingerprint. If a plugin/native host cannot provide one, keep the fresh
+    // result but decline narrow long-lived reuse.
+    if (expected === undefined) {
+      const current = path.resolve(currentFile);
+      if (path.resolve(input) !== current) return undefined;
+      // The current module may be supplied from an unsaved editor buffer. Its
+      // generation snapshot is overlaid below from `currentSource`, so a disk
+      // fingerprint would be both unavailable and the wrong authority.
+    } else if (expected === null) {
+      try {
+        fs.accessSync(input);
+        return undefined;
+      } catch {
+        // Still missing exactly as it was during descriptor evaluation.
+      }
+    } else {
+      try {
+        if (hashText(fs.readFileSync(input)) !== expected) return undefined;
+      } catch {
+        return undefined;
+      }
+    }
     const identity = derivationIdentity(state, input);
     if (validation.identities.has(identity)) continue;
     validation.identities.add(identity);
@@ -1258,12 +1309,28 @@ function captureUniversalHostInputValidation(
       continue;
     }
     const probe = missingPathProbe(input);
+    if (probe.blocker !== undefined) {
+      const blockerIdentity = derivationIdentity(state, probe.blocker);
+      const signature = inputMetadataSignature(probe.blocker);
+      if (signature === undefined) return undefined;
+      validation.entries.set(blockerIdentity, {
+        path: probe.blocker,
+        signature,
+        strict: true,
+      });
+      continue;
+    }
     let names = validation.missing.get(probe.directory);
     if (names === undefined) {
       names = new Set<string>();
       validation.missing.set(probe.directory, names);
     }
-    names.add(probe.name);
+    names.add(
+      normalizeHostInputName(
+        probe.name,
+        state.identityContext.caseSensitive(probe.directory),
+      ),
+    );
   }
   state.hostInputValidation = validation;
   return validation;
@@ -1314,14 +1381,24 @@ function inputMetadataSignature(file: string): string | undefined {
 }
 
 /** Find one directory listing that proves an absent path is still absent. */
-function missingPathProbe(file: string): { directory: string; name: string } {
+function missingPathProbe(file: string): {
+  blocker?: string;
+  directory: string;
+  name: string;
+} {
   let child = path.resolve(file);
   for (;;) {
     const directory = path.dirname(child);
     try {
-      if (fs.statSync(directory).isDirectory()) {
+      const stats = fs.statSync(directory);
+      if (stats.isDirectory()) {
         return { directory, name: path.basename(child) };
       }
+      return {
+        blocker: directory,
+        directory: path.dirname(directory),
+        name: path.basename(directory),
+      };
     } catch {}
     if (directory === child) {
       return { directory, name: path.basename(child) };
@@ -1590,22 +1667,35 @@ async function createProjectMutationTracker(
 async function createHostInputMutationTracker(
   inputs: readonly string[],
 ): Promise<TtscProjectMutationTracker> {
-  const namesByDirectory = new Map<string, Set<string>>();
+  const identities = createHostPathIdentityContext();
+  const namesByDirectory = new Map<
+    string,
+    { directory: string; names: Set<string> }
+  >();
   for (const input of inputs) {
     const absolute = path.resolve(input);
     const probe = fs.existsSync(absolute)
       ? { directory: path.dirname(absolute), name: path.basename(absolute) }
       : missingPathProbe(absolute);
-    let names = namesByDirectory.get(probe.directory);
-    if (names === undefined) {
-      names = new Set<string>();
-      namesByDirectory.set(probe.directory, names);
+    const directoryIdentity = identities.resolve(probe.directory);
+    let location = namesByDirectory.get(directoryIdentity.key);
+    if (location === undefined) {
+      location = {
+        directory: directoryIdentity.path,
+        names: new Set<string>(),
+      };
+      namesByDirectory.set(directoryIdentity.key, location);
     }
-    names.add(probe.name);
+    location.names.add(
+      normalizeHostInputName(
+        probe.name,
+        identities.caseSensitive(directoryIdentity.path),
+      ),
+    );
   }
-  const locations = [...namesByDirectory].map(([directory, names]) => ({
-    directory,
-    names: [...names],
+  const locations = [...namesByDirectory.values()].map((location) => ({
+    directory: location.directory,
+    names: [...location.names],
   }));
   const tracker: TtscProjectMutationTracker = {
     close: () => undefined,
@@ -1624,11 +1714,16 @@ async function createHostInputMutationTracker(
   for (const location of locations) {
     try {
       const names = new Set(location.names);
+      const caseSensitive = identities.caseSensitive(location.directory);
       const watcher = fs.watch(
         location.directory,
         { persistent: false },
         (_eventType, filename) => {
-          if (filename === null || names.has(String(filename))) {
+          const reported =
+            filename === null
+              ? null
+              : normalizeHostInputName(String(filename), caseSensitive);
+          if (reported === null || names.has(reported)) {
             tracker.membershipChanged = true;
           }
         },
@@ -2156,7 +2251,8 @@ async function transformProject(props: {
     };
     stableProjectSnapshot =
       stableProjectSnapshot &&
-      captureUniversalHostInputValidation(cached) !== undefined;
+      captureUniversalHostInputValidation(cached, props.currentFile) !==
+        undefined;
     cached.projectSnapshotComplete = stableProjectSnapshot;
     if (stableProjectSnapshot && tracker !== undefined) {
       cached.projectMutationTracker = tracker;

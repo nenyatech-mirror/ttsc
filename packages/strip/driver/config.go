@@ -3,6 +3,7 @@ package strip
 import (
   "bytes"
   "context"
+  "crypto/sha256"
   "encoding/json"
   "fmt"
   "os"
@@ -45,6 +46,10 @@ func loadStripConfigMap(pluginConfig map[string]any, cwd, tsconfigPath string) (
 }
 
 func loadStripConfigMapWithReporter(pluginConfig map[string]any, cwd, tsconfigPath string, reporter func(string)) (map[string]any, error) {
+  return loadStripConfigMapWithReporters(pluginConfig, cwd, tsconfigPath, reporter, nil)
+}
+
+func loadStripConfigMapWithReporters(pluginConfig map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string)) (map[string]any, error) {
   // Reject any key that @ttsc/strip does not recognise. This surfaces
   // stale inline keys (calls, statements) with a clear error so users
   // migrate to a config file instead of silently using defaults.
@@ -89,7 +94,7 @@ func loadStripConfigMapWithReporter(pluginConfig map[string]any, cwd, tsconfigPa
   if err != nil {
     return nil, err
   }
-  reportStripConfigInputs(loaded.inputs, reporter)
+  reportStripConfigInputs(loaded.inputs, loaded.hashes, reporter, hashReporter)
   cfg, ok := loaded.value.(map[string]any)
   if !ok {
     return nil, fmt.Errorf("@ttsc/strip: config file %s must export an object", configFilePath)
@@ -167,6 +172,7 @@ func loadStripConfigFile(location, resolutionRoot string) (any, error) {
 }
 
 type stripLoadedConfig struct {
+  hashes map[string]*string
   inputs []string
   value  any
 }
@@ -175,8 +181,13 @@ func loadStripConfigFileWithInputs(location, resolutionRoot string) (stripLoaded
   ext := strings.ToLower(filepath.Ext(location))
   switch ext {
   case ".json":
-    value, err := loadStripJSONConfigFile(location)
-    return stripLoadedConfig{inputs: []string{location}, value: value}, err
+    body, err := os.ReadFile(location)
+    if err != nil {
+      return stripLoadedConfig{}, fmt.Errorf("@ttsc/strip: read config file %s: %w", location, err)
+    }
+    value, err := parseStripJSONConfigFile(location, body)
+    digest := fmt.Sprintf("%x", sha256.Sum256(body))
+    return stripLoadedConfig{hashes: map[string]*string{location: &digest}, inputs: []string{location}, value: value}, err
   case ".js", ".cjs", ".mjs":
     return loadStripScriptConfigFileWithInputs(location)
   case ".ts", ".cts", ".mts":
@@ -186,12 +197,19 @@ func loadStripConfigFileWithInputs(location, resolutionRoot string) (stripLoaded
   }
 }
 
-func reportStripConfigInputs(inputs []string, reporter func(string)) {
-  if reporter == nil {
+func reportStripConfigInputs(inputs []string, hashes map[string]*string, reporter func(string), hashReporter func(string, *string)) {
+  if reporter == nil && hashReporter == nil {
     return
   }
   for _, input := range inputs {
-    reporter(input)
+    if reporter != nil {
+      reporter(input)
+    }
+    if hashReporter != nil {
+      if hash, ok := hashes[input]; ok {
+        hashReporter(input, hash)
+      }
+    }
   }
 }
 
@@ -203,6 +221,10 @@ func loadStripJSONConfigFile(location string) (any, error) {
   if err != nil {
     return nil, fmt.Errorf("@ttsc/strip: read config file %s: %w", location, err)
   }
+  return parseStripJSONConfigFile(location, body)
+}
+
+func parseStripJSONConfigFile(location string, body []byte) (any, error) {
   body = bytes.TrimPrefix(body, []byte{0xEF, 0xBB, 0xBF})
   var out any
   if err := json.Unmarshal(body, &out); err != nil {
@@ -216,17 +238,27 @@ func loadStripJSONConfigFile(location string) (any, error) {
 // serialize the result to stdout as JSON.
 const stripScriptLoaderSource = `
 const { createRequire, isBuiltin, registerHooks } = require("node:module");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const inputs = new Set();
+const hashes = new Map();
+
+function recordInput(file) {
+  file = path.resolve(file);
+  inputs.add(file);
+  if (hashes.has(file)) return;
+  try { hashes.set(file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")); }
+  catch { hashes.set(file, null); }
+}
 
 function recordFile(file) {
   const resolvedFile = path.resolve(file);
-  inputs.add(resolvedFile);
+  recordInput(resolvedFile);
   for (let directory = path.dirname(resolvedFile);;) {
     const manifest = path.join(directory, "package.json");
-    inputs.add(manifest);
+    recordInput(manifest);
     if (fs.existsSync(manifest)) {
       break;
     }
@@ -238,7 +270,18 @@ function recordFile(file) {
   }
 }
 
-const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"];
+function recordPackageManifests(file) {
+  for (let directory = path.dirname(path.resolve(file));;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (fs.existsSync(manifest)) return;
+    const parent = path.dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
+}
+
+const moduleProbeExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"];
 function moduleCandidates(base) {
   return [
     base,
@@ -248,16 +291,29 @@ function moduleCandidates(base) {
   ];
 }
 const recordedModuleBases = new Set();
+function recordManifestTargets(value, directory) {
+  if (typeof value === "string") {
+    if (value.startsWith("./") || value.startsWith("../")) recordModuleCandidates(path.resolve(directory, value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) recordManifestTargets(item, directory);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) recordManifestTargets(item, directory);
+  }
+}
 function recordModuleCandidates(base) {
   const resolvedBase = path.resolve(base);
   if (recordedModuleBases.has(resolvedBase)) return;
   recordedModuleBases.add(resolvedBase);
-  for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
+  for (const candidate of moduleCandidates(resolvedBase)) recordInput(candidate);
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
-    if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
-      recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
-    }
+    recordManifestTargets(manifest.exports, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase);
+    recordManifestTargets(manifest.main, resolvedBase);
   } catch {}
 }
 function candidateSelected(base, resolvedFile) {
@@ -284,6 +340,7 @@ function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
       const base = specifier.startsWith("file:")
         ? fileURLToPath(specifier)
         : path.resolve(parentDirectory, specifier);
+      recordPackageManifests(base);
       recordModuleCandidates(base);
     } catch {}
     return;
@@ -306,9 +363,9 @@ function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
 recordFile(process.argv[1]);
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    recordResolutionCandidates(specifier, context.parentURL, undefined);
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved && resolved.url;
-    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
@@ -330,7 +387,7 @@ registerHooks({
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("strip config file must export an object");
   }
-  process.stdout.write(JSON.stringify({ value, inputs: [...inputs].sort() }));
+  process.stdout.write(JSON.stringify({ value, hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
   // The stack above is for the reader. This is for the caller: the parent reads
@@ -385,9 +442,10 @@ func loadStripScriptConfigFileWithInputs(location string) (stripLoadedConfig, er
 
 func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
   var envelope struct {
-    Error  string          `json:"__ttscLoaderError"`
-    Inputs []string        `json:"inputs"`
-    Value  json.RawMessage `json:"value"`
+    Error  string             `json:"__ttscLoaderError"`
+    Hashes map[string]*string `json:"hashes"`
+    Inputs []string           `json:"inputs"`
+    Value  json.RawMessage    `json:"value"`
   }
   if err := json.Unmarshal(output, &envelope); err != nil {
     return stripLoadedConfig{}, err
@@ -409,7 +467,7 @@ func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
   if err := json.Unmarshal(envelope.Value, &value); err != nil {
     return stripLoadedConfig{}, err
   }
-  return stripLoadedConfig{inputs: envelope.Inputs, value: value}, nil
+  return stripLoadedConfig{hashes: envelope.Hashes, inputs: envelope.Inputs, value: value}, nil
 }
 
 // stripTypeScriptLoaderSource returns the TypeScript source of the ephemeral
@@ -419,18 +477,28 @@ func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
 func stripTypeScriptLoaderSource(importLiteral string) string {
   return fmt.Sprintf(`// @ts-nocheck
 import { createRequire, isBuiltin, registerHooks } from "node:module";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const inputs = new Set<string>();
+const hashes = new Map<string, string | null>();
+
+function recordInput(file: string): void {
+  file = path.resolve(file);
+  inputs.add(file);
+  if (hashes.has(file)) return;
+  try { hashes.set(file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")); }
+  catch { hashes.set(file, null); }
+}
 
 function recordFile(file: string): void {
   const resolvedFile = path.resolve(file);
-  inputs.add(resolvedFile);
+  recordInput(resolvedFile);
   for (let directory = path.dirname(resolvedFile);;) {
     const manifest = path.join(directory, "package.json");
-    inputs.add(manifest);
+    recordInput(manifest);
     if (fs.existsSync(manifest)) {
       break;
     }
@@ -442,7 +510,18 @@ function recordFile(file: string): void {
   }
 }
 
-const moduleProbeExtensions = [".js", ".json", ".node", ".ts", ".tsx", ".mts", ".cts"] as const;
+function recordPackageManifests(file: string): void {
+  for (let directory = path.dirname(path.resolve(file));;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (fs.existsSync(manifest)) return;
+    const parent = path.dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
+}
+
+const moduleProbeExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"] as const;
 function moduleCandidates(base: string): string[] {
   return [
     base,
@@ -452,16 +531,29 @@ function moduleCandidates(base: string): string[] {
   ];
 }
 const recordedModuleBases = new Set<string>();
+function recordManifestTargets(value: unknown, directory: string): void {
+  if (typeof value === "string") {
+    if (value.startsWith("./") || value.startsWith("../")) recordModuleCandidates(path.resolve(directory, value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) recordManifestTargets(item, directory);
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) recordManifestTargets(item, directory);
+  }
+}
 function recordModuleCandidates(base: string): void {
   const resolvedBase = path.resolve(base);
   if (recordedModuleBases.has(resolvedBase)) return;
   recordedModuleBases.add(resolvedBase);
-  for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));
+  for (const candidate of moduleCandidates(resolvedBase)) recordInput(candidate);
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
-    if (typeof manifest.main === "string" && manifest.main.trim() !== "") {
-      recordModuleCandidates(path.resolve(resolvedBase, manifest.main));
-    }
+    recordManifestTargets(manifest.exports, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase);
+    recordManifestTargets(manifest.main, resolvedBase);
   } catch {}
 }
 function candidateSelected(base: string, resolvedFile: string): boolean {
@@ -488,6 +580,7 @@ function recordResolutionCandidates(specifier: string, parentURL: string | undef
       const base = specifier.startsWith("file:")
         ? fileURLToPath(specifier)
         : path.resolve(parentDirectory, specifier);
+      recordPackageManifests(base);
       recordModuleCandidates(base);
     } catch {}
     return;
@@ -509,9 +602,9 @@ function recordResolutionCandidates(specifier: string, parentURL: string | undef
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    recordResolutionCandidates(specifier, context.parentURL, undefined);
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved?.url;
-    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
@@ -548,7 +641,7 @@ declare const process: {
     if (current === null || typeof current !== "object" || Array.isArray(current)) {
       throw new Error("strip config file must export an object");
     }
-    process.stdout.write(JSON.stringify({ value: current, inputs: [...inputs].sort() }));
+    process.stdout.write(JSON.stringify({ value: current, hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
   } catch (error) {
     process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
     // The stack above is for the reader. This is for the caller: the parent

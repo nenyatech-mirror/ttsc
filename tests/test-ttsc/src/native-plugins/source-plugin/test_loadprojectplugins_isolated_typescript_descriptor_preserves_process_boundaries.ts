@@ -196,4 +196,39 @@ export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_pr
     assert.match(missingResult.stderr, /Cannot find module '\.\/phantom'/);
     assert.equal(fs.readFileSync(missingCounter, "utf8"), "run\n");
     assert.equal(fs.existsSync(fallbackMarker), false);
+
+    const mutatedCounter = path.join(root, "mutated-missing-runs.txt");
+    const mutatedDescriptor = path.join(root, "mutated-missing.cts");
+    fs.writeFileSync(
+      mutatedDescriptor,
+      [
+        `const fs = require("node:fs");`,
+        `fs.appendFileSync(${JSON.stringify(mutatedCounter)}, "run\\n");`,
+        `try { require("./actually-missing"); } catch (failure) {`,
+        `  failure.message = "Cannot find module './phantom'";`,
+        `  failure.requireStack = [__filename];`,
+        `  throw failure;`,
+        `}`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { plugins: [{ transform: mutatedDescriptor }] },
+      }),
+      "utf8",
+    );
+    const mutatedResult = await spawnNodeWorker({
+      env: {
+        TTSC_BINARY: TestProject.NATIVE_BINARY,
+        TTSC_TSGO_BINARY: TestProject.TSGO_BINARY,
+        TTSC_TTSX_BINARY: fakeTtsx,
+      },
+      script,
+    });
+    assert.match(mutatedResult.stderr, /Cannot find module '\.\/phantom'/);
+    assert.equal(fs.readFileSync(mutatedCounter, "utf8"), "run\n");
+    assert.equal(fs.existsSync(fallbackMarker), false);
   };

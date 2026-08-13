@@ -3,7 +3,7 @@ import { TestProject } from "@ttsc/testing";
 import { assert, fs, path, resolveNodeBinary } from "../../internal/project";
 
 /**
- * Verifies relative runtime capability probes are cached per working directory.
+ * Verifies relative runtime capability probes use current executable state.
  *
  * Two embedders can use the same `./node` spelling from different roots. A
  * successful probe in one root must not authorize a missing or incompatible
@@ -28,6 +28,29 @@ export const test_resolvenodebinary_scopes_relative_capability_cache_to_cwd =
     const relative = `./${name}`;
     const env = { ...process.env, TTSC_NODE_BINARY: relative };
 
-    assert.equal(resolveNodeBinary(env, first), relative);
+    assertSameAbsoluteFile(resolveNodeBinary(env, first), candidate);
     assert.equal(resolveNodeBinary(env, second), process.execPath);
+
+    const late = path.join(
+      second,
+      process.platform === "win32" ? "late-node.exe" : "late-node",
+    );
+    const lateEnv: NodeJS.ProcessEnv = {
+      TTSC_NODE_BINARY: `.${path.sep}${path.basename(late)}`,
+    };
+    assert.equal(resolveNodeBinary(lateEnv, second), process.execPath);
+    fs.copyFileSync(process.execPath, late);
+    if (process.platform !== "win32") fs.chmodSync(late, 0o755);
+    assertSameAbsoluteFile(resolveNodeBinary(lateEnv, second), late);
   };
+
+function assertSameAbsoluteFile(
+  actual: string | undefined,
+  expected: string,
+): void {
+  assert.ok(actual !== undefined && path.isAbsolute(actual), String(actual));
+  const actualStats = fs.statSync(actual);
+  const expectedStats = fs.statSync(expected);
+  assert.equal(actualStats.dev, expectedStats.dev);
+  assert.equal(actualStats.ino, expectedStats.ino);
+}

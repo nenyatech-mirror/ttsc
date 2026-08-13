@@ -63,7 +63,42 @@ type PluginContext struct {
   Entry    PluginEntry
   Tsconfig string
 
-  reportHostInput func(string)
+  reportHostInput     func(string)
+  reportHostInputHash func(string, *string)
+}
+
+// ReportHostInputHash declares the exact file state consumed by a native
+// plugin. hash is a lowercase SHA-256 digest for an observed file and nil for
+// a missing candidate. Conflicting observations are retained as host inputs
+// but omitted from PluginHostInputHashes, forcing persistent adapters to
+// decline narrow reuse without failing the transform.
+func (ctx PluginContext) ReportHostInputHash(file string, hash *string) {
+  if ctx.reportHostInputHash == nil || strings.TrimSpace(file) == "" {
+    return
+  }
+  if !filepath.IsAbs(file) {
+    file = filepath.Join(ctx.Cwd, file)
+  }
+  file = filepath.Clean(file)
+  if hash != nil && !isLowerSHA256(*hash) {
+    if ctx.reportHostInput != nil {
+      ctx.reportHostInput(file)
+    }
+    return
+  }
+  ctx.reportHostInputHash(file, hash)
+}
+
+func isLowerSHA256(value string) bool {
+  if len(value) != 64 {
+    return false
+  }
+  for _, char := range value {
+    if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+      return false
+    }
+  }
+  return true
 }
 
 // ReportHostInput declares an absolute file whose content or presence was
@@ -115,12 +150,53 @@ type linkedPluginState struct {
 }
 
 type pluginHostInputs struct {
-  files map[string]struct{}
-  mu    sync.Mutex
+  files  map[string]struct{}
+  hashes map[string]pluginHostInputHash
+  mu     sync.Mutex
+}
+
+type pluginHostInputHash struct {
+  hash  *string
+  known bool
 }
 
 func newPluginHostInputs() *pluginHostInputs {
-  return &pluginHostInputs{files: map[string]struct{}{}}
+  return &pluginHostInputs{
+    files:  map[string]struct{}{},
+    hashes: map[string]pluginHostInputHash{},
+  }
+}
+
+func (inputs *pluginHostInputs) addHash(file string, hash *string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  previous, exists := inputs.hashes[file]
+  if !exists {
+    inputs.hashes[file] = pluginHostInputHash{hash: cloneStringPointer(hash), known: true}
+    return
+  }
+  if !previous.known || !sameStringPointer(previous.hash, hash) {
+    inputs.hashes[file] = pluginHostInputHash{known: false}
+  }
+}
+
+func cloneStringPointer(value *string) *string {
+  if value == nil {
+    return nil
+  }
+  cloned := *value
+  return &cloned
+}
+
+func sameStringPointer(left, right *string) bool {
+  if left == nil || right == nil {
+    return left == nil && right == nil
+  }
+  return *left == *right
 }
 
 func (inputs *pluginHostInputs) add(file string) {
@@ -144,6 +220,24 @@ func (inputs *pluginHostInputs) list() []string {
   inputs.mu.Unlock()
   sort.Strings(files)
   return files
+}
+
+func (inputs *pluginHostInputs) hashList() map[string]*string {
+  if inputs == nil {
+    return nil
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  hashes := map[string]*string{}
+  for file, observation := range inputs.hashes {
+    if observation.known {
+      hashes[file] = cloneStringPointer(observation.hash)
+    }
+  }
+  if len(hashes) == 0 {
+    return nil
+  }
+  return hashes
 }
 
 var pluginRegistry []any
@@ -271,10 +365,11 @@ func registeredPlugin(index int) (any, bool) {
 // context builds the PluginContext the driver passes to each plugin hook.
 func (state linkedPluginState) context(entry PluginEntry) PluginContext {
   return PluginContext{
-    Cwd:             state.cwd,
-    Entry:           entry,
-    Tsconfig:        state.tsconfig,
-    reportHostInput: state.inputs.add,
+    Cwd:                 state.cwd,
+    Entry:               entry,
+    Tsconfig:            state.tsconfig,
+    reportHostInput:     state.inputs.add,
+    reportHostInputHash: state.inputs.addHash,
   }
 }
 
@@ -282,4 +377,8 @@ func (state linkedPluginState) context(entry PluginEntry) PluginContext {
 // generation.
 func (state linkedPluginState) hostInputs() []string {
   return state.inputs.list()
+}
+
+func (state linkedPluginState) hostInputHashes() map[string]*string {
+  return state.inputs.hashList()
 }

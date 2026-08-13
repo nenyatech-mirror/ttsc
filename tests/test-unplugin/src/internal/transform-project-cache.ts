@@ -461,12 +461,20 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   fs.writeFileSync(
     path.join(project.root, "plugin.cjs"),
     [
+      'const crypto = require("node:crypto");',
+      'const fs = require("node:fs");',
       'const path = require("node:path");',
       `const source = require(${JSON.stringify(descriptorSelection)});`,
+      `const hostInputs = ${JSON.stringify(descriptorProbes)};`,
+      "const hostInputHashes = Object.fromEntries(hostInputs.map((file) => {",
+      '  try { return [file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")]; }',
+      "  catch { return [file, null]; }",
+      "}));",
       "",
       "module.exports = (context) => ({",
       '  name: context.plugin.name ?? "cache-probe",',
-      `  hostInputs: ${JSON.stringify(descriptorProbes)},`,
+      "  hostInputHashes,",
+      "  hostInputs,",
       "  source: path.resolve(context.dirname, source),",
       "});",
       "",
@@ -493,6 +501,24 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     assert.ok(await deliver(file));
   }
   await new Promise<void>((resolve) => setImmediate(resolve));
+  const capturedPromise = [...cache.values()][0]!;
+  const capturedGeneration = await capturedPromise;
+  const capturedProjectTracker = capturedGeneration.projectMutationTracker;
+  const capturedHostTracker = capturedGeneration.hostInputMutationTracker;
+  const publishedHashes =
+    capturedGeneration.result.type === "exception"
+      ? {}
+      : (capturedGeneration.result.hostInputHashes ?? {});
+  const unhashedInputs =
+    capturedGeneration.result.type === "exception"
+      ? []
+      : (capturedGeneration.result.hostInputs ?? []).filter(
+          (input) =>
+            !Object.prototype.hasOwnProperty.call(
+              publishedHashes,
+              path.resolve(input),
+            ),
+        );
 
   const originalRead = fs.readFileSync;
   const originalLstat = fs.lstatSync;
@@ -534,7 +560,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   }
   assert.ok(
     reads / modules.length <= 12,
-    `persistent validation read ${(reads / modules.length).toFixed(1)} files per module (bound: 12)`,
+    `persistent validation read ${(reads / modules.length).toFixed(1)} files per module (bound: 12; complete=${String(capturedGeneration.projectSnapshotComplete)}; projectTracker=${String(capturedProjectTracker?.failed)}/${String(capturedProjectTracker?.membershipChanged)}; hostTracker=${String(capturedHostTracker?.failed)}/${String(capturedHostTracker?.membershipChanged)}; generationReplaced=${String([...cache.values()][0] !== capturedPromise)}; pluginRuns=${fs.existsSync(project.runLog) ? fs.readFileSync(project.runLog, "utf8").length : 0}; hostInputs=${capturedGeneration.result.type === "exception" ? 0 : (capturedGeneration.result.hostInputs?.length ?? 0)}; unhashed=${unhashedInputs.length}:${unhashedInputs.slice(0, 3).join(",")})`,
   );
   assert.ok(
     stats / modules.length <= 12,
@@ -815,6 +841,54 @@ async function assertCompileSnapshotRaceCannotAuthorizeStaleOutput(): Promise<vo
     2,
     "the torn generation must be replaced before its stale sibling output is served",
   );
+}
+
+/**
+ * Asserts a module candidate created after descriptor resolution cannot bless
+ * the earlier descriptor result with the later filesystem state.
+ */
+async function assertDescriptorInputRaceCannotAuthorizeStaleGeneration(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const project = createCacheProject({ fileCount: 1, graphFanout: 1 });
+  const external = TestProject.tmpdir("ttsc-unplugin-descriptor-race-");
+  const selectionBase = path.join(external, "selection");
+  const selectionJson = `${selectionBase}.json`;
+  const selectionJs = `${selectionBase}.js`;
+  fs.writeFileSync(
+    selectionJson,
+    JSON.stringify(path.join(project.root, "go-plugin")),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(project.root, "plugin.cjs"),
+    [
+      'const fs = require("node:fs");',
+      `const source = require(${JSON.stringify(selectionBase)});`,
+      "module.exports = () => {",
+      `  fs.writeFileSync(${JSON.stringify(selectionJs)}, ${JSON.stringify(`module.exports = ${JSON.stringify(path.join(project.root, "go-plugin"))};\n`)}, "utf8");`,
+      '  return { name: "descriptor-race", source };',
+      "};",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const cache = createTtscTransformCache();
+  const options = resolveOptions();
+  const main = path.join(project.root, "src", "mod0.ts");
+  const source = fs.readFileSync(main, "utf8");
+  assert.ok(await transformTtsc(main, source, options, undefined, cache));
+  assert.ok(fs.existsSync(selectionJs));
+  const firstGeneration = [...cache.values()][0];
+
+  assert.ok(await transformTtsc(main, source, options, undefined, cache));
+  assert.notEqual(
+    [...cache.values()][0],
+    firstGeneration,
+    "a candidate created during descriptor evaluation must replace the torn generation",
+  );
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
 }
 
 /**
@@ -1241,6 +1315,7 @@ export {
   assertCacheHitsDespiteOutOfWalkOutputKey,
   assertCacheTransformsMultiFileProjectOnce,
   assertCompileSnapshotRaceCannotAuthorizeStaleOutput,
+  assertDescriptorInputRaceCannotAuthorizeStaleGeneration,
   assertConcurrentTransformsCompileOnce,
   assertFirstModuleDeliveriesDoNotRehashProject,
   assertHostExceptionTransformIsEvictedAndRecovers,

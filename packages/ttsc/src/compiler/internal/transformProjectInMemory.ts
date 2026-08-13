@@ -4,6 +4,7 @@ import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import {
   collectProjectHostInputs,
   hasProjectPluginEntries,
+  hashHostInputPaths,
   loadProjectPlugins,
 } from "../../plugin/internal/loadProjectPlugins";
 import type { ITtscCompilerContext } from "../../structures/ITtscCompilerContext";
@@ -46,6 +47,7 @@ export function transformProjectInMemory(options: ITtscCompilerContext): {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
   hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
@@ -83,11 +85,17 @@ function transformProjectWithNativeHost(
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
   hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
 } {
+  // Capture the project inputs before the native host observes them. Pairing a
+  // post-build hash with an earlier result can bless a torn generation when a
+  // config changes during the child process.
+  const projectHostInputs = collectProjectHostInputs(project);
+  const projectHostInputHashes = hashHostInputPaths(projectHostInputs);
   const binary = buildNativeCompiler({
     cacheBaseDir: project.root,
     cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
@@ -113,10 +121,11 @@ function transformProjectWithNativeHost(
   );
   return {
     ...envelopeSideChannels(output),
-    hostInputs: mergeHostInputs(
-      collectProjectHostInputs(project),
-      output.hostInputs,
+    hostInputHashes: mergeCompatibleHostInputHashes(
+      projectHostInputHashes,
+      output.hostInputHashes,
     ),
+    hostInputs: mergeHostInputs(projectHostInputs, output.hostInputs),
     result: {
       diagnostics: output.diagnostics,
       status: res.status ?? 1,
@@ -135,6 +144,7 @@ function transformProjectWithPlugins(
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
   hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
@@ -169,6 +179,7 @@ function transformProjectWithPlugins(
   );
   if (checked.status !== 0) {
     return {
+      hostInputHashes: loaded.hostInputHashes,
       hostInputs: loaded.hostInputs,
       result: checked,
       typescript: {},
@@ -178,6 +189,10 @@ function transformProjectWithPlugins(
     const transformed = transformProjectWithNativeHost(options, project);
     return {
       ...envelopeSideChannels(transformed),
+      hostInputHashes: mergeCompatibleHostInputHashes(
+        loaded.hostInputHashes,
+        transformed.hostInputHashes,
+      ),
       hostInputs: mergeHostInputs(loaded.hostInputs, transformed.hostInputs),
       result: appendBuildOutput(checked, transformed.result),
       typescript: transformed.typescript,
@@ -215,6 +230,10 @@ function transformProjectWithPlugins(
   };
   return {
     ...envelopeSideChannels(output),
+    hostInputHashes: mergeCompatibleHostInputHashes(
+      loaded.hostInputHashes,
+      output.hostInputHashes,
+    ),
     hostInputs: mergeHostInputs(loaded.hostInputs, output.hostInputs),
     result: appendBuildOutput(checked, result),
     typescript: output.typescript,
@@ -261,6 +280,30 @@ function mergeHostInputs(
       ),
     ),
   ].sort();
+}
+
+/** Keep only native/descriptor fingerprints that agree on shared paths. */
+function mergeCompatibleHostInputHashes(
+  first: Readonly<Record<string, string | null>>,
+  second: Readonly<Record<string, string | null>> | undefined,
+): Record<string, string | null> {
+  if (second === undefined) return { ...first };
+  const output = { ...first };
+  for (const [file, hash] of Object.entries(second)) {
+    const absolute = path.resolve(file);
+    if (
+      Object.prototype.hasOwnProperty.call(output, absolute) &&
+      output[absolute] !== hash
+    ) {
+      // Two evaluation stages observed different states. Dropping proof makes
+      // persistent adapters replace the generation without turning advisory
+      // cache metadata into a user-facing compile failure.
+      delete output[absolute];
+      continue;
+    }
+    output[absolute] = hash;
+  }
+  return output;
 }
 
 /**
@@ -445,6 +488,7 @@ function parseNativeTransformOutput(
   dependenciesComplete?: string[];
   diagnostics: ITtscCompilerDiagnostic[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
   hostInputs?: string[];
   typescript: Record<string, string>;
   volatile?: string[];
@@ -455,6 +499,7 @@ function parseNativeTransformOutput(
       dependenciesComplete?: string[];
       diagnostics?: ITtscCompilerDiagnostic[];
       graph?: ITtscCompilerTransformation.IReferenceGraph;
+      hostInputHashes?: Record<string, string | null>;
       hostInputs?: string[];
       typescript?: Record<string, string>;
       volatile?: string[];
@@ -467,12 +512,14 @@ function parseNativeTransformOutput(
     const dependencies = parseDependencyLists(parsed.dependencies);
     const dependenciesComplete = parseFileList(parsed.dependenciesComplete);
     const graph = parseReferenceGraph(parsed.graph);
+    const hostInputHashes = parseHostInputHashes(parsed.hostInputHashes);
     const hostInputs = parseFileList(parsed.hostInputs);
     const volatile = parseFileList(parsed.volatile);
     return {
       ...(dependencies === undefined ? {} : { dependencies }),
       ...(dependenciesComplete === undefined ? {} : { dependenciesComplete }),
       ...(graph === undefined ? {} : { graph }),
+      ...(hostInputHashes === undefined ? {} : { hostInputHashes }),
       ...(hostInputs === undefined ? {} : { hostInputs }),
       ...(volatile === undefined ? {} : { volatile }),
       diagnostics: Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [],
@@ -487,6 +534,27 @@ function parseNativeTransformOutput(
         "ttsc: native transform host returned no output",
     );
   }
+}
+
+/** Parse native evaluation-time SHA-256/null host-input fingerprints. */
+function parseHostInputHashes(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, hash] of Object.entries(value)) {
+    if (
+      !path.isAbsolute(file) ||
+      (hash !== null &&
+        (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)))
+    ) {
+      continue;
+    }
+    output[path.resolve(file)] = hash;
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
 }
 
 /**

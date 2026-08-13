@@ -321,7 +321,12 @@ function loadLSPProjectPlugins(
         pluginConfigDir: pluginConfigOrigin,
         tsconfig: project.identity.logicalConfigPath,
       })
-    : { hostInputs: [...project.configPaths], nativePlugins: [], project };
+    : {
+        hostInputHashes: {},
+        hostInputs: [...project.configPaths],
+        nativePlugins: [],
+        project,
+      };
 }
 
 function captureInitialLSPProjectInputs(options: {

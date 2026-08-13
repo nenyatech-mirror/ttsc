@@ -572,6 +572,15 @@ func (p *Program) PluginHostInputs() []string {
   return p.plugins.hostInputs()
 }
 
+// PluginHostInputHashes returns evaluation-time fingerprints for the subset of
+// native host inputs whose exact state plugins reported without conflict.
+func (p *Program) PluginHostInputHashes() map[string]*string {
+  if p == nil {
+    return nil
+  }
+  return p.plugins.hostInputHashes()
+}
+
 // Diagnostics returns project diagnostics that must block compilation or
 // runtime execution before any JavaScript is emitted or evaluated.
 func (p *Program) Diagnostics() []Diagnostic {

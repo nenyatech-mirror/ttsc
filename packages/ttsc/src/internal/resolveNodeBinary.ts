@@ -3,26 +3,22 @@ import path from "node:path";
 
 export type JavaScriptRuntimeCapabilities = {
   bun: boolean;
+  executable?: string;
   registerHooks: boolean;
 };
 
-const capabilityCache = new Map<string, JavaScriptRuntimeCapabilities>();
-
-/** Probe an interpreter once instead of inferring its identity from the host. */
+/** Probe an interpreter instead of inferring its identity from the host. */
 export function javascriptRuntimeCapabilities(
   runtime: string,
   env: NodeJS.ProcessEnv,
   cwd: string,
 ): JavaScriptRuntimeCapabilities {
   const effectiveEnv = { ...process.env, ...env };
-  const key = `${runtime}\0${path.resolve(cwd)}\0${effectiveEnv.PATH ?? ""}`;
-  const cached = capabilityCache.get(key);
-  if (cached !== undefined) return cached;
   const result = childProcess.spawnSync(
     runtime,
     [
       "-e",
-      `const Module = require("node:module"); process.stdout.write(JSON.stringify({ bun: typeof globalThis.Bun === "object", registerHooks: typeof Module.registerHooks === "function" }));`,
+      `const Module = require("node:module"); process.stdout.write(JSON.stringify({ bun: typeof globalThis.Bun === "object", executable: process.execPath, registerHooks: typeof Module.registerHooks === "function" }));`,
     ],
     {
       cwd,
@@ -42,13 +38,20 @@ export function javascriptRuntimeCapabilities(
       ) as Partial<JavaScriptRuntimeCapabilities>;
       capabilities = {
         bun: parsed.bun === true,
+        ...(typeof parsed.executable === "string" &&
+        path.isAbsolute(parsed.executable)
+          ? { executable: path.resolve(parsed.executable) }
+          : {}),
         registerHooks: parsed.registerHooks === true,
       };
     } catch {
       // An incompatible executable is not a Node runtime candidate.
     }
   }
-  capabilityCache.set(key, capabilities);
+  // Do not cache this result. A relative candidate can appear after a failed
+  // probe, and an existing executable can be replaced between long-lived API
+  // or LSP requests. The child-reported absolute identity is authoritative for
+  // this invocation only.
   return capabilities;
 }
 
@@ -74,7 +77,13 @@ export function resolveNodeBinary(
     if (seen.has(candidate)) continue;
     seen.add(candidate);
     const capabilities = javascriptRuntimeCapabilities(candidate, env, cwd);
-    if (!capabilities.bun && capabilities.registerHooks) return candidate;
+    if (
+      !capabilities.bun &&
+      capabilities.registerHooks &&
+      capabilities.executable !== undefined
+    ) {
+      return capabilities.executable;
+    }
   }
   return undefined;
 }

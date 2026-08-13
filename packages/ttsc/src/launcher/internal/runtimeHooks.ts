@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import {
   Module,
+  createRequire,
   isBuiltin,
   registerHooks,
   stripTypeScriptTypes,
@@ -59,6 +60,13 @@ const RESOLVABLE_EXTENSIONS = [
   ".js",
   ".mjs",
   ".cjs",
+] as const;
+
+/** Union of the ttsx rescue probes and Node's built-in CommonJS probes. */
+const DESCRIPTOR_PROBE_EXTENSIONS = [
+  ...RESOLVABLE_EXTENSIONS,
+  ".json",
+  ".node",
 ] as const;
 
 /** TypeScript source extensions these hooks compile. */
@@ -361,8 +369,9 @@ function resolve(
   context: ResolveContext,
   nextResolve: NextResolve,
 ): ResolveResult {
+  recordPluginDescriptorResolutionCandidates(specifier, context.parentURL);
   try {
-    return rememberRuntimeEntry(
+    const result = rememberRuntimeEntry(
       rememberCommonJsNamedInterop(
         restoreStrippedNodeBuiltinScheme(
           specifier,
@@ -372,19 +381,226 @@ function resolve(
       ),
       context,
     );
+    recordPluginDescriptorResolution(specifier, context.parentURL, result.url);
+    return result;
   } catch (error) {
     const rescued = probeRescuableSpecifier(specifier, context.parentURL);
     if (rescued === null) {
       throw error;
     }
-    return rememberRuntimeEntry(
+    const result = rememberRuntimeEntry(
       rememberCommonJsNamedInterop(
         { shortCircuit: true, url: rescued },
         context,
       ),
       context,
     );
+    recordPluginDescriptorResolution(specifier, context.parentURL, result.url);
+    return result;
   }
+}
+
+/**
+ * Fingerprint every path whose state can redirect one descriptor import.
+ *
+ * This runs before the real resolver. Reporting candidates only after the
+ * descriptor finished would pair an earlier descriptor result with later file
+ * state when a higher-priority candidate appeared during evaluation.
+ */
+function recordPluginDescriptorResolutionCandidates(
+  specifier: string,
+  parentURL: string | undefined,
+): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  if (isBuiltin(specifier) || specifier.startsWith("node:")) return;
+  const parent = runtimeFilePath(parentURL);
+  if (parent === undefined) return;
+  const recorded = new Set<string>();
+  const record = (candidate: string): void => {
+    const resolved = path.resolve(candidate);
+    if (recorded.has(resolved)) return;
+    recorded.add(resolved);
+    recordPluginDescriptorInput({
+      hash: pluginDescriptorInputHash(resolved),
+      parent,
+      resolved,
+      specifier,
+    });
+  };
+  const recordManifestTargets = (value: unknown, directory: string): void => {
+    if (typeof value === "string") {
+      if (value.startsWith("./") || value.startsWith("../")) {
+        recordBase(path.resolve(directory, value));
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) recordManifestTargets(item, directory);
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const item of Object.values(value)) {
+        recordManifestTargets(item, directory);
+      }
+    }
+  };
+  const recordPackageManifests = (file: string): void => {
+    for (
+      let directory = path.dirname(file);
+      ;
+      directory = path.dirname(directory)
+    ) {
+      const manifest = path.join(directory, "package.json");
+      record(manifest);
+      if (isFile(manifest)) return;
+      const parentDirectory = path.dirname(directory);
+      if (parentDirectory === directory) return;
+    }
+  };
+  const bases = new Set<string>();
+  const recordBase = (base: string): void => {
+    const resolvedBase = path.resolve(base);
+    if (bases.has(resolvedBase)) return;
+    bases.add(resolvedBase);
+    record(resolvedBase);
+    for (const extension of DESCRIPTOR_PROBE_EXTENSIONS) {
+      record(resolvedBase + extension);
+    }
+    const manifestFile = path.join(resolvedBase, "package.json");
+    record(manifestFile);
+    for (const extension of DESCRIPTOR_PROBE_EXTENSIONS) {
+      record(path.join(resolvedBase, `index${extension}`));
+    }
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(manifestFile, "utf8").replace(/^\uFEFF/, ""),
+      ) as Record<string, unknown>;
+      recordManifestTargets(manifest.exports, resolvedBase);
+      recordManifestTargets(manifest.module, resolvedBase);
+      recordManifestTargets(manifest.main, resolvedBase);
+    } catch {
+      // The real resolver owns malformed package diagnostics.
+    }
+  };
+
+  if (
+    specifier.startsWith(".") ||
+    path.isAbsolute(specifier) ||
+    specifier.startsWith("file:")
+  ) {
+    try {
+      const base = specifier.startsWith("file:")
+        ? fileURLToPath(specifier)
+        : path.resolve(path.dirname(parent), specifier);
+      recordPackageManifests(base);
+      if (isFile(base)) record(base);
+      else recordBase(base);
+    } catch {
+      // The real resolver owns invalid URL spellings.
+    }
+    return;
+  }
+
+  const parts = specifier.split("/");
+  const packageParts = parts[0]?.startsWith("@")
+    ? parts.slice(0, 2)
+    : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) return;
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  for (const searchPath of createRequire(parent).resolve.paths(specifier) ??
+    []) {
+    const packageDirectory = path.join(searchPath, packageName);
+    recordBase(packageDirectory);
+    if (subpath.length !== 0) {
+      recordBase(path.join(packageDirectory, ...subpath));
+    }
+    try {
+      if (fs.statSync(packageDirectory).isDirectory()) break;
+    } catch {
+      // Keep probing the next package search root.
+    }
+  }
+}
+
+/**
+ * Report one resolved descriptor edge to the parent loader. The channel is
+ * armed by the generated descriptor shim only after ttsx's own bootstrap and
+ * imports have loaded, keeping compiler implementation files out of the
+ * project's persistent-cache inputs.
+ */
+function recordPluginDescriptorResolution(
+  specifier: string,
+  parentURL: string | undefined,
+  resolvedURL: string,
+): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
+  if (out === undefined || out.length === 0) return;
+  const resolved = runtimeFilePath(resolvedURL);
+  if (resolved === undefined) return;
+  const parent = runtimeFilePath(parentURL);
+  recordPluginDescriptorInput({
+    hash: pluginDescriptorInputHash(resolved),
+    ...(parent === undefined ? {} : { parent }),
+    resolved,
+    specifier,
+  });
+  for (
+    let directory = path.dirname(resolved);
+    ;
+    directory = path.dirname(directory)
+  ) {
+    const manifest = path.join(directory, "package.json");
+    recordPluginDescriptorInput({
+      hash: pluginDescriptorInputHash(manifest),
+      ...(parent === undefined ? {} : { parent }),
+      resolved: manifest,
+    });
+    if (isFile(manifest)) break;
+    const parentDirectory = path.dirname(directory);
+    if (parentDirectory === directory) break;
+  }
+}
+
+function recordPluginDescriptorInput(record: {
+  hash?: string | null;
+  parent?: string;
+  resolved: string;
+  specifier?: string;
+}): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
+  if (out === undefined || out.length === 0) return;
+  try {
+    fs.appendFileSync(out, `${JSON.stringify(record)}\n`, "utf8");
+  } catch {
+    // Dependency reporting is advisory to cache reuse; the selected entry is
+    // still retained by the parent if this best-effort side channel fails.
+  }
+}
+
+function pluginDescriptorInputHash(file: string): string | null {
+  try {
+    return crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(file))
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function runtimeFilePath(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value.startsWith("file:")) {
+    try {
+      return path.resolve(fileURLToPath(value));
+    } catch {
+      return undefined;
+    }
+  }
+  return path.isAbsolute(value) ? path.resolve(value) : undefined;
 }
 
 /** Remember an ESM root until its synchronous load hook prepares the project. */
@@ -553,6 +769,7 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
   if (tsconfig === null) {
     return null;
   }
+  recordPluginDescriptorProjectConfig(tsconfig);
   const cached = moduleOptionsCache.get(tsconfig);
   if (cached !== undefined) {
     return cached;
@@ -574,6 +791,35 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
   }
   moduleOptionsCache.set(tsconfig, options);
   return options;
+}
+
+/** Record the owning config chain that controls a served TypeScript module. */
+function recordPluginDescriptorProjectConfig(tsconfig: string): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  const resolvedTsconfig = path.resolve(tsconfig);
+  recordPluginDescriptorInput({
+    hash: pluginDescriptorInputHash(resolvedTsconfig),
+    resolved: resolvedTsconfig,
+  });
+  try {
+    const project = readProjectConfig({
+      cwd: path.dirname(tsconfig),
+      tsconfig,
+    });
+    for (const configPath of project.configPaths) {
+      const resolved = path.resolve(configPath);
+      recordPluginDescriptorInput({
+        hash: pluginDescriptorInputHash(resolved),
+        resolved,
+      });
+    }
+  } catch {
+    const resolved = path.resolve(tsconfig);
+    recordPluginDescriptorInput({
+      hash: pluginDescriptorInputHash(resolved),
+      resolved,
+    });
+  }
 }
 
 /** Narrow a resolved project's compiler options to the emit-format pair. */
@@ -1673,7 +1919,19 @@ function buildDependency(
   cacheDir: string,
   metaPath: string,
 ): BuiltProject {
+  const resolvedTsconfig = path.resolve(tsconfig);
+  recordPluginDescriptorInput({
+    hash: pluginDescriptorInputHash(resolvedTsconfig),
+    resolved: resolvedTsconfig,
+  });
   const project = readProjectConfig({ cwd: path.dirname(tsconfig), tsconfig });
+  for (const configPath of project.configPaths) {
+    const resolved = path.resolve(configPath);
+    recordPluginDescriptorInput({
+      hash: pluginDescriptorInputHash(resolved),
+      resolved,
+    });
+  }
   const generation = newDependencyGeneration();
   const emitDir = dependencyGenerationDir(cacheDir, generation);
   fs.rmSync(emitDir, { force: true, recursive: true });

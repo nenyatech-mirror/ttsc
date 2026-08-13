@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -15,6 +16,8 @@ export * from "./structures/index";
 type TtscPluginDescriptor = {
   /** Universal config-discovery inputs consumed by the native transform. */
   hostInputs?: string[];
+  /** Evaluation-time fingerprints paired with {@link hostInputs}. */
+  hostInputHashes?: Record<string, string | null>;
   /** Human-readable plugin name used in logs and error messages. */
   name: string;
   /** Absolute path to the Go source directory for this plugin. */
@@ -95,8 +98,10 @@ export default function createTtscBanner(
     }
   }
 
+  const configInputs = bannerConfigInputs(context);
   return {
-    hostInputs: bannerConfigInputs(context),
+    hostInputHashes: configInputs.hashes,
+    hostInputs: configInputs.inputs,
     name: "@ttsc/banner",
     // Point at the `driver/` directory one level above `lib/` in the
     // installed package tree (where the Go sources live). `context.dirname`
@@ -120,17 +125,16 @@ const BANNER_CONFIG_FILENAMES = [
 /** Mirror native config resolution while retaining missing priority probes. */
 function bannerConfigInputs(
   context: TtscPluginFactoryContext<ITtscBannerPluginConfig>,
-): string[] {
+): { hashes: Record<string, string | null>; inputs: string[] } {
   const configFile = (context.plugin as { configFile?: unknown }).configFile;
   const base = path.resolve(
     context.pluginConfigDir ?? path.dirname(context.tsconfig),
   );
   if (typeof configFile === "string" && configFile.trim() !== "") {
-    return [
-      path.isAbsolute(configFile)
-        ? path.resolve(configFile)
-        : path.resolve(base, configFile),
-    ];
+    const file = path.isAbsolute(configFile)
+      ? path.resolve(configFile)
+      : path.resolve(base, configFile);
+    return { hashes: { [file]: hostInputHash(file) }, inputs: [file] };
   }
   return configDiscoveryInputs(base, BANNER_CONFIG_FILENAMES);
 }
@@ -138,16 +142,32 @@ function bannerConfigInputs(
 function configDiscoveryInputs(
   base: string,
   names: readonly string[],
-): string[] {
+): { hashes: Record<string, string | null>; inputs: string[] } {
   const inputs: string[] = [];
+  const hashes: Record<string, string | null> = {};
   for (let directory = base; ; directory = path.dirname(directory)) {
     const candidates = names.map((name) => path.join(directory, name));
     inputs.push(...candidates);
+    for (const candidate of candidates) {
+      hashes[candidate] = hostInputHash(candidate);
+    }
     if (candidates.some(configCandidateExists)) break;
     const parent = path.dirname(directory);
     if (parent === directory) break;
   }
-  return inputs;
+  return { hashes, inputs };
+}
+
+/** Hash the exact candidate state observed before discovery selects a file. */
+function hostInputHash(file: string): string | null {
+  try {
+    return crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(file))
+      .digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 /** Match the native discovery rule: a directory is never a config file. */

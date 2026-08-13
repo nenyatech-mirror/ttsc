@@ -36,6 +36,17 @@ export interface ITtscPlugin {
   hostInputs?: string[];
 
   /**
+   * Evaluation-time SHA-256 fingerprints for entries in {@link hostInputs}.
+   *
+   * Use a lowercase 64-digit digest for a file observed during descriptor
+   * evaluation and `null` for a missing candidate. The map is optional: ttsc
+   * still watches unhashed inputs, but persistent adapters conservatively
+   * decline narrow generation reuse because a later host snapshot cannot prove
+   * which state produced the descriptor.
+   */
+  hostInputHashes?: Record<string, string | null>;
+
+  /**
    * Go package directory, or a `go.mod` file, that ttsc lazily builds.
    *
    * Ttsc accepts source only. It does not accept a prebuilt binary path: the

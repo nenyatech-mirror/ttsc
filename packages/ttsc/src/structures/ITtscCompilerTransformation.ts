@@ -150,6 +150,13 @@ export namespace ITtscCompilerTransformation {
     hostInputs?: string[];
 
     /**
+     * SHA-256 fingerprints captured by the plugin loader at the instant each
+     * host input influenced this generation. Internal cache validators use
+     * these to reject a result raced by a concurrent config/module change.
+     */
+    hostInputHashes?: Record<string, string | null>;
+
+    /**
      * Transformed files (keyed like {@link typescript}) whose output depends on
      * non-file inputs (environment, time, network) as declared by the transform
      * plugin via the envelope's optional `volatile` list. No file-dependency
@@ -199,6 +206,9 @@ export namespace ITtscCompilerTransformation {
 
     /** Host-wide transform inputs; same contract as {@link ISuccess.hostInputs}. */
     hostInputs?: string[];
+
+    /** Generation-time host-input fingerprints. */
+    hostInputHashes?: Record<string, string | null>;
 
     /**
      * Volatile transformed files. Same shape and semantics as

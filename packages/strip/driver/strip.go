@@ -19,7 +19,7 @@ type plugin struct{}
 // ApplyProgram strips configured call expressions and debugger statements from
 // every source file in the program.
 func (plugin) ApplyProgram(prog *driver.Program, ctx driver.PluginContext) error {
-  config, err := loadStripConfigMapWithReporter(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput)
+  config, err := loadStripConfigMapWithReporters(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput, ctx.ReportHostInputHash)
   if err != nil {
     return err
   }
