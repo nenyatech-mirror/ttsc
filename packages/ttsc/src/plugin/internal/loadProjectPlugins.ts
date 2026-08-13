@@ -779,7 +779,7 @@ class CommonJsDescriptorLoadError extends Error {
 }
 
 /**
- * Evaluate one CommonJS descriptor in a fresh Node module-cache generation.
+ * Evaluate one CommonJS descriptor in a fresh runtime module-cache generation.
  *
  * Reloading an external descriptor dependency inside this process has no safe
  * cache operation: retaining it serves stale exports, while deleting it splits
@@ -793,6 +793,8 @@ function loadCommonJsDescriptor(
   context: ITtscPluginFactoryContext,
   effectiveEnv: NodeJS.ProcessEnv,
 ): IsolatedPluginDescriptor {
+  const runtime = pluginDescriptorRuntimeBinary(effectiveEnv);
+  const bunRuntime = pluginDescriptorUsesBunRuntime(runtime);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
   const out = path.join(dir, "descriptor.json");
   const runtimeHookPreload = path.join(
@@ -805,10 +807,9 @@ function loadCommonJsDescriptor(
   );
   try {
     const result = childProcess.spawnSync(
-      process.execPath,
+      runtime,
       [
-        "--require",
-        runtimeHookPreload,
+        ...(bunRuntime ? [] : ["--require", runtimeHookPreload]),
         "-e",
         COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
       ],
@@ -819,7 +820,9 @@ function loadCommonJsDescriptor(
           // `effectiveEnv` can be the instance snapshot taken before
           // withPluginLoaderEnv supplied these host-owned locators.
           TTSC_NODE_BINARY:
-            effectiveEnv.TTSC_NODE_BINARY ?? process.env.TTSC_NODE_BINARY,
+            effectiveEnv.TTSC_NODE_BINARY ??
+            process.env.TTSC_NODE_BINARY ??
+            runtime,
           TTSC_TTSX_BINARY:
             effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY,
           TTSC_PLUGIN_CONTEXT: JSON.stringify(context),
@@ -844,7 +847,7 @@ function loadCommonJsDescriptor(
     }
     if (!fs.existsSync(out)) {
       throw new Error(
-        `ttsc: plugin descriptor "${request}" evaluation in isolated Node produced no descriptor output.`,
+        `ttsc: plugin descriptor "${request}" evaluation in an isolated process produced no descriptor output.`,
       );
     }
     let parsed: unknown;
@@ -916,13 +919,11 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  const request = process.env.TTSC_PLUGIN_ENTRY;`,
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
   `  const inputs = new Set([path.resolve(request)]);`,
-  `  const load = Module._load;`,
-  `  Module._load = function (specifier, parent, isMain) {`,
-  `    try {`,
-  `      const resolved = Module._resolveFilename(specifier, parent, isMain);`,
-  `      if (typeof resolved === "string" && path.isAbsolute(resolved)) inputs.add(path.resolve(resolved));`,
-  `    } catch {}`,
-  `    return Reflect.apply(load, this, arguments);`,
+  `  const resolveFilename = Module._resolveFilename;`,
+  `  Module._resolveFilename = function () {`,
+  `    const resolved = Reflect.apply(resolveFilename, this, arguments);`,
+  `    if (typeof resolved === "string" && path.isAbsolute(resolved)) inputs.add(path.resolve(resolved));`,
+  `    return resolved;`,
   `  };`,
   `  let mod;`,
   `  try {`,
@@ -936,17 +937,21 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  if (descriptor && typeof descriptor === "object" && ("transformSource" in descriptor || "transformOutput" in descriptor)) {`,
   `    throw new Error("ttsc: plugin descriptor declares unsupported JS transform functions; declare a native backend instead");`,
   `  }`,
-  // Serialize the descriptor while Module._load is still collecting. Getters
-  // are allowed by JavaScript's object model and can lazily require a config;
-  // snapshotting inputs first would silently omit that influence.
+  // Serialize the descriptor while Module._resolveFilename is still
+  // collecting. Getters are allowed by JavaScript's object model and can
+  // lazily require a config; snapshotting inputs first would silently omit
+  // that influence.
   `  const serializedDescriptor = JSON.stringify(descriptor);`,
   `  const payload = { inputs: [...inputs].sort() };`,
   `  if (serializedDescriptor !== undefined) payload.descriptor = JSON.parse(serializedDescriptor);`,
   `  fs.writeFileSync(out, JSON.stringify(payload));`,
   `} catch (error) {`,
+  `  const message = error instanceof Error ? error.message : String(error);`,
+  `  const stack = error instanceof Error && error.stack ? error.stack : String(error);`,
   `  try {`,
-  `    fs.writeFileSync(out, JSON.stringify({ __ttscLoaderError: error instanceof Error && error.stack ? error.stack : String(error), __ttscRetryWithTtsx: retryWithTtsx }));`,
+  `    fs.writeFileSync(out, JSON.stringify({ __ttscLoaderError: message, __ttscRetryWithTtsx: retryWithTtsx }));`,
   `  } catch {}`,
+  `  try { process.stderr.write(stack + "\\n"); } catch {}`,
   `  process.exit(1);`,
   `}`,
   ``,
@@ -972,7 +977,7 @@ function commonJsDescriptorProcessFailure(
 ): Error | undefined {
   if (result.error !== undefined) {
     return new Error(
-      `ttsc: failed to launch isolated Node for plugin descriptor "${request}": ${result.error.message}`,
+      `ttsc: failed to launch an isolated process for plugin descriptor "${request}": ${result.error.message}`,
     );
   }
   if (result.signal !== null) {
@@ -1049,10 +1054,7 @@ function loadDescriptorViaTtsx(
   // Binary discovery prefers the instance environment, then the ambient
   // process.env (where `withPluginLoaderEnv` injects ttsc's own node/ttsx paths
   // just before this runs), then the running interpreter.
-  const node =
-    effectiveEnv.TTSC_NODE_BINARY ??
-    process.env.TTSC_NODE_BINARY ??
-    process.execPath;
+  const node = pluginDescriptorRuntimeBinary(effectiveEnv);
   const ttsx = effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY;
   if (ttsx === undefined || ttsx.length === 0) {
     return undefined;
@@ -1141,7 +1143,7 @@ function errorMessage(error: unknown): string {
 function withPluginLoaderEnv<T>(run: () => T): T {
   const previousNode = process.env.TTSC_NODE_BINARY;
   const previousTtsx = process.env.TTSC_TTSX_BINARY;
-  process.env.TTSC_NODE_BINARY ??= process.execPath;
+  process.env.TTSC_NODE_BINARY ??= pluginDescriptorRuntimeBinary({});
   process.env.TTSC_TTSX_BINARY ??= path.join(
     __dirname,
     "..",
@@ -1155,6 +1157,30 @@ function withPluginLoaderEnv<T>(run: () => T): T {
     restoreEnv("TTSC_NODE_BINARY", previousNode);
     restoreEnv("TTSC_TTSX_BINARY", previousTtsx);
   }
+}
+
+/**
+ * Select the executable for isolated descriptor evaluation.
+ *
+ * Under Bun, `process.execPath` names Bun itself. Bun implements enough of the
+ * Node module surface to evaluate descriptors natively, but not Node's
+ * synchronous `module.registerHooks` preload. The caller therefore recognizes
+ * this default and omits the Node-only preload while retaining the fresh
+ * process boundary. An explicitly configured Node executable remains
+ * authoritative and receives the preload as usual.
+ */
+function pluginDescriptorRuntimeBinary(env: NodeJS.ProcessEnv): string {
+  return (
+    env.TTSC_NODE_BINARY ?? process.env.TTSC_NODE_BINARY ?? process.execPath
+  );
+}
+
+/** Whether `runtime` is the current Bun executable rather than Node.js. */
+function pluginDescriptorUsesBunRuntime(runtime: string): boolean {
+  return (
+    typeof (process.versions as Record<string, string | undefined>).bun ===
+      "string" && runtime === process.execPath
+  );
 }
 
 function restoreEnv(
