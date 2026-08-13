@@ -76,4 +76,33 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
       () => factory(context),
       /multiple lint config files found.*lint\.config\.json, ttsc-lint\.config\.json/,
     );
+
+    if (process.platform === "win32") {
+      const caseWorkspace = TestProject.tmpdir("ttsc-lint-host-input-case-");
+      const caseProject = path.join(caseWorkspace, "packages", "app");
+      fs.mkdirSync(caseProject, { recursive: true });
+      fs.writeFileSync(
+        path.join(caseProject, "Lint.Config.Json"),
+        "{}\n",
+        "utf8",
+      );
+      const caseDescriptor = factory({
+        ...context,
+        cwd: caseProject,
+        pluginConfigDir: caseProject,
+        projectRoot: caseProject,
+        tsconfig: path.join(caseProject, "tsconfig.json"),
+      });
+      const nativeSpelling = path.join(caseProject, "lint.config.json");
+      assert.match(
+        caseDescriptor.hostInputHashes[nativeSpelling],
+        /^[0-9a-f]{64}$/,
+      );
+      assert.equal(
+        caseDescriptor.hostInputs.includes(
+          path.join(caseWorkspace, "lint.config.ts"),
+        ),
+        false,
+      );
+    }
   };

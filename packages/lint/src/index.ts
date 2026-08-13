@@ -84,20 +84,20 @@ function goSubpackageName(namespace: string): string {
 }
 
 const LINT_CONFIG_FILENAMES = [
+  "lint.config.json",
+  "lint.config.js",
+  "lint.config.mjs",
+  "lint.config.cjs",
   "lint.config.ts",
   "lint.config.mts",
   "lint.config.cts",
-  "lint.config.mjs",
-  "lint.config.cjs",
-  "lint.config.js",
-  "lint.config.json",
+  "ttsc-lint.config.json",
+  "ttsc-lint.config.js",
+  "ttsc-lint.config.mjs",
+  "ttsc-lint.config.cjs",
   "ttsc-lint.config.ts",
   "ttsc-lint.config.mts",
   "ttsc-lint.config.cts",
-  "ttsc-lint.config.mjs",
-  "ttsc-lint.config.cjs",
-  "ttsc-lint.config.js",
-  "ttsc-lint.config.json",
 ];
 
 /**
@@ -483,29 +483,21 @@ function discoveryConfigBaseDirs(
 
 /** Return the non-directory candidates native discovery recognizes. */
 function lintConfigMatchesIn(directory: string): string[] {
-  const candidateSet = new Set<string>(LINT_CONFIG_FILENAMES);
-  // One `readdirSync` per directory level beats 14 `existsSync`+`statSync`
-  // pairs (= 28 stat syscalls) per level; intersect the listing instead.
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return [];
-  }
   const matches: string[] = [];
-  for (const entry of entries) {
-    if (!candidateSet.has(entry.name)) continue;
-    const candidate = path.join(directory, entry.name);
+  for (const name of LINT_CONFIG_FILENAMES) {
+    const candidate = path.join(directory, name);
     try {
       // Go's os.Stat follows symlinks and junctions. Follow them here too so a
       // directory or dangling link cannot stop descriptor discovery before
-      // the native host reaches a valid ancestor config.
+      // the native host reaches a valid ancestor config. Probing the canonical
+      // candidate spelling also preserves Go's behavior on case-insensitive
+      // filesystems when the directory entry uses different casing.
       if (!fs.statSync(candidate).isDirectory()) matches.push(candidate);
     } catch {
       // Missing, dangling, and unreadable candidates are not native matches.
     }
   }
-  return matches.sort();
+  return matches;
 }
 
 /**
