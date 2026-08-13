@@ -389,7 +389,13 @@ function discoverLintConfigFile(
       if (matches.length === 1) {
         return { configPath: matches[0], hostInputHashes, hostInputs };
       }
-      if (matches.length > 1) break;
+      if (matches.length > 1) {
+        throw new Error(
+          `@ttsc/lint: multiple lint config files found in ${directory} (${matches
+            .map((file) => path.basename(file))
+            .join(", ")}); set "configFile" explicitly`,
+        );
+      }
       const parent = path.dirname(directory);
       if (parent === directory) break;
     }
@@ -492,7 +498,8 @@ function lintConfigMatchesIn(directory: string): string[] {
         candidateSet.has(entry.name) &&
         (entry.isFile() || entry.isSymbolicLink()),
     )
-    .map((entry) => path.join(directory, entry.name));
+    .map((entry) => path.join(directory, entry.name))
+    .sort();
 }
 
 /**

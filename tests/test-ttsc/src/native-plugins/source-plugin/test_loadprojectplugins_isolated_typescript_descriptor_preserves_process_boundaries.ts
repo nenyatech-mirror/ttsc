@@ -20,6 +20,8 @@ import { assert, fs, path, spawnNodeWorker } from "../../internal/source-build";
  *    initialization also runs once instead of being retried through ttsx.
  * 4. Give a user error a loader-like `code` and assert that mutable metadata alone
  *    cannot trigger the fallback or duplicate its side effect.
+ * 5. Create a TypeScript candidate only after a genuine resolution failure and
+ *    assert retry classification remains bound to the failure-time snapshot.
  */
 export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_process_boundaries =
   async () => {
@@ -231,4 +233,40 @@ export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_pr
     assert.match(mutatedResult.stderr, /Cannot find module '\.\/phantom'/);
     assert.equal(fs.readFileSync(mutatedCounter, "utf8"), "run\n");
     assert.equal(fs.existsSync(fallbackMarker), false);
+
+    const lateCounter = path.join(root, "late-candidate-runs.txt");
+    const lateCandidate = path.join(root, "late-candidate.ts");
+    const lateDescriptor = path.join(root, "late-candidate-race.cts");
+    fs.writeFileSync(
+      lateDescriptor,
+      [
+        `const fs = require("node:fs");`,
+        `fs.appendFileSync(${JSON.stringify(lateCounter)}, "run\\n");`,
+        `try { require("./late-candidate"); } catch (failure) {`,
+        `  fs.writeFileSync(${JSON.stringify(lateCandidate)}, "export const value = 1;\\n");`,
+        `  throw failure;`,
+        `}`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { plugins: [{ transform: lateDescriptor }] },
+      }),
+      "utf8",
+    );
+    const lateResult = await spawnNodeWorker({
+      env: {
+        TTSC_BINARY: TestProject.NATIVE_BINARY,
+        TTSC_TSGO_BINARY: TestProject.TSGO_BINARY,
+        TTSC_TTSX_BINARY: fakeTtsx,
+      },
+      script,
+    });
+    assert.equal(fs.readFileSync(lateCounter, "utf8"), "run\n");
+    assert.equal(fs.existsSync(lateCandidate), true);
+    assert.equal(fs.existsSync(fallbackMarker), false);
+    assert.match(lateResult.stderr, /Cannot find module '\.\/late-candidate'/);
   };

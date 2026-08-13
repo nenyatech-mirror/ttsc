@@ -28,7 +28,7 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
     const filename = TestProject.REQUIRE_FROM_TEST.resolve(
       path.join(TestProject.WORKSPACE_ROOT, "packages", "lint"),
     );
-    const descriptor = factory({
+    const context = {
       binary: "",
       cwd: project,
       dirname: path.dirname(filename),
@@ -37,7 +37,8 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
       pluginConfigDir: project,
       projectRoot: project,
       tsconfig: path.join(project, "tsconfig.json"),
-    });
+    };
+    const descriptor = factory(context);
 
     assert.ok(descriptor.hostInputs.includes(selected));
     assert.ok(
@@ -53,5 +54,16 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
         path.join(path.dirname(workspace), "lint.config.json"),
       ),
       false,
+    );
+
+    fs.writeFileSync(path.join(project, "lint.config.json"), "{}\n", "utf8");
+    fs.writeFileSync(
+      path.join(project, "ttsc-lint.config.json"),
+      "{}\n",
+      "utf8",
+    );
+    assert.throws(
+      () => factory(context),
+      /multiple lint config files found.*lint\.config\.json, ttsc-lint\.config\.json/,
     );
   };
