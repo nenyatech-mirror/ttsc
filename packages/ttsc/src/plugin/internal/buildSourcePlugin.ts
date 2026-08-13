@@ -3406,8 +3406,11 @@ function createGoBuildCacheCoordinationRecord(
   root: string,
   directoryName: string,
 ): GoBuildCacheCoordinationRecord {
-  const directory = path.join(root, directoryName);
-  fs.mkdirSync(directory, { recursive: true });
+  const directory = goBuildCacheCoordinationDirectory(
+    root,
+    directoryName,
+    true,
+  )!;
   const record = path.join(
     directory,
     `${process.pid}-${crypto.randomBytes(16).toString("hex")}.json`,
@@ -3551,12 +3554,18 @@ function collectLiveGoBuildCacheCoordinationRecords(
   directoryName: string,
   now: number,
 ): string[] {
-  const directory = path.join(root, directoryName);
+  const directory = goBuildCacheCoordinationDirectory(
+    root,
+    directoryName,
+    false,
+  );
+  if (directory === undefined) return [];
   let records: fs.Dirent[];
   try {
     records = fs.readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
   }
   const live: string[] = [];
   for (const record of records) {
@@ -3573,6 +3582,48 @@ function collectLiveGoBuildCacheCoordinationRecords(
     } catch {}
   }
   return live;
+}
+
+/**
+ * Resolve one private coordination directory without following a project-
+ * supplied symlink or junction outside the owned Go cache.
+ */
+function goBuildCacheCoordinationDirectory(
+  root: string,
+  directoryName: string,
+  create: boolean,
+): string | undefined {
+  if (create) fs.mkdirSync(root, { recursive: true });
+  const directory = path.join(root, directoryName);
+  if (create) {
+    try {
+      fs.mkdirSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  let stats: fs.Stats;
+  try {
+    stats = fs.lstatSync(directory);
+  } catch (error) {
+    if (!create && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(
+      `ttsc: unsafe Go build cache coordination directory: ${directory}`,
+    );
+  }
+  const physicalRoot = fs.realpathSync.native(root);
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== physicalRoot) {
+    throw new Error(
+      `ttsc: Go build cache coordination directory escaped its root: ${directory}`,
+    );
+  }
+  return physicalDirectory;
 }
 
 function goBuildCacheCoordinationRecordIsLive(
@@ -3599,7 +3650,7 @@ function goBuildCacheCoordinationRecordIsLive(
       // also occurs when the system clock moves backward during a real build.
       // Rebase the record and grant one ordinary grace period; an active
       // heartbeat keeps refreshing it, while an orphan then expires normally.
-      // Treat a failed rebase as live too—the safe failure mode is to defer
+      // Treat a failed rebase as live too: the safe failure mode is to defer
       // opportunistic maintenance, never to delete under a possibly live Go.
       try {
         const current = new Date(now);
@@ -3612,8 +3663,8 @@ function goBuildCacheCoordinationRecordIsLive(
         ? GO_BUILD_CACHE_MAINTENANCE_STALE_MS
         : GO_BUILD_CACHE_COORDINATION_STALE_MS;
     return age <= staleMs;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 

@@ -27,8 +27,10 @@ import {
  *    future-dated intent and fresh orphan lease retain a conservative grace.
  * 6. Deny Worker permission and prove the IPC heartbeat fallback cleans up its
  *    lease after running the callback.
- * 7. Resolve user and explicitly named cache layouts and assert their objects and
- *    maintenance metadata remain untouched at the exact resolved roots.
+ * 7. Reject a coordination-directory junction without deleting its external
+ *    JSON files.
+ * 8. Resolve user and explicitly named cache layouts and assert their objects
+ *    and maintenance metadata remain untouched at the exact resolved roots.
  */
 export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
   () => {
@@ -207,6 +209,29 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       "a future-dated intent must receive one conservative grace period",
     );
     assert.equal(fs.existsSync(futureIntent), false);
+
+    const linkedCoordinationCache = path.join(root, "linked-coordination");
+    const outsideCoordination = path.join(root, "outside-coordination");
+    fs.mkdirSync(linkedCoordinationCache, { recursive: true });
+    fs.mkdirSync(outsideCoordination, { recursive: true });
+    const outsideRecord = path.join(outsideCoordination, "keep.json");
+    fs.writeFileSync(outsideRecord, "{}", "utf8");
+    const outsideStale = new Date(now - 2 * 60 * 60 * 1000);
+    fs.utimesSync(outsideRecord, outsideStale, outsideStale);
+    fs.symlinkSync(
+      outsideCoordination,
+      path.join(linkedCoordinationCache, ".ttsc-maintenance"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.throws(
+      () => withGoBuildCacheLease(linkedCoordinationCache, true, () => {}),
+      /unsafe Go build cache coordination directory/,
+    );
+    assert.equal(
+      fs.existsSync(outsideRecord),
+      true,
+      "coordination cleanup escaped through a junction",
+    );
 
     const orphanCache = path.join(root, "orphan-go-build");
     const orphanObject = writeObject(
