@@ -667,6 +667,12 @@ interface BuiltProject {
   moduleOptions: OwningModuleOptions;
 }
 const builtProjects = new Map<string, BuiltProject>();
+// A descriptor evaluator's dependency emit must never be reused by another
+// process. PIDs are eventually recycled while the disk cache persists, so PID
+// alone cannot provide that isolation. One cryptographically random process
+// nonce keeps every evaluator generation distinct while `builtProjects` still
+// shares repeated imports inside this process.
+const descriptorProcessCacheNonce = crypto.randomBytes(16).toString("hex");
 
 /** File URLs whose CommonJS source was reached from an ESM parent import. */
 const commonJsNamedInteropUrls = new Set<string>();
@@ -1842,21 +1848,7 @@ interface DependencyCachePaths {
 }
 
 function dependencyCachePaths(tsconfig: string): DependencyCachePaths {
-  const key = crypto
-    .createHash("sha256")
-    .update(tsconfig)
-    // Descriptor evaluation promises a result bound to this process's exact
-    // input observations. Reusing an emit another evaluator built can pair
-    // that process's old source/config bytes with this process's later hashes.
-    // Keep ordinary ttsx worker sharing, but isolate descriptor builds; the
-    // in-process `builtProjects` map still compiles each owning project once.
-    .update(
-      process.env.TTSC_PLUGIN_DESCRIPTOR_LOAD === "1"
-        ? `\0descriptor-process:${process.pid}`
-        : "",
-    )
-    .digest("hex")
-    .slice(0, 16);
+  const key = dependencyCacheKey(tsconfig);
   const root = dependencyCacheRoot();
   return {
     cacheDir: path.join(root, key),
@@ -1864,6 +1856,38 @@ function dependencyCachePaths(tsconfig: string): DependencyCachePaths {
     metaPath: path.join(root, `${key}.json`),
     root,
   };
+}
+
+/** Derive one dependency cache key; exported for isolation regressions. */
+export function dependencyCacheKey(
+  tsconfig: string,
+  options: {
+    descriptorLoad?: boolean;
+    descriptorNonce?: string;
+  } = {},
+): string {
+  const descriptorLoad =
+    options.descriptorLoad ?? process.env.TTSC_PLUGIN_DESCRIPTOR_LOAD === "1";
+  return (
+    crypto
+      .createHash("sha256")
+      .update(tsconfig)
+      // Descriptor evaluation promises a result bound to this process's exact
+      // input observations. Reusing an emit another evaluator built can pair
+      // that process's old source/config bytes with this process's later hashes.
+      // Keep ordinary ttsx worker sharing, but isolate descriptor builds with a
+      // non-reusable process nonce; the in-process `builtProjects` map still
+      // compiles each owning project once.
+      .update(
+        descriptorLoad
+          ? `\0descriptor-process:${
+              options.descriptorNonce ?? descriptorProcessCacheNonce
+            }`
+          : "",
+      )
+      .digest("hex")
+      .slice(0, 16)
+  );
 }
 
 /** The immutable emit directory of one build generation under `cacheDir`. */
