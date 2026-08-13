@@ -481,7 +481,7 @@ function discoveryConfigBaseDirs(
   return tsconfigDir === cwd ? [tsconfigDir] : [tsconfigDir, cwd];
 }
 
-/** Return the regular-file/symlink candidates native discovery recognizes. */
+/** Return the non-directory candidates native discovery recognizes. */
 function lintConfigMatchesIn(directory: string): string[] {
   const candidateSet = new Set<string>(LINT_CONFIG_FILENAMES);
   // One `readdirSync` per directory level beats 14 `existsSync`+`statSync`
@@ -492,14 +492,20 @@ function lintConfigMatchesIn(directory: string): string[] {
   } catch {
     return [];
   }
-  return entries
-    .filter(
-      (entry) =>
-        candidateSet.has(entry.name) &&
-        (entry.isFile() || entry.isSymbolicLink()),
-    )
-    .map((entry) => path.join(directory, entry.name))
-    .sort();
+  const matches: string[] = [];
+  for (const entry of entries) {
+    if (!candidateSet.has(entry.name)) continue;
+    const candidate = path.join(directory, entry.name);
+    try {
+      // Go's os.Stat follows symlinks and junctions. Follow them here too so a
+      // directory or dangling link cannot stop descriptor discovery before
+      // the native host reaches a valid ancestor config.
+      if (!fs.statSync(candidate).isDirectory()) matches.push(candidate);
+    } catch {
+      // Missing, dangling, and unreadable candidates are not native matches.
+    }
+  }
+  return matches.sort();
 }
 
 /**

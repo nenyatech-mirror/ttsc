@@ -9,8 +9,8 @@ import path from "node:path";
  * A monorepo package can inherit `lint.config.*` from an ancestor outside its
  * project walk. Creating a nearer config later must invalidate a persistent
  * bundler generation even though the previously selected ancestor file did not
- * change. A directory carrying a candidate filename is not a config and must
- * not stop the input walk before that selected ancestor.
+ * change. A directory or directory link carrying a candidate filename is not
+ * a config and must not stop the input walk before that selected ancestor.
  */
 export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
   () => {
@@ -18,6 +18,13 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
     const project = path.join(workspace, "packages", "app");
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(path.join(project, "lint.config.ts"));
+    const linkedDirectory = path.join(workspace, "linked-config-directory");
+    fs.mkdirSync(linkedDirectory);
+    fs.symlinkSync(
+      linkedDirectory,
+      path.join(project, "lint.config.mts"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const selected = path.join(workspace, "lint.config.json");
     fs.writeFileSync(selected, "{}\n", "utf8");
 
@@ -43,6 +50,9 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
     assert.ok(descriptor.hostInputs.includes(selected));
     assert.ok(
       descriptor.hostInputs.includes(path.join(project, "lint.config.ts")),
+    );
+    assert.ok(
+      descriptor.hostInputs.includes(path.join(project, "lint.config.mts")),
     );
     assert.ok(
       descriptor.hostInputs.includes(
