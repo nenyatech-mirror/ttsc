@@ -28,6 +28,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     const ambientSource = path.join(root, "ambient-plugin-go");
     const selectionBase = path.join(root, "selection");
     const selection = `${selectionBase}.js`;
+    const explicitSelection = path.join(root, "explicit.tsx");
     const descriptor = path.join(project, "plugin.mts");
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(source, { recursive: true });
@@ -90,10 +91,13 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       `export default ${JSON.stringify(source)};\n`,
       "utf8",
     );
+    fs.writeFileSync(explicitSelection, `export default true;\n`, "utf8");
     fs.writeFileSync(
       descriptor,
       [
         `import source from "../selection";`,
+        `import explicit from "../explicit.js";`,
+        `if (!explicit) throw new Error("explicit JavaScript substitution failed");`,
         `export default { name: "bun-esm", source: process.env.TTSC_BUN_DESCRIPTOR_SOURCE ?? source };`,
         "",
       ].join("\n"),
@@ -130,6 +134,12 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       loaded.hostInputs.includes(`${canonicalSelectionBase}.ts`),
       JSON.stringify(loaded.hostInputs),
     );
+    const missingExplicitTs = path.join(root, "explicit.ts");
+    assert.ok(
+      loaded.hostInputs.includes(missingExplicitTs),
+      JSON.stringify(loaded.hostInputs),
+    );
+    assert.equal(loaded.hostInputHashes[missingExplicitTs], null);
 
     const worker = path.join(root, "bun-parent-worker.cjs");
     fs.writeFileSync(
@@ -165,4 +175,5 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     const parentInputs = JSON.parse(fromBunParent.stdout) as string[];
     assert.ok(parentInputs.includes(canonicalSelection));
     assert.ok(parentInputs.includes(`${canonicalSelectionBase}.ts`));
+    assert.ok(parentInputs.includes(missingExplicitTs));
   };

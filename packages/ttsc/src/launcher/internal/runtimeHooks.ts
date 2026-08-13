@@ -471,6 +471,11 @@ function recordPluginDescriptorResolutionCandidates(
     if (bases.has(resolvedBase)) return;
     bases.add(resolvedBase);
     record(resolvedBase);
+    for (const candidate of typescriptSourcesForJavaScriptSpecifier(
+      resolvedBase,
+    )) {
+      record(candidate);
+    }
     for (const extension of DESCRIPTOR_PROBE_EXTENSIONS) {
       record(resolvedBase + extension);
     }
@@ -2765,6 +2770,15 @@ const JS_TO_TS_EXTENSIONS: ReadonlyMap<string, readonly string[]> = new Map([
   [".mjs", [".mts"]],
   [".cjs", [".cts"]],
 ]);
+
+/** Candidate sources that can satisfy one missing JavaScript spelling. */
+function typescriptSourcesForJavaScriptSpecifier(file: string): string[] {
+  const extension = path.extname(file).toLowerCase();
+  const substitutions = JS_TO_TS_EXTENSIONS.get(extension);
+  if (substitutions === undefined) return [];
+  const stem = file.slice(0, file.length - extension.length);
+  return substitutions.map((candidate) => stem + candidate);
+}
 
 /**
  * Rescue a `specifier` that Node's resolver rejected: map a JavaScript

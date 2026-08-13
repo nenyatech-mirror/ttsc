@@ -20,8 +20,9 @@ import {
  *
  * 1. Load a TypeScript descriptor that imports extensionless ESM source.
  * 2. Capture its descriptor inputs through the real isolated ttsx fallback.
- * 3. Assert the selected source, owning tsconfig, and missing `.mts` candidate
- *    carry evaluation-time fingerprints.
+ * 3. Assert the selected source, owning tsconfig, and missing candidates for
+ *    both extensionless and explicit-JavaScript substitutions carry
+ *    evaluation-time fingerprints.
  */
 export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
   async () => {
@@ -67,6 +68,12 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
     fs.writeFileSync(
       selection,
       `export const source = ${JSON.stringify(source)};\n`,
+      "utf8",
+    );
+    const explicitSelection = path.join(descriptor, "explicit.tsx");
+    fs.writeFileSync(
+      explicitSelection,
+      `export const explicit = "explicit";\n`,
       "utf8",
     );
     const nearModules = path.join(root, "near", "node_modules");
@@ -133,10 +140,11 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
       [
         `import { createRequire } from "node:module";`,
         `import { source } from "./selection";`,
+        `import { explicit } from "./explicit.js";`,
         `import { orphan } from ${JSON.stringify(pathToFileURL(orphanSource).href)};`,
         `import { seed, value } from ${JSON.stringify(pathToFileURL(refreshSeed).href)};`,
         `const require = createRequire(import.meta.url);`,
-        `if (require("descriptor-probe") !== "probe" || orphan !== "orphan") throw new Error("descriptor probe failed");`,
+        `if (require("descriptor-probe") !== "probe" || orphan !== "orphan" || explicit !== "explicit") throw new Error("descriptor probe failed");`,
         `if (seed !== "seed" || value !== "configured") throw new Error("descriptor config refresh failed");`,
         `export default () => ({ name: "ttsx-inputs", source });`,
         "",
@@ -186,6 +194,9 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
     const missingMts = `${canonicalSelection.slice(0, -path.extname(canonicalSelection).length)}.mts`;
     assert.ok(inputs.includes(missingMts), JSON.stringify(inputs));
     assert.equal(loaded.hostInputHashes[missingMts], null);
+    const missingExplicitTs = path.join(descriptor, "explicit.ts");
+    assert.ok(inputs.includes(missingExplicitTs), JSON.stringify(inputs));
+    assert.equal(loaded.hostInputHashes[missingExplicitTs], null);
     const missingPackageEntry = inputs.find(
       (input) =>
         path.basename(input) === "entry.js" &&
