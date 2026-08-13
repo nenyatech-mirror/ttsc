@@ -3156,13 +3156,18 @@ function prunePluginCacheRoot(root: string): void {
 /** Pin the default plugin cache to one ordinary physical directory. */
 function canonicalPluginCacheRoot(root: string): string {
   fs.mkdirSync(root, { recursive: true });
+  const physicalParent = fs.realpathSync.native(path.dirname(root));
   const stats = fs.lstatSync(root);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new Error(`ttsc: unsafe plugin cache root: ${root}`);
   }
   // If an ancestor alias is retargeted after this point, all later cache work
   // stays on the original physical directory rather than following it.
-  return fs.realpathSync.native(root);
+  const physicalRoot = fs.realpathSync.native(root);
+  if (path.dirname(physicalRoot) !== physicalParent) {
+    throw new Error(`ttsc: plugin cache root escaped its parent: ${root}`);
+  }
+  return physicalRoot;
 }
 
 /** Create one content-addressed cache entry without following a leaf alias. */
@@ -3351,11 +3356,16 @@ export function withGoBuildCacheLease<T>(
  */
 function canonicalGoBuildCacheRoot(root: string): string {
   fs.mkdirSync(root, { recursive: true });
+  const physicalParent = fs.realpathSync.native(path.dirname(root));
   const stats = fs.lstatSync(root);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new Error(`ttsc: unsafe Go build cache root: ${root}`);
   }
-  return fs.realpathSync.native(root);
+  const physicalRoot = fs.realpathSync.native(root);
+  if (path.dirname(physicalRoot) !== physicalParent) {
+    throw new Error(`ttsc: Go build cache root escaped its parent: ${root}`);
+  }
+  return physicalRoot;
 }
 
 interface GoBuildCacheObject {
