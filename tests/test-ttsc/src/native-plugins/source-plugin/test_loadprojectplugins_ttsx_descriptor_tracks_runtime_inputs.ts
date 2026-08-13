@@ -140,7 +140,7 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
       [
         `import { createRequire } from "node:module";`,
         `import { source } from "./selection";`,
-        `import { explicit } from "./explicit.js";`,
+        `import { explicit } from "./explicit.js?descriptor-input";`,
         `import { orphan } from ${JSON.stringify(pathToFileURL(orphanSource).href)};`,
         `import { seed, value } from ${JSON.stringify(pathToFileURL(refreshSeed).href)};`,
         `const require = createRequire(import.meta.url);`,
