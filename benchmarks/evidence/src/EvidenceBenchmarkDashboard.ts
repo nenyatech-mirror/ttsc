@@ -894,7 +894,23 @@ const stageMeasurements = (
   );
   const activeElapsed: number = Math.max(0, totalElapsed - retainedElapsed);
   const inspections: Map<number, IStageMeasurement> = inspectionByGoal(state);
-  return state.goals.map((instruction) => {
+  // A cell with an instruction in flight gives that instruction the residual,
+  // and a cell that has none would otherwise drop it. The residual is real
+  // process time: the driver's Goal clock counts a turn, while writing the
+  // retained state, hashing the workspace, and composing the next objective
+  // happen between turns with the process alive, so it accrues once per turn
+  // and grows with a cell's length rather than with its process count. It
+  // belongs to the objectives that were running, in proportion to the time
+  // each of them held the process, which is what the turns it paid for track.
+  const retainedShare: readonly number[] = state.goals.map((instruction) =>
+    correctedInstructionElapsed(state, instruction, suspensions),
+  );
+  const shareTotal: number = retainedShare.reduce((sum, own) => sum + own, 0);
+  const apportion = (index: number): number =>
+    current !== undefined || shareTotal === 0
+      ? 0
+      : (activeElapsed * (retainedShare[index] ?? 0)) / shareTotal;
+  return state.goals.map((instruction, index) => {
     const inspected: IStageMeasurement | undefined = inspections.get(
       instruction.index,
     );
@@ -907,6 +923,7 @@ const stageMeasurements = (
       elapsedMs:
         correctedInstructionElapsed(state, instruction, suspensions) +
         (instruction === current ? activeElapsed : 0) +
+        apportion(index) +
         (inspected?.elapsedMs ?? 0),
     };
   });

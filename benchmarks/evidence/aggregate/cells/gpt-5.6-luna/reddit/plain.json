@@ -282,140 +282,140 @@
     {
       "name": "backend-start",
       "tokens": 37147695,
-      "elapsedMs": 4071000,
+      "elapsedMs": 4118331.6701621157,
       "tokenPercent": 3,
       "timePercent": 5
     },
     {
       "name": "backend-review",
       "tokens": 82976296,
-      "elapsedMs": 5591546.8352,
+      "elapsedMs": 5652609.45659313,
       "tokenPercent": 7,
       "timePercent": 7
     },
     {
       "name": "backend-remind-1",
       "tokens": 49109000,
-      "elapsedMs": 3303948.1599,
+      "elapsedMs": 3339083.5829483694,
       "tokenPercent": 4,
       "timePercent": 4
     },
     {
       "name": "backend-remind-2",
       "tokens": 208492738,
-      "elapsedMs": 15767011.343,
+      "elapsedMs": 15944013.884524945,
       "tokenPercent": 18,
       "timePercent": 19
     },
     {
       "name": "backend-remind-3",
       "tokens": 47983418,
-      "elapsedMs": 3154986.9778,
+      "elapsedMs": 3186715.8227698877,
       "tokenPercent": 4,
       "timePercent": 4
     },
     {
       "name": "backend-remind-4",
       "tokens": 40624253,
-      "elapsedMs": 2280583.9877,
+      "elapsedMs": 2302883.703585762,
       "tokenPercent": 3,
       "timePercent": 3
     },
     {
       "name": "backend-final",
       "tokens": 10537311,
-      "elapsedMs": 786000,
+      "elapsedMs": 795138.4654255522,
       "tokenPercent": 1,
       "timePercent": 1
     },
     {
       "name": "frontend-start",
       "tokens": 26280767,
-      "elapsedMs": 3177000,
+      "elapsedMs": 3213937.537731526,
       "tokenPercent": 2,
       "timePercent": 4
     },
     {
       "name": "frontend-review",
       "tokens": 70195703,
-      "elapsedMs": 5698772.6620000005,
+      "elapsedMs": 5759893.416124845,
       "tokenPercent": 6,
       "timePercent": 7
     },
     {
       "name": "frontend-remind-1",
       "tokens": 65972171,
-      "elapsedMs": 4324102.8373,
+      "elapsedMs": 4369120.824739871,
       "tokenPercent": 6,
       "timePercent": 5
     },
     {
       "name": "frontend-remind-2",
       "tokens": 56761212,
-      "elapsedMs": 2632540.2255,
+      "elapsedMs": 2659688.211210769,
       "tokenPercent": 5,
       "timePercent": 3
     },
     {
       "name": "frontend-remind-3",
       "tokens": 43682044,
-      "elapsedMs": 2897517.9836999997,
+      "elapsedMs": 2923084.759108129,
       "tokenPercent": 4,
       "timePercent": 4
     },
     {
       "name": "frontend-remind-4",
       "tokens": 41054672,
-      "elapsedMs": 2432789.0904,
+      "elapsedMs": 2456042.1830858835,
       "tokenPercent": 3,
       "timePercent": 3
     },
     {
       "name": "frontend-final",
       "tokens": 1663517,
-      "elapsedMs": 231000,
+      "elapsedMs": 233685.73220521954,
       "tokenPercent": 0,
       "timePercent": 0
     },
     {
       "name": "overall-review",
       "tokens": 53586601,
-      "elapsedMs": 2810671.055,
+      "elapsedMs": 2839039.828076778,
       "tokenPercent": 5,
       "timePercent": 3
     },
     {
       "name": "overall-remind-1",
       "tokens": 98007034,
-      "elapsedMs": 6855693.586,
+      "elapsedMs": 6928557.151931216,
       "tokenPercent": 8,
       "timePercent": 8
     },
     {
       "name": "overall-remind-2",
       "tokens": 60876838,
-      "elapsedMs": 3958470.2195,
+      "elapsedMs": 3999104.998968581,
       "tokenPercent": 5,
       "timePercent": 5
     },
     {
       "name": "overall-remind-3",
       "tokens": 68323444,
-      "elapsedMs": 4992111.3856,
+      "elapsedMs": 5042454.331264937,
       "tokenPercent": 6,
       "timePercent": 6
     },
     {
       "name": "overall-remind-4",
       "tokens": 73372054,
-      "elapsedMs": 4506711.9823,
+      "elapsedMs": 4555078.415086637,
       "tokenPercent": 6,
       "timePercent": 6
     },
     {
       "name": "overall-final",
       "tokens": 42175361,
-      "elapsedMs": 1475000,
+      "elapsedMs": 1492149.155855839,
       "tokenPercent": 4,
       "timePercent": 2
     }

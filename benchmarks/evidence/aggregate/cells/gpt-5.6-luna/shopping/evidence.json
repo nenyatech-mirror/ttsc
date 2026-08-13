@@ -56,49 +56,49 @@
     {
       "name": "backend-start",
       "tokens": 105617004,
-      "elapsedMs": 10082000,
+      "elapsedMs": 10164212.193342842,
       "tokenPercent": 39,
       "timePercent": 38
     },
     {
       "name": "backend-review",
       "tokens": 78806134,
-      "elapsedMs": 8685000,
+      "elapsedMs": 8755820.561315471,
       "tokenPercent": 29,
-      "timePercent": 32
+      "timePercent": 33
     },
     {
       "name": "backend-final",
       "tokens": 782876,
-      "elapsedMs": 82000,
+      "elapsedMs": 82668.65699802748,
       "tokenPercent": 0,
       "timePercent": 0
     },
     {
       "name": "frontend-start",
       "tokens": 52825873,
-      "elapsedMs": 5235000,
+      "elapsedMs": 5277688.041276511,
       "tokenPercent": 20,
       "timePercent": 20
     },
     {
       "name": "frontend-review",
       "tokens": 19862471,
-      "elapsedMs": 1662000,
+      "elapsedMs": 1675552.5357405082,
       "tokenPercent": 7,
       "timePercent": 6
     },
     {
       "name": "frontend-final",
       "tokens": 6385192,
-      "elapsedMs": 449000,
+      "elapsedMs": 452661.3047818822,
       "tokenPercent": 2,
       "timePercent": 2
     },
     {
       "name": "overall-final",
       "tokens": 6301255,
-      "elapsedMs": 370000,
+      "elapsedMs": 373017.11084475816,
       "tokenPercent": 2,
       "timePercent": 1
     }

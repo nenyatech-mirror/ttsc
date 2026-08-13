@@ -9,14 +9,14 @@
   "status": "running",
   "stage": "overall-remind-1",
   "launchedAt": "2026-08-09T18:17:34.421Z",
-  "tokens": 4213428011,
+  "tokens": 4421326468,
   "tokenUsage": {
-    "totalTokens": 4213428011,
-    "inputTokens": 4206977767,
-    "cachedInputTokens": 4119717888,
+    "totalTokens": 4421326468,
+    "inputTokens": 4414559396,
+    "cachedInputTokens": 4321676800,
     "cacheWriteInputTokens": 0,
-    "outputTokens": 6450244,
-    "reasoningOutputTokens": 1449167
+    "outputTokens": 6767072,
+    "reasoningOutputTokens": 1519867
   },
   "inspection": {
     "attempts": 11,
@@ -36,19 +36,19 @@
     "pricingAsOf": "2026-08-01",
     "priceSource": "https://openrouter.ai/api/v1/models",
     "currency": "USD",
-    "amountUsd": 53.09396068,
-    "requests": 31271,
-    "shortContextRequests": 31270,
+    "amountUsd": 55.8659183,
+    "requests": 32878,
+    "shortContextRequests": 32877,
     "longContextRequests": 1,
     "longContextThresholdTokens": 272000,
     "replayedUpdates": 0
   },
   "suspendedMs": 0,
   "suspensions": [],
-  "workElapsedMs": 292439234.52690005,
+  "workElapsedMs": 306547646.15860003,
   "worktree": {
     "files": 452,
-    "additions": 87338,
+    "additions": 87395,
     "deletions": 136
   },
   "reviewVerdicts": [
@@ -223,8 +223,8 @@
       "name": "backend-start",
       "tokens": 544228917,
       "elapsedMs": 55121000,
-      "tokenPercent": 13,
-      "timePercent": 19
+      "tokenPercent": 12,
+      "timePercent": 18
     },
     {
       "name": "backend-review",
@@ -280,7 +280,7 @@
       "tokens": 61761807,
       "elapsedMs": 4477304.8948,
       "tokenPercent": 1,
-      "timePercent": 2
+      "timePercent": 1
     },
     {
       "name": "frontend-remind-1",
@@ -326,10 +326,10 @@
     },
     {
       "name": "overall-remind-1",
-      "tokens": 2482701704,
-      "elapsedMs": 147965745.86160004,
-      "tokenPercent": 59,
-      "timePercent": 51
+      "tokens": 2690600161,
+      "elapsedMs": 162074157.49330002,
+      "tokenPercent": 61,
+      "timePercent": 53
     }
   ]
 }
