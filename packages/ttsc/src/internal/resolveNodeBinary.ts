@@ -13,10 +13,7 @@ type RuntimeCapabilityCacheEntry = {
   identity: string;
 };
 
-const runtimeCapabilityCache = new Map<
-  string,
-  RuntimeCapabilityCacheEntry
->();
+const runtimeCapabilityCache = new Map<string, RuntimeCapabilityCacheEntry>();
 
 /** Probe an interpreter instead of inferring its identity from the host. */
 export function javascriptRuntimeCapabilities(
@@ -67,18 +64,20 @@ export function javascriptRuntimeCapabilities(
       // An incompatible executable is not a Node runtime candidate.
     }
   }
-  // Cache successful absolute candidates only while both their lexical link
-  // and physical target retain the same filesystem identity. Relative/bare
-  // commands can resolve differently by cwd/PATH, negative probes can become
-  // valid later, and NODE_OPTIONS can load mutable user code, so none of those
-  // states are memoized. This removes a process spawn from the common path
-  // without authorizing a replaced Node/Bun executable in a long-lived host.
+  // Cache successful absolute candidates only when the child reports that same
+  // executable and both its lexical link and physical target retain the same
+  // filesystem identity. Relative/bare commands and wrappers can resolve
+  // differently by cwd/PATH/environment, negative probes can become valid later,
+  // and NODE_OPTIONS can load mutable user code, so none of those states are
+  // memoized. This removes a process spawn from the common path without
+  // authorizing a replaced or redirected runtime in a long-lived host.
   const afterIdentity = runtimeExecutableIdentity(runtime);
   if (
     cacheKey !== undefined &&
     capabilities.executable !== undefined &&
     beforeIdentity !== undefined &&
-    beforeIdentity === afterIdentity
+    beforeIdentity === afterIdentity &&
+    sameRuntimeExecutable(runtime, capabilities.executable)
   ) {
     runtimeCapabilityCache.set(cacheKey, {
       capabilities: { ...capabilities },
@@ -86,6 +85,22 @@ export function javascriptRuntimeCapabilities(
     });
   }
   return capabilities;
+}
+
+/** True when a probe ran the candidate itself rather than a mutable wrapper. */
+function sameRuntimeExecutable(candidate: string, executable: string): boolean {
+  try {
+    const candidateStats = fs.statSync(candidate, { bigint: true });
+    const executableStats = fs.statSync(executable, { bigint: true });
+    return (
+      (candidateStats.ino !== 0n &&
+        candidateStats.dev === executableStats.dev &&
+        candidateStats.ino === executableStats.ino) ||
+      fs.realpathSync.native(candidate) === fs.realpathSync.native(executable)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Stable cache key only for an absolute runtime with no preload authority. */

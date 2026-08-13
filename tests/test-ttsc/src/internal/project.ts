@@ -14,7 +14,10 @@ import {
   resolveProjectConfig,
   resolveProjectIdentity,
 } from "../../../../packages/ttsc/lib/compiler/internal/project/resolveProjectConfig.js";
-import { resolveNodeBinary } from "../../../../packages/ttsc/lib/internal/resolveNodeBinary.js";
+import {
+  javascriptRuntimeCapabilities,
+  resolveNodeBinary,
+} from "../../../../packages/ttsc/lib/internal/resolveNodeBinary.js";
 import {
   COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
   loadProjectPlugins,
@@ -24,6 +27,7 @@ export {
   assert,
   COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
   fs,
+  javascriptRuntimeCapabilities,
   loadProjectPlugins,
   os,
   path,
