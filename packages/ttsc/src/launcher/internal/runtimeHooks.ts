@@ -424,23 +424,31 @@ function recordPluginDescriptorResolutionCandidates(
       hash: pluginDescriptorInputHash(resolved),
       parent,
       resolved,
-      specifier,
     });
   };
-  const recordManifestTargets = (value: unknown, directory: string): void => {
+  const recordManifestTargets = (
+    value: unknown,
+    directory: string,
+    allowBare: boolean = false,
+  ): void => {
     if (typeof value === "string") {
-      if (value.startsWith("./") || value.startsWith("../")) {
+      if (
+        value !== "" &&
+        (allowBare || value.startsWith("./") || value.startsWith("../"))
+      ) {
         recordBase(path.resolve(directory, value));
       }
       return;
     }
     if (Array.isArray(value)) {
-      for (const item of value) recordManifestTargets(item, directory);
+      for (const item of value) {
+        recordManifestTargets(item, directory, allowBare);
+      }
       return;
     }
     if (value !== null && typeof value === "object") {
       for (const item of Object.values(value)) {
-        recordManifestTargets(item, directory);
+        recordManifestTargets(item, directory, allowBare);
       }
     }
   };
@@ -476,8 +484,8 @@ function recordPluginDescriptorResolutionCandidates(
         fs.readFileSync(manifestFile, "utf8").replace(/^\uFEFF/, ""),
       ) as Record<string, unknown>;
       recordManifestTargets(manifest.exports, resolvedBase);
-      recordManifestTargets(manifest.module, resolvedBase);
-      recordManifestTargets(manifest.main, resolvedBase);
+      recordManifestTargets(manifest.module, resolvedBase, true);
+      recordManifestTargets(manifest.main, resolvedBase, true);
     } catch {
       // The real resolver owns malformed package diagnostics.
     }

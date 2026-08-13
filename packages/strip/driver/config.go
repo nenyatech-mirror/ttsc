@@ -299,17 +299,17 @@ function moduleCandidates(base) {
   ];
 }
 const recordedModuleBases = new Set();
-function recordManifestTargets(value, directory) {
+function recordManifestTargets(value, directory, allowBare = false) {
   if (typeof value === "string") {
-    if (value.startsWith("./") || value.startsWith("../")) recordModuleCandidates(path.resolve(directory, value));
+    if (value !== "" && (allowBare || value.startsWith("./") || value.startsWith("../"))) recordModuleCandidates(path.resolve(directory, value));
     return;
   }
   if (Array.isArray(value)) {
-    for (const item of value) recordManifestTargets(item, directory);
+    for (const item of value) recordManifestTargets(item, directory, allowBare);
     return;
   }
   if (value && typeof value === "object") {
-    for (const item of Object.values(value)) recordManifestTargets(item, directory);
+    for (const item of Object.values(value)) recordManifestTargets(item, directory, allowBare);
   }
 }
 function recordModuleCandidates(base) {
@@ -320,8 +320,8 @@ function recordModuleCandidates(base) {
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
     recordManifestTargets(manifest.exports, resolvedBase);
-    recordManifestTargets(manifest.module, resolvedBase);
-    recordManifestTargets(manifest.main, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase, true);
+    recordManifestTargets(manifest.main, resolvedBase, true);
   } catch {}
 }
 function candidateSelected(base, resolvedFile) {
@@ -553,17 +553,17 @@ function moduleCandidates(base: string): string[] {
   ];
 }
 const recordedModuleBases = new Set<string>();
-function recordManifestTargets(value: unknown, directory: string): void {
+function recordManifestTargets(value: unknown, directory: string, allowBare: boolean = false): void {
   if (typeof value === "string") {
-    if (value.startsWith("./") || value.startsWith("../")) recordModuleCandidates(path.resolve(directory, value));
+    if (value !== "" && (allowBare || value.startsWith("./") || value.startsWith("../"))) recordModuleCandidates(path.resolve(directory, value));
     return;
   }
   if (Array.isArray(value)) {
-    for (const item of value) recordManifestTargets(item, directory);
+    for (const item of value) recordManifestTargets(item, directory, allowBare);
     return;
   }
   if (value !== null && typeof value === "object") {
-    for (const item of Object.values(value)) recordManifestTargets(item, directory);
+    for (const item of Object.values(value)) recordManifestTargets(item, directory, allowBare);
   }
 }
 function recordModuleCandidates(base: string): void {
@@ -574,8 +574,8 @@ function recordModuleCandidates(base: string): void {
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
     recordManifestTargets(manifest.exports, resolvedBase);
-    recordManifestTargets(manifest.module, resolvedBase);
-    recordManifestTargets(manifest.main, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase, true);
+    recordManifestTargets(manifest.main, resolvedBase, true);
   } catch {}
 }
 function candidateSelected(base: string, resolvedFile: string): boolean {

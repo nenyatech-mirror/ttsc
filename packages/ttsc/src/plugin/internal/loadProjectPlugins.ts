@@ -582,20 +582,29 @@ function collectModuleResolutionCandidates(
       path.join(base, `index${extension}`),
     ),
   ];
-  const recordManifestTargets = (value: unknown, directory: string): void => {
+  const recordManifestTargets = (
+    value: unknown,
+    directory: string,
+    allowBare: boolean = false,
+  ): void => {
     if (typeof value === "string") {
-      if (value.startsWith("./") || value.startsWith("../")) {
+      if (
+        value !== "" &&
+        (allowBare || value.startsWith("./") || value.startsWith("../"))
+      ) {
         recordBase(path.resolve(directory, value));
       }
       return;
     }
     if (Array.isArray(value)) {
-      for (const item of value) recordManifestTargets(item, directory);
+      for (const item of value) {
+        recordManifestTargets(item, directory, allowBare);
+      }
       return;
     }
     if (isRecord(value)) {
       for (const item of Object.values(value)) {
-        recordManifestTargets(item, directory);
+        recordManifestTargets(item, directory, allowBare);
       }
     }
   };
@@ -610,8 +619,8 @@ function collectModuleResolutionCandidates(
       const manifest = readJsonFile(path.join(resolvedBase, "package.json"));
       if (isRecord(manifest)) {
         recordManifestTargets(manifest.exports, resolvedBase);
-        recordManifestTargets(manifest.module, resolvedBase);
-        recordManifestTargets(manifest.main, resolvedBase);
+        recordManifestTargets(manifest.module, resolvedBase, true);
+        recordManifestTargets(manifest.main, resolvedBase, true);
       }
     } catch {
       // A malformed selected manifest is reported by normal resolution/load.
@@ -1534,13 +1543,13 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    return [base, ...moduleProbeExtensions.map((extension) => base + extension), path.join(base, "package.json"), ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension))];`,
   `  }`,
   `  const recordedModuleBases = new Set();`,
-  `  function recordManifestTargets(value, directory) {`,
+  `  function recordManifestTargets(value, directory, allowBare = false) {`,
   `    if (typeof value === "string") {`,
-  `      if (value.startsWith("./") || value.startsWith("../")) recordModuleCandidates(path.resolve(directory, value));`,
+  `      if (value !== "" && (allowBare || value.startsWith("./") || value.startsWith("../"))) recordModuleCandidates(path.resolve(directory, value));`,
   `      return;`,
   `    }`,
-  `    if (Array.isArray(value)) { for (const item of value) recordManifestTargets(item, directory); return; }`,
-  `    if (value && typeof value === "object") for (const item of Object.values(value)) recordManifestTargets(item, directory);`,
+  `    if (Array.isArray(value)) { for (const item of value) recordManifestTargets(item, directory, allowBare); return; }`,
+  `    if (value && typeof value === "object") for (const item of Object.values(value)) recordManifestTargets(item, directory, allowBare);`,
   `  }`,
   `  function recordModuleCandidates(base) {`,
   `    const resolvedBase = path.resolve(base);`,
@@ -1550,8 +1559,8 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    try {`,
   `      const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));`,
   `      recordManifestTargets(manifest.exports, resolvedBase);`,
-  `      recordManifestTargets(manifest.module, resolvedBase);`,
-  `      recordManifestTargets(manifest.main, resolvedBase);`,
+  `      recordManifestTargets(manifest.module, resolvedBase, true);`,
+  `      recordManifestTargets(manifest.main, resolvedBase, true);`,
   `    } catch {}`,
   `  }`,
   `  function candidateSelected(base, selected) {`,

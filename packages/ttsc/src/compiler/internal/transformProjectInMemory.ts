@@ -131,11 +131,19 @@ function transformProjectWithNativeHost(
     outputText(res.stdout),
     outputText(res.stderr),
   );
+  const finalObservedHostInputHashes = revalidateHostInputHashes(
+    observedHostInputHashes,
+    observedHostInputs,
+  );
+  const finalOutputHostInputHashes = revalidateHostInputHashes(
+    output.hostInputHashes ?? {},
+    output.hostInputs ?? [],
+  );
   return {
     ...envelopeSideChannels(output),
     hostInputHashes: mergeCompatibleHostInputHashes(
-      observedHostInputHashes,
-      output.hostInputHashes,
+      finalObservedHostInputHashes,
+      finalOutputHostInputHashes,
       observedHostInputs,
       output.hostInputs,
     ),
@@ -183,7 +191,10 @@ function transformProjectWithPlugins(
   );
   if (checked.status !== 0) {
     return {
-      hostInputHashes: loaded.hostInputHashes,
+      hostInputHashes: revalidateHostInputHashes(
+        loaded.hostInputHashes,
+        loaded.hostInputs,
+      ),
       hostInputs: loaded.hostInputs,
       result: checked,
       typescript: {},
@@ -191,10 +202,14 @@ function transformProjectWithPlugins(
   }
   if (transformers.length === 0) {
     const transformed = transformProjectWithNativeHost(options, project);
+    const finalLoadedHostInputHashes = revalidateHostInputHashes(
+      loaded.hostInputHashes,
+      loaded.hostInputs,
+    );
     return {
       ...envelopeSideChannels(transformed),
       hostInputHashes: mergeCompatibleHostInputHashes(
-        loaded.hostInputHashes,
+        finalLoadedHostInputHashes,
         transformed.hostInputHashes,
         loaded.hostInputs,
         transformed.hostInputs,
@@ -234,11 +249,19 @@ function transformProjectWithPlugins(
     stdout: "",
     stderr: outputText(res.stderr),
   };
+  const finalLoadedHostInputHashes = revalidateHostInputHashes(
+    loaded.hostInputHashes,
+    loaded.hostInputs,
+  );
+  const finalOutputHostInputHashes = revalidateHostInputHashes(
+    output.hostInputHashes ?? {},
+    output.hostInputs ?? [],
+  );
   return {
     ...envelopeSideChannels(output),
     hostInputHashes: mergeCompatibleHostInputHashes(
-      loaded.hostInputHashes,
-      output.hostInputHashes,
+      finalLoadedHostInputHashes,
+      finalOutputHostInputHashes,
       loaded.hostInputs,
       output.hostInputs,
     ),
@@ -246,6 +269,23 @@ function transformProjectWithPlugins(
     result: appendBuildOutput(checked, result),
     typescript: output.typescript,
   };
+}
+
+/** Keep evaluation proof only when the same input still has the same state. */
+function revalidateHostInputHashes(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = hashHostInputPaths(inputs);
+  return Object.fromEntries(
+    inputs.flatMap((input) => {
+      const absolute = path.resolve(input);
+      return Object.prototype.hasOwnProperty.call(initial, absolute) &&
+        initial[absolute] === current[absolute]
+        ? ([[absolute, current[absolute]!]] as const)
+        : [];
+    }),
+  );
 }
 
 /**
