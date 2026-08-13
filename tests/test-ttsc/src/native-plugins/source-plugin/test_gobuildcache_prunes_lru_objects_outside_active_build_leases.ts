@@ -136,40 +136,11 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
     assert.equal(fs.existsSync(staleIntent), false);
 
     const completedCache = path.join(root, "completed-maintenance");
-    const originalRm = fs.rmSync;
-    (fs as { rmSync: typeof fs.rmSync }).rmSync = function (
-      this: unknown,
-      ...args: Parameters<typeof fs.rmSync>
-    ) {
-      const target = String(args[0]);
-      if (
-        path.basename(path.dirname(target)) === ".ttsc-maintenance" &&
-        target.endsWith(".json")
-      ) {
-        const error = new Error("synthetic maintenance unlink failure");
-        (error as NodeJS.ErrnoException).code = "EPERM";
-        throw error;
-      }
-      return originalRm.apply(this, args as never);
-    } as typeof fs.rmSync;
-    try {
-      pruneGoBuildCacheRoot(completedCache, {
-        force: true,
-        maxBytes: 0,
-        now,
-        protectedAgeMs: 0,
-        targetBytes: 0,
-      });
-    } finally {
-      (fs as { rmSync: typeof fs.rmSync }).rmSync = originalRm;
-    }
-    const completedIntent = fs
-      .readdirSync(path.join(completedCache, ".ttsc-maintenance"))
-      .map((entry) =>
-        path.join(completedCache, ".ttsc-maintenance", entry),
-      )[0]!;
-    assert.equal(
-      JSON.parse(fs.readFileSync(completedIntent, "utf8")).status,
+    const completedIntent = writeCoordinationRecord(
+      completedCache,
+      ".ttsc-maintenance",
+      process.pid,
+      now,
       "complete",
     );
     let completedIntentYielded = false;
@@ -395,13 +366,21 @@ function writeCoordinationRecord(
   directoryName: string,
   pid: number,
   mtimeMs: number,
+  status: "active" | "complete" = "active",
 ): string {
   const directory = path.join(root, directoryName);
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, `synthetic-${pid}.json`);
   fs.writeFileSync(
     file,
-    `${JSON.stringify({ hostname: "localhost", pid, startedAt: mtimeMs })}\n`,
+    `${JSON.stringify({
+      directoryName,
+      hostname: "localhost",
+      pid,
+      startedAt: mtimeMs,
+      status,
+      version: 1,
+    })}\n`,
     "utf8",
   );
   const modified = new Date(mtimeMs);
