@@ -1,4 +1,5 @@
 import childProcess from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 export type JavaScriptRuntimeCapabilities = {
@@ -7,6 +8,16 @@ export type JavaScriptRuntimeCapabilities = {
   registerHooks: boolean;
 };
 
+type RuntimeCapabilityCacheEntry = {
+  capabilities: JavaScriptRuntimeCapabilities;
+  identity: string;
+};
+
+const runtimeCapabilityCache = new Map<
+  string,
+  RuntimeCapabilityCacheEntry
+>();
+
 /** Probe an interpreter instead of inferring its identity from the host. */
 export function javascriptRuntimeCapabilities(
   runtime: string,
@@ -14,6 +25,13 @@ export function javascriptRuntimeCapabilities(
   cwd: string,
 ): JavaScriptRuntimeCapabilities {
   const effectiveEnv = { ...process.env, ...env };
+  const cacheKey = runtimeCapabilityCacheKey(runtime, effectiveEnv);
+  const beforeIdentity = runtimeExecutableIdentity(runtime);
+  if (cacheKey !== undefined && beforeIdentity !== undefined) {
+    const cached = runtimeCapabilityCache.get(cacheKey);
+    if (cached?.identity === beforeIdentity) return { ...cached.capabilities };
+    runtimeCapabilityCache.delete(cacheKey);
+  }
   const result = childProcess.spawnSync(
     runtime,
     [
@@ -49,11 +67,61 @@ export function javascriptRuntimeCapabilities(
       // An incompatible executable is not a Node runtime candidate.
     }
   }
-  // Do not cache this result. A relative candidate can appear after a failed
-  // probe, and an existing executable can be replaced between long-lived API
-  // or LSP requests. The child-reported absolute identity is authoritative for
-  // this invocation only.
+  // Cache successful absolute candidates only while both their lexical link
+  // and physical target retain the same filesystem identity. Relative/bare
+  // commands can resolve differently by cwd/PATH, negative probes can become
+  // valid later, and NODE_OPTIONS can load mutable user code, so none of those
+  // states are memoized. This removes a process spawn from the common path
+  // without authorizing a replaced Node/Bun executable in a long-lived host.
+  const afterIdentity = runtimeExecutableIdentity(runtime);
+  if (
+    cacheKey !== undefined &&
+    capabilities.executable !== undefined &&
+    beforeIdentity !== undefined &&
+    beforeIdentity === afterIdentity
+  ) {
+    runtimeCapabilityCache.set(cacheKey, {
+      capabilities: { ...capabilities },
+      identity: afterIdentity,
+    });
+  }
   return capabilities;
+}
+
+/** Stable cache key only for an absolute runtime with no preload authority. */
+function runtimeCapabilityCacheKey(
+  runtime: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  if (!path.isAbsolute(runtime) || env.NODE_OPTIONS?.trim()) return undefined;
+  return path.resolve(runtime);
+}
+
+/** Identity of an executable spelling and the physical file it selects. */
+function runtimeExecutableIdentity(runtime: string): string | undefined {
+  if (!path.isAbsolute(runtime)) return undefined;
+  try {
+    const lexical = fs.lstatSync(runtime, { bigint: true });
+    const physicalPath = fs.realpathSync.native(runtime);
+    const physical = fs.statSync(physicalPath, { bigint: true });
+    return [
+      physicalPath,
+      lexical.dev,
+      lexical.ino,
+      lexical.mode,
+      lexical.size,
+      lexical.mtimeNs,
+      lexical.ctimeNs,
+      physical.dev,
+      physical.ino,
+      physical.mode,
+      physical.size,
+      physical.mtimeNs,
+      physical.ctimeNs,
+    ].join("\0");
+  } catch {
+    return undefined;
+  }
 }
 
 /**

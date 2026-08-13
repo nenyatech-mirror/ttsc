@@ -5,9 +5,9 @@ import { assert, fs, path, resolveNodeBinary } from "../../internal/project";
 /**
  * Verifies relative runtime capability probes use current executable state.
  *
- * Two embedders can use the same `./node` spelling from different roots. A
- * successful probe in one root must not authorize a missing or incompatible
- * executable in another root.
+ * Two embedders can use the same `./node` spelling from different roots, and a
+ * long-lived host can see an absolute candidate replaced after a successful
+ * probe. Cached capability must never authorize either different executable.
  */
 export const test_resolvenodebinary_scopes_relative_capability_cache_to_cwd =
   (): void => {
@@ -30,6 +30,13 @@ export const test_resolvenodebinary_scopes_relative_capability_cache_to_cwd =
 
     assertSameAbsoluteFile(resolveNodeBinary(env, first), candidate);
     assert.equal(resolveNodeBinary(env, second), process.execPath);
+
+    const absoluteEnv = { ...process.env, TTSC_NODE_BINARY: candidate };
+    assertSameAbsoluteFile(resolveNodeBinary(absoluteEnv, first), candidate);
+    fs.rmSync(candidate);
+    fs.writeFileSync(candidate, "not a JavaScript runtime\n", "utf8");
+    if (process.platform !== "win32") fs.chmodSync(candidate, 0o755);
+    assertSameAbsoluteFile(resolveNodeBinary(absoluteEnv, first), process.execPath);
 
     const late = path.join(
       second,
