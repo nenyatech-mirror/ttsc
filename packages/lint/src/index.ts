@@ -1024,18 +1024,19 @@ function directoryDigestRecord(
 
 function optionalFileDigest(location: string): string {
   try {
-    if (fs.statSync(location).isFile()) {
+    const entry = fs.statSync(location);
+    if (entry.isFile()) {
       return createHash("sha256")
         .update(Buffer.concat([Buffer.from("file\\0"), fs.readFileSync(location)]))
         .digest("hex");
     }
-    if (fs.statSync(location).isDirectory()) {
+    if (entry.isDirectory()) {
       return createHash("sha256")
         .update("ttsc:host-input:directory\0")
         .digest("hex");
     }
   } catch {
-    // Missing, unreadable, and non-file candidates share the absent state.
+    // Missing and unreadable candidates share the absent state.
   }
   return createHash("sha256").update("missing\\0").digest("hex");
 }
@@ -2358,7 +2359,13 @@ function normalizeConfigDependencyFingerprints(
       return undefined;
     }
     const location = path.resolve(candidatePath);
-    const previous = dependencies.get(location);
+    // The same lexical path can be both a traversed directory and an exact
+    // file candidate. Those observations have different freshness contracts:
+    // one fingerprints the listing, while the other fingerprints its entry
+    // type. Preserve both, but still reject contradictory duplicates of one
+    // kind.
+    const key = kind + "\0" + location;
+    const previous = dependencies.get(key);
     if (
       previous !== undefined &&
       (previous.digest !== digest ||
@@ -2369,7 +2376,7 @@ function normalizeConfigDependencyFingerprints(
     ) {
       return undefined;
     }
-    dependencies.set(location, {
+    dependencies.set(key, {
       digest,
       identityStable,
       kind,
@@ -2483,15 +2490,21 @@ function configDirectoryDigestRecord(
 
 function configOptionalFileDigest(location: string): string {
   try {
-    if (fs.statSync(location).isFile()) {
+    const entry = fs.statSync(location);
+    if (entry.isFile()) {
       return createHash("sha256")
         .update(
           Buffer.concat([Buffer.from("file\0"), fs.readFileSync(location)]),
         )
         .digest("hex");
     }
+    if (entry.isDirectory()) {
+      return createHash("sha256")
+        .update("ttsc:host-input:directory\0")
+        .digest("hex");
+    }
   } catch {
-    // Missing, unreadable, and non-file candidates share the absent state.
+    // Missing and unreadable candidates share the absent state.
   }
   return createHash("sha256").update("missing\0").digest("hex");
 }
