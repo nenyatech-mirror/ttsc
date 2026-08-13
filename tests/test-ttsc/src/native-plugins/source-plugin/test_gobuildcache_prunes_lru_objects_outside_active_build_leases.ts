@@ -23,8 +23,8 @@ import {
  *    protected.
  * 4. Prove a future-dated GC marker cannot suppress maintenance after a clock
  *    rollback or restored cache.
- * 5. Prove completed, stale, and future-dated intents cannot poison a live process
- *    while fresh orphan leases retain their conservative grace.
+ * 5. Prove completed and stale intents cannot poison a live process, while a
+ *    future-dated intent and fresh orphan lease retain a conservative grace.
  * 6. Deny Worker permission and prove the IPC heartbeat fallback cleans up its
  *    lease after running the callback.
  * 7. Resolve user and explicitly named cache layouts and assert their objects and
@@ -180,11 +180,32 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       process.pid,
       now + 24 * 60 * 60 * 1000,
     );
+    const futureRelease = child_process.spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          'const fs = require("node:fs");',
+          "setTimeout(() => {",
+          "  const stale = new Date(Date.now() - 2 * 60 * 60 * 1000);",
+          "  fs.utimesSync(process.argv[1], stale, stale);",
+          "}, 200);",
+        ].join("\n"),
+        futureIntent,
+      ],
+      { stdio: "ignore", windowsHide: true },
+    );
     let futureIntentYielded = false;
+    const futureWaitStarted = Date.now();
     withGoBuildCacheLease(goCache, true, () => {
       futureIntentYielded = true;
     });
+    futureRelease.kill();
     assert.equal(futureIntentYielded, true);
+    assert.ok(
+      Date.now() - futureWaitStarted >= 150,
+      "a future-dated intent must receive one conservative grace period",
+    );
     assert.equal(fs.existsSync(futureIntent), false);
 
     const orphanCache = path.join(root, "orphan-go-build");

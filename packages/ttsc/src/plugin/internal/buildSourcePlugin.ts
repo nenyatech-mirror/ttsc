@@ -3594,7 +3594,19 @@ function goBuildCacheCoordinationRecordIsLive(
   } catch {}
   try {
     const age = now - fs.statSync(file).mtimeMs;
-    if (age < -GO_BUILD_CACHE_COORDINATION_CLOCK_SKEW_MS) return false;
+    if (age < -GO_BUILD_CACHE_COORDINATION_CLOCK_SKEW_MS) {
+      // A restored cache can carry a far-future timestamp, but the same state
+      // also occurs when the system clock moves backward during a real build.
+      // Rebase the record and grant one ordinary grace period; an active
+      // heartbeat keeps refreshing it, while an orphan then expires normally.
+      // Treat a failed rebase as live too—the safe failure mode is to defer
+      // opportunistic maintenance, never to delete under a possibly live Go.
+      try {
+        const current = new Date(now);
+        fs.utimesSync(file, current, current);
+      } catch {}
+      return true;
+    }
     const staleMs =
       directoryName === GO_BUILD_CACHE_MAINTENANCE_DIR
         ? GO_BUILD_CACHE_MAINTENANCE_STALE_MS
