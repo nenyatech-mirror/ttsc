@@ -156,6 +156,24 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       process.pid,
       now + 24 * 60 * 60 * 1000,
     );
+    const externalFutureIntent = path.join(root, "external-future-intent.json");
+    const externalFutureContents = `${JSON.stringify({
+      directoryName: ".ttsc-maintenance",
+      hostname: "localhost",
+      pid: process.pid,
+      startedAt: now,
+      status: "active",
+      version: 1,
+    })}\n`;
+    fs.writeFileSync(externalFutureIntent, externalFutureContents, "utf8");
+    const futureModified = new Date(now + 24 * 60 * 60 * 1000);
+    fs.utimesSync(externalFutureIntent, futureModified, futureModified);
+    const linkedFutureIntent = path.join(
+      goCache,
+      ".ttsc-maintenance",
+      "external-future.json",
+    );
+    fs.linkSync(externalFutureIntent, linkedFutureIntent);
     const futureRelease = child_process.spawn(
       process.execPath,
       [
@@ -164,10 +182,13 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
           'const fs = require("node:fs");',
           "setTimeout(() => {",
           "  const stale = new Date(Date.now() - 2 * 60 * 60 * 1000);",
-          "  fs.utimesSync(process.argv[1], stale, stale);",
+          "  for (const file of process.argv.slice(1)) {",
+          "    fs.utimesSync(file, stale, stale);",
+          "  }",
           "}, 200);",
         ].join("\n"),
         futureIntent,
+        linkedFutureIntent,
       ],
       { stdio: "ignore", windowsHide: true },
     );
@@ -183,6 +204,17 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       "a future-dated intent must receive one conservative grace period",
     );
     assert.equal(fs.existsSync(futureIntent), false);
+    assert.equal(fs.existsSync(linkedFutureIntent), false);
+    assert.equal(
+      fs.readFileSync(externalFutureIntent, "utf8"),
+      externalFutureContents,
+      "coordination recovery rewrote an external hard-linked file",
+    );
+    assert.equal(
+      fs.statSync(externalFutureIntent).mtimeMs,
+      futureModified.getTime(),
+      "coordination recovery changed external hard-link metadata",
+    );
 
     const linkedCoordinationCache = path.join(root, "linked-coordination");
     const outsideCoordination = path.join(root, "outside-coordination");

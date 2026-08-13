@@ -3649,11 +3649,10 @@ function goBuildCacheCoordinationRecordIsLive(
   directoryName: string,
   now: number,
 ): boolean {
+  let contents: string | undefined;
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    contents = fs.readFileSync(file, "utf8");
+    const parsed = JSON.parse(contents) as Record<string, unknown>;
     if (parsed.status === "complete") return false;
     // Parse valid records for forward compatibility, but do not equate a PID's
     // lifetime with one task. A failed unlink can leave a record owned by a
@@ -3670,10 +3669,14 @@ function goBuildCacheCoordinationRecordIsLive(
       // heartbeat keeps refreshing it, while an orphan then expires normally.
       // Treat a failed rebase as live too: the safe failure mode is to defer
       // opportunistic maintenance, never to delete under a possibly live Go.
-      try {
-        const current = new Date(now);
-        fs.utimesSync(file, current, current);
-      } catch {}
+      // Replace the directory entry rather than changing its inode in place.
+      // A restored or user-modified cache can contain a hard-linked record;
+      // utimesSync(file) would then mutate metadata outside the owned cache.
+      if (contents !== undefined) {
+        try {
+          replaceCacheMetadataFile(file, contents);
+        } catch {}
+      }
       return true;
     }
     const staleMs =
