@@ -136,52 +136,54 @@ export function loadProjectPlugins(options: {
     projectRoot: project.root,
     tsconfig: project.path,
   };
-  const loadedEntries = entries.map((entry) => {
-    const specifier = entry.config.transform;
-    if (typeof specifier !== "string" || specifier.length === 0) {
-      throw new Error(
-        `ttsc: plugin entry is missing a string "transform" field`,
-      );
-    }
-    const entryCandidates = collectModuleResolutionCandidates(
-      specifier,
-      path.join(entry.baseDir, "package.json"),
-      undefined,
-    );
-    // Capture every candidate before resolution chooses the descriptor entry.
-    // A post-resolution snapshot could bless a higher-priority file created
-    // after the resolver had already selected the old entry.
-    const entryCandidateHashes = hashHostInputPaths(entryCandidates);
-    const request = resolvePluginRequest(specifier, entry.baseDir);
-    const loaded = loadPluginEntry(
-      entry.config,
-      { ...context, plugin: entry.config },
-      request,
-      effectiveEnv,
-    );
-    const loadedHostInputHashes = mergeObservedHostInputHashes(
-      loaded.hostInputHashes,
-      hashHostInputPaths(Object.keys(loaded.hostInputHashes)),
-    );
-    const hostInputHashes = mergeObservedHostInputHashes(
-      entryCandidateHashes,
-      loadedHostInputHashes,
-    );
-    for (const input of loaded.hostInputs) {
-      const absolute = path.resolve(input);
-      if (
-        !Object.prototype.hasOwnProperty.call(loadedHostInputHashes, absolute)
-      ) {
-        delete hostInputHashes[absolute];
+  const loadedEntries = withPluginLoaderEnv(() =>
+    entries.map((entry) => {
+      const specifier = entry.config.transform;
+      if (typeof specifier !== "string" || specifier.length === 0) {
+        throw new Error(
+          `ttsc: plugin entry is missing a string "transform" field`,
+        );
       }
-    }
-    return {
-      ...loaded,
-      hostInputHashes,
-      hostInputs: [...loaded.hostInputs, ...entryCandidates],
-      request,
-    };
-  });
+      const entryCandidates = collectModuleResolutionCandidates(
+        specifier,
+        path.join(entry.baseDir, "package.json"),
+        undefined,
+      );
+      // Capture every candidate before resolution chooses the descriptor entry.
+      // A post-resolution snapshot could bless a higher-priority file created
+      // after the resolver had already selected the old entry.
+      const entryCandidateHashes = hashHostInputPaths(entryCandidates);
+      const request = resolvePluginRequest(specifier, entry.baseDir);
+      const loaded = loadPluginEntry(
+        entry.config,
+        { ...context, plugin: entry.config },
+        request,
+        effectiveEnv,
+      );
+      const loadedHostInputHashes = mergeObservedHostInputHashes(
+        loaded.hostInputHashes,
+        hashHostInputPaths(Object.keys(loaded.hostInputHashes)),
+      );
+      const hostInputHashes = mergeObservedHostInputHashes(
+        entryCandidateHashes,
+        loadedHostInputHashes,
+      );
+      for (const input of loaded.hostInputs) {
+        const absolute = path.resolve(input);
+        if (
+          !Object.prototype.hasOwnProperty.call(loadedHostInputHashes, absolute)
+        ) {
+          delete hostInputHashes[absolute];
+        }
+      }
+      return {
+        ...loaded,
+        hostInputHashes,
+        hostInputs: [...loaded.hostInputs, ...entryCandidates],
+        request,
+      };
+    }),
+  );
   const plugins = composePluginSources(
     entries,
     loadedEntries.map((entry) => entry.plugin),
@@ -1126,37 +1128,33 @@ function loadPluginEntry(
   hostInputs: string[];
   plugin: ITtscPlugin;
 } {
-  return withPluginLoaderEnv(() => {
-    const specifier = entry.transform;
-    if (typeof specifier !== "string" || specifier.length === 0) {
-      throw new Error(
-        `ttsc: plugin entry is missing a string "transform" field`,
-      );
-    }
+  const specifier = entry.transform;
+  if (typeof specifier !== "string" || specifier.length === 0) {
+    throw new Error(`ttsc: plugin entry is missing a string "transform" field`);
+  }
 
-    // `dirname`/`filename` are per-entry: each plugin entry resolves to its own
-    // descriptor module, so they are derived here from the resolved `request`
-    // rather than carried on the shared base context. They give factories a
-    // load-mode-independent stand-in for `__dirname`/`__filename`, which are
-    // undefined when a descriptor loads through ttsx or as ESM.
-    const context: ITtscPluginFactoryContext = {
-      ...base,
-      dirname: path.dirname(request),
-      filename: request,
+  // `dirname`/`filename` are per-entry: each plugin entry resolves to its own
+  // descriptor module, so they are derived here from the resolved `request`
+  // rather than carried on the shared base context. They give factories a
+  // load-mode-independent stand-in for `__dirname`/`__filename`, which are
+  // undefined when a descriptor loads through ttsx or as ESM.
+  const context: ITtscPluginFactoryContext = {
+    ...base,
+    dirname: path.dirname(request),
+    filename: request,
+  };
+  const loaded = loadPluginDescriptor(request, context, effectiveEnv);
+  if (isTtscPlugin(loaded.descriptor)) {
+    rejectJsTransformFunctions(specifier, loaded.descriptor);
+    return {
+      hostInputHashes: loaded.hostInputHashes,
+      hostInputs: loaded.inputs,
+      plugin: loaded.descriptor,
     };
-    const loaded = loadPluginDescriptor(request, context, effectiveEnv);
-    if (isTtscPlugin(loaded.descriptor)) {
-      rejectJsTransformFunctions(specifier, loaded.descriptor);
-      return {
-        hostInputHashes: loaded.hostInputHashes,
-        hostInputs: loaded.inputs,
-        plugin: loaded.descriptor,
-      };
-    }
-    throw new Error(
-      `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
-    );
-  });
+  }
+  throw new Error(
+    `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
+  );
 }
 
 /**
@@ -1234,7 +1232,12 @@ function loadCommonJsDescriptor(
     effectiveEnv,
     context.projectRoot,
   );
-  const node = resolveNodeBinary(effectiveEnv, context.projectRoot);
+  const node =
+    !runtimeCapabilities.bun &&
+    runtimeCapabilities.registerHooks &&
+    runtimeCapabilities.executable !== undefined
+      ? runtimeCapabilities.executable
+      : resolveNodeBinary(effectiveEnv, context.projectRoot);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
   const out = path.join(dir, "descriptor.json");
   const inputsOut = path.join(dir, "descriptor-inputs.ndjson");

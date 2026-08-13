@@ -24,6 +24,7 @@ export function javascriptRuntimeCapabilities(
       cwd,
       encoding: "utf8",
       env: effectiveEnv,
+      timeout: 30_000,
       windowsHide: true,
     },
   );
