@@ -233,13 +233,23 @@ export function buildSourcePlugin(opts: {
     tsgoVersion: opts.tsgoVersion,
   });
   const paths = resolveSourceBuildCachePaths(opts.baseDir, opts.cacheDir, env);
+  const managePluginCache = !opts.cacheDir && !env.TTSC_CACHE_DIR;
   const manageGoBuildCache = shouldManageSourceBuildCaches(
     paths,
     opts.cacheDir,
     env,
   );
-  maybePruneSourceBuildCaches(paths, opts.cacheDir, env);
-  const cacheDir = path.join(paths.pluginRoot, key);
+  const pluginRoot = managePluginCache
+    ? canonicalPluginCacheRoot(paths.pluginRoot)
+    : paths.pluginRoot;
+  maybePruneSourceBuildCaches(
+    { ...paths, pluginRoot },
+    opts.cacheDir,
+    env,
+  );
+  const cacheDir = managePluginCache
+    ? canonicalPluginCacheEntry(pluginRoot, key)
+    : path.join(pluginRoot, key);
   const binaryName = process.platform === "win32" ? "plugin.exe" : "plugin";
   const binaryPath = path.join(cacheDir, binaryName);
   if (fs.existsSync(binaryPath)) {
@@ -3120,15 +3130,7 @@ function touchCacheEntry(cacheDir: string): void {
 
 function prunePluginCacheRoot(root: string): void {
   try {
-    fs.mkdirSync(root, { recursive: true });
-    const stats = fs.lstatSync(root);
-    if (!stats.isDirectory() || stats.isSymbolicLink()) {
-      throw new Error(`ttsc: unsafe plugin cache root: ${root}`);
-    }
-    // Pin every later read and recursive removal to the directory validated
-    // above. If an ancestor alias is retargeted after this point, GC must stay
-    // on the original physical cache rather than follow the mutable spelling.
-    const cacheRoot = fs.realpathSync.native(root);
+    const cacheRoot = canonicalPluginCacheRoot(root);
     const marker = path.join(cacheRoot, CACHE_GC_MARKER_FILE);
     const now = Date.now();
     const lastRun = readTimestamp(marker);
@@ -3144,6 +3146,33 @@ function prunePluginCacheRoot(root: string): void {
   } catch {
     // Plugin-cache GC is opportunistic; builds still proceed when it fails.
   }
+}
+
+/** Pin the default plugin cache to one ordinary physical directory. */
+function canonicalPluginCacheRoot(root: string): string {
+  fs.mkdirSync(root, { recursive: true });
+  const stats = fs.lstatSync(root);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`ttsc: unsafe plugin cache root: ${root}`);
+  }
+  // If an ancestor alias is retargeted after this point, all later cache work
+  // stays on the original physical directory rather than following it.
+  return fs.realpathSync.native(root);
+}
+
+/** Create one content-addressed cache entry without following a leaf alias. */
+function canonicalPluginCacheEntry(root: string, key: string): string {
+  const directory = path.join(root, key);
+  fs.mkdirSync(directory, { recursive: true });
+  const stats = fs.lstatSync(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`ttsc: unsafe plugin cache entry: ${directory}`);
+  }
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== root) {
+    throw new Error(`ttsc: plugin cache entry escaped its root: ${directory}`);
+  }
+  return physicalDirectory;
 }
 
 function prunePluginCacheEntries(root: string, now: number): void {

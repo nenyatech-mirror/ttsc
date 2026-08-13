@@ -55,6 +55,8 @@ import {
  *   writing the output binary, simulating a failed compile.
  * - `FAKE_GO_BUILD_CACHE_OBJECT_COUNT`: write this many four-byte, old objects
  *   into `GOCACHE`, allowing post-build size maintenance to be tested.
+ * - `FAKE_GO_BUILD_CACHE_MARKER_VALUE`: overwrite `GOCACHE/.ttsc-gc` during
+ *   the build, so a caller can prove post-build maintenance replaces it.
  */
 function createFakeGoBinary(
   root: string,
@@ -124,6 +126,14 @@ function createFakeGoBinary(
       '    fs.writeFileSync(file, "data", "utf8");',
       "    fs.utimesSync(file, old, old);",
       "  }",
+      "}",
+      "if (process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE && process.env.GOCACHE) {",
+      "  fs.mkdirSync(process.env.GOCACHE, { recursive: true });",
+      "  fs.writeFileSync(",
+      '    path.join(process.env.GOCACHE, ".ttsc-gc"),',
+      '    process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE + "\\n",',
+      '    "utf8",',
+      "  );",
       "}",
       "if (process.env.FAKE_GO_BUILD_EXIT_CODE) {",
       '  console.error("fake go: build failed as directed by FAKE_GO_BUILD_EXIT_CODE");',

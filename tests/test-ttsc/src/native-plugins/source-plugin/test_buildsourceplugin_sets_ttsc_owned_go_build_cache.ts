@@ -3,6 +3,7 @@ import { TestProject } from "@ttsc/testing";
 import {
   assert,
   buildSourcePlugin,
+  computeCacheKey,
   createFakeGoBinary,
   fs,
   path,
@@ -24,6 +25,8 @@ import {
  * 5. Fail another cold build after it writes cache objects and assert the same
  *    forced post-build maintenance still runs without replacing the build
  *    error.
+ * 6. Reject default plugin-cache root and content-addressed entry junctions so
+ *    neither publication nor metadata writes can escape the owned cache.
  */
 export const test_buildsourceplugin_sets_ttsc_owned_go_build_cache = () => {
   const root = TestProject.tmpdir("ttsc-source-plugin-");
@@ -38,6 +41,7 @@ export const test_buildsourceplugin_sets_ttsc_owned_go_build_cache = () => {
   const previousTtscGoCache = process.env.TTSC_GO_CACHE_DIR;
   const previousCapture = process.env.FAKE_GO_CAPTURE_ENV_FILE;
   const previousObjectCount = process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT;
+  const previousMarkerValue = process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE;
   const previousExitCode = process.env.FAKE_GO_BUILD_EXIT_CODE;
   process.env.TTSC_GO_BINARY = fakeGo;
   process.env.FAKE_GO_CAPTURE_ENV_FILE = capture;
@@ -64,27 +68,17 @@ export const test_buildsourceplugin_sets_ttsc_owned_go_build_cache = () => {
     fs.mkdirSync(path.join(managedRoot, "node_modules"), { recursive: true });
     writePluginSource(managedRoot);
     process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT = "3";
-    const originalWrite = fs.writeFileSync;
-    let markerWrites = 0;
-    (fs as { writeFileSync: typeof fs.writeFileSync }).writeFileSync =
-      function (this: unknown, ...args: Parameters<typeof fs.writeFileSync>) {
-        if (path.basename(String(args[0])) === ".ttsc-gc") markerWrites += 1;
-        return originalWrite.apply(this, args as never);
-      } as typeof fs.writeFileSync;
-    try {
-      buildSourcePlugin({
-        baseDir: managedRoot,
-        overlayDirs: [],
-        pluginName: "managed-post-build-gc",
-        source: managedRoot,
-        quiet: true,
-        ttscVersion: "1.0.0",
-        tsgoVersion: "7.0.0-dev",
-      });
-    } finally {
-      (fs as { writeFileSync: typeof fs.writeFileSync }).writeFileSync =
-        originalWrite;
-    }
+    const buildMarkerValue = String(Date.now() + 24 * 60 * 60 * 1000);
+    process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE = buildMarkerValue;
+    buildSourcePlugin({
+      baseDir: managedRoot,
+      overlayDirs: [],
+      pluginName: "managed-post-build-gc",
+      source: managedRoot,
+      quiet: true,
+      ttscVersion: "1.0.0",
+      tsgoVersion: "7.0.0-dev",
+    });
     const managedGoCache = path.join(
       managedRoot,
       "node_modules",
@@ -92,45 +86,130 @@ export const test_buildsourceplugin_sets_ttsc_owned_go_build_cache = () => {
       "ttsc",
       "go-build",
     );
-    assert.equal(fs.existsSync(path.join(managedGoCache, ".ttsc-gc")), true);
-    assert.equal(
-      markerWrites,
-      2,
-      "managed cold builds must enforce GC both before and after go build",
+    const managedMarker = path.join(managedGoCache, ".ttsc-gc");
+    assert.equal(fs.existsSync(managedMarker), true);
+    assert.notEqual(
+      fs.readFileSync(managedMarker, "utf8").trim(),
+      buildMarkerValue,
+      "managed cold builds must enforce GC after go build",
     );
 
     const failedRoot = path.join(root, "failed-managed");
     fs.mkdirSync(path.join(failedRoot, "node_modules"), { recursive: true });
     writePluginSource(failedRoot);
     process.env.FAKE_GO_BUILD_EXIT_CODE = "17";
-    (fs as { writeFileSync: typeof fs.writeFileSync }).writeFileSync =
-      function (this: unknown, ...args: Parameters<typeof fs.writeFileSync>) {
-        if (path.basename(String(args[0])) === ".ttsc-gc") markerWrites += 1;
-        return originalWrite.apply(this, args as never);
-      } as typeof fs.writeFileSync;
-    try {
-      assert.throws(
-        () =>
-          buildSourcePlugin({
-            baseDir: failedRoot,
-            overlayDirs: [],
-            pluginName: "managed-failed-post-build-gc",
-            source: failedRoot,
-            quiet: true,
-            ttscVersion: "1.0.0",
-            tsgoVersion: "7.0.0-dev",
-          }),
-        /managed-failed-post-build-gc[\s\S]*fake go: build failed as directed/,
-      );
-    } finally {
-      (fs as { writeFileSync: typeof fs.writeFileSync }).writeFileSync =
-        originalWrite;
-    }
-    assert.equal(
-      markerWrites,
-      4,
+    const failedMarkerValue = String(Date.now() + 48 * 60 * 60 * 1000);
+    process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE = failedMarkerValue;
+    assert.throws(
+      () =>
+        buildSourcePlugin({
+          baseDir: failedRoot,
+          overlayDirs: [],
+          pluginName: "managed-failed-post-build-gc",
+          source: failedRoot,
+          quiet: true,
+          ttscVersion: "1.0.0",
+          tsgoVersion: "7.0.0-dev",
+        }),
+      /managed-failed-post-build-gc[\s\S]*fake go: build failed as directed/,
+    );
+    assert.notEqual(
+      fs
+        .readFileSync(
+          path.join(
+            failedRoot,
+            "node_modules",
+            ".cache",
+            "ttsc",
+            "go-build",
+            ".ttsc-gc",
+          ),
+          "utf8",
+        )
+        .trim(),
+      failedMarkerValue,
       "failed managed cold builds must enforce post-build GC",
     );
+    delete process.env.FAKE_GO_BUILD_EXIT_CODE;
+
+    const linkedRoot = path.join(root, "linked-plugin-root");
+    const linkedRootParent = path.join(
+      linkedRoot,
+      "node_modules",
+      ".cache",
+      "ttsc",
+    );
+    const outsideRoot = path.join(root, "outside-plugin-root");
+    const outsideRootSentinel = path.join(outsideRoot, "keep.txt");
+    fs.mkdirSync(linkedRootParent, { recursive: true });
+    fs.mkdirSync(outsideRoot, { recursive: true });
+    fs.writeFileSync(outsideRootSentinel, "keep\n", "utf8");
+    writePluginSource(linkedRoot);
+    fs.symlinkSync(
+      outsideRoot,
+      path.join(linkedRootParent, "plugins"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.throws(
+      () =>
+        buildSourcePlugin({
+          baseDir: linkedRoot,
+          overlayDirs: [],
+          pluginName: "linked-plugin-root",
+          source: linkedRoot,
+          quiet: true,
+          ttscVersion: "1.0.0",
+          tsgoVersion: "7.0.0-dev",
+        }),
+      /unsafe plugin cache root/,
+    );
+    assert.equal(fs.readFileSync(outsideRootSentinel, "utf8"), "keep\n");
+
+    const linkedEntryRoot = path.join(root, "linked-plugin-entry");
+    fs.mkdirSync(path.join(linkedEntryRoot, "node_modules"), {
+      recursive: true,
+    });
+    writePluginSource(linkedEntryRoot);
+    const linkedEntryCache = path.join(
+      linkedEntryRoot,
+      "node_modules",
+      ".cache",
+      "ttsc",
+      "plugins",
+    );
+    fs.mkdirSync(linkedEntryCache, { recursive: true });
+    const linkedEntryKey = computeCacheKey({
+      dir: linkedEntryRoot,
+      entry: ".",
+      env: process.env,
+      goBinary: fakeGo,
+      overlayDirs: [],
+      ttscVersion: "1.0.0",
+      tsgoVersion: "7.0.0-dev",
+    });
+    const outsideEntry = path.join(root, "outside-plugin-entry");
+    const outsideEntrySentinel = path.join(outsideEntry, "keep.txt");
+    fs.mkdirSync(outsideEntry, { recursive: true });
+    fs.writeFileSync(outsideEntrySentinel, "keep\n", "utf8");
+    fs.symlinkSync(
+      outsideEntry,
+      path.join(linkedEntryCache, linkedEntryKey),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.throws(
+      () =>
+        buildSourcePlugin({
+          baseDir: linkedEntryRoot,
+          overlayDirs: [],
+          pluginName: "linked-plugin-entry",
+          source: linkedEntryRoot,
+          quiet: true,
+          ttscVersion: "1.0.0",
+          tsgoVersion: "7.0.0-dev",
+        }),
+      /unsafe plugin cache entry/,
+    );
+    assert.equal(fs.readFileSync(outsideEntrySentinel, "utf8"), "keep\n");
   } finally {
     if (previousGo === undefined) delete process.env.TTSC_GO_BINARY;
     else process.env.TTSC_GO_BINARY = previousGo;
@@ -144,6 +223,9 @@ export const test_buildsourceplugin_sets_ttsc_owned_go_build_cache = () => {
     if (previousObjectCount === undefined)
       delete process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT;
     else process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT = previousObjectCount;
+    if (previousMarkerValue === undefined)
+      delete process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE;
+    else process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE = previousMarkerValue;
     if (previousExitCode === undefined)
       delete process.env.FAKE_GO_BUILD_EXIT_CODE;
     else process.env.FAKE_GO_BUILD_EXIT_CODE = previousExitCode;
