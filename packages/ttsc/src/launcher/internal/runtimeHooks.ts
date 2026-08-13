@@ -850,10 +850,11 @@ function readPluginDescriptorProjectConfig(
     recordPluginDescriptorProjectInputs(observed, true);
     throw error;
   }
-  let inputs = normalizedProjectConfigPaths(project);
+  let inputs = normalizedProjectConfigPaths(project, tsconfig);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     for (const input of inputs) observed.add(input);
     const before = pluginDescriptorInputHashes(inputs);
+    const beforeRealpaths = pluginDescriptorInputRealpaths(inputs);
     let candidate: ReturnType<typeof readProjectConfig>;
     try {
       candidate = read();
@@ -861,15 +862,21 @@ function readPluginDescriptorProjectConfig(
       recordPluginDescriptorProjectInputs(observed, true);
       throw error;
     }
-    const candidateInputs = normalizedProjectConfigPaths(candidate);
+    const candidateInputs = normalizedProjectConfigPaths(candidate, tsconfig);
     for (const input of candidateInputs) observed.add(input);
     const after = pluginDescriptorInputHashes(candidateInputs);
+    const afterRealpaths = pluginDescriptorInputRealpaths(candidateInputs);
     if (
       equalPluginDescriptorInputLists(inputs, candidateInputs) &&
-      equalPluginDescriptorInputHashes(before, after)
+      equalPluginDescriptorInputHashes(before, after) &&
+      equalPluginDescriptorInputHashes(beforeRealpaths, afterRealpaths)
     ) {
       for (const input of candidateInputs) {
-        recordPluginDescriptorInput({ hash: after[input]!, resolved: input });
+        recordPluginDescriptorInput({
+          hash: after[input]!,
+          realpath: afterRealpaths[input]!,
+          resolved: input,
+        });
       }
       return candidate;
     }
@@ -882,9 +889,14 @@ function readPluginDescriptorProjectConfig(
 
 function normalizedProjectConfigPaths(
   project: ReturnType<typeof readProjectConfig>,
+  requestedConfig: string,
 ): string[] {
   return [
-    ...new Set(project.configPaths.map((file) => path.resolve(file))),
+    ...new Set(
+      [requestedConfig, ...project.configPaths].map((file) =>
+        path.resolve(file),
+      ),
+    ),
   ].sort();
 }
 
@@ -893,6 +905,14 @@ function pluginDescriptorInputHashes(
 ): Record<string, string | null> {
   return Object.fromEntries(
     inputs.map((input) => [input, pluginDescriptorInputHash(input)]),
+  );
+}
+
+function pluginDescriptorInputRealpaths(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => [input, pluginDescriptorInputRealpath(input)]),
   );
 }
 
