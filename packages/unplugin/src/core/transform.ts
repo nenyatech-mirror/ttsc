@@ -1556,7 +1556,7 @@ async function createProjectMutationTracker(
   if (process.platform === "win32") {
     await registerWindowsProjectMutationTracker(
       tracker,
-      directories.map((directory) => directory.path),
+      directories.map((directory) => ({ directory: directory.path })),
       false,
     );
     return tracker;
@@ -1590,23 +1590,30 @@ async function createProjectMutationTracker(
 async function createHostInputMutationTracker(
   inputs: readonly string[],
 ): Promise<TtscProjectMutationTracker> {
-  const locations = new Set<string>();
+  const namesByDirectory = new Map<string, Set<string>>();
   for (const input of inputs) {
-    let current = path.resolve(input);
-    while (!fs.existsSync(current)) {
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      current = parent;
+    const absolute = path.resolve(input);
+    const probe = fs.existsSync(absolute)
+      ? { directory: path.dirname(absolute), name: path.basename(absolute) }
+      : missingPathProbe(absolute);
+    let names = namesByDirectory.get(probe.directory);
+    if (names === undefined) {
+      names = new Set<string>();
+      namesByDirectory.set(probe.directory, names);
     }
-    locations.add(current);
+    names.add(probe.name);
   }
+  const locations = [...namesByDirectory].map(([directory, names]) => ({
+    directory,
+    names: [...names],
+  }));
   const tracker: TtscProjectMutationTracker = {
     close: () => undefined,
     failed: false,
     membershipChanged: false,
   };
   if (process.platform === "win32") {
-    await registerWindowsProjectMutationTracker(tracker, [...locations], true);
+    await registerWindowsProjectMutationTracker(tracker, locations, true);
     return tracker;
   }
   const watchers: fs.FSWatcher[] = [];
@@ -1616,9 +1623,16 @@ async function createHostInputMutationTracker(
   };
   for (const location of locations) {
     try {
-      const watcher = fs.watch(location, { persistent: false }, () => {
-        tracker.membershipChanged = true;
-      });
+      const names = new Set(location.names);
+      const watcher = fs.watch(
+        location.directory,
+        { persistent: false },
+        (_eventType, filename) => {
+          if (filename === null || names.has(String(filename))) {
+            tracker.membershipChanged = true;
+          }
+        },
+      );
       watcher.on("error", () => {
         tracker.failed = true;
       });
@@ -1645,6 +1659,11 @@ interface WindowsProjectMutationBroker {
 
 let windowsProjectMutationBroker: WindowsProjectMutationBroker | undefined;
 
+interface WindowsMutationLocation {
+  directory: string;
+  names?: string[];
+}
+
 /**
  * Register directory watches in an isolated Windows process.
  *
@@ -1654,10 +1673,22 @@ let windowsProjectMutationBroker: WindowsProjectMutationBroker | undefined;
  */
 async function registerWindowsProjectMutationTracker(
   tracker: TtscProjectMutationTracker,
-  locations: readonly string[],
+  locations: readonly WindowsMutationLocation[],
   allEvents: boolean,
 ): Promise<void> {
   const broker = getWindowsProjectMutationBroker();
+  const normalized = locations.map((location) => {
+    let directory: string;
+    try {
+      directory = fs.realpathSync.native(location.directory);
+    } catch {
+      directory = path.resolve(location.directory);
+    }
+    return {
+      directory,
+      ...(location.names === undefined ? {} : { names: location.names }),
+    };
+  });
   broker.pendingRegistrations += 1;
   broker.child.ref();
   broker.child.channel?.ref();
@@ -1683,7 +1714,7 @@ async function registerWindowsProjectMutationTracker(
   };
   broker.child.send?.({
     allEvents,
-    directories: locations,
+    locations: normalized,
     id,
     op: "add",
   });
@@ -1755,10 +1786,12 @@ const WINDOWS_WATCH_BROKER_SOURCE = [
   '  if (message.op !== "add") return;',
   "  const watchers = [];",
   "  let failed = false;",
-  "  for (const directory of message.directories) {",
+  "  for (const location of message.locations) {",
   "    try {",
-  "      const watcher = fs.watch(directory, { persistent: false }, (event) => {",
-  '        if (message.allEvents || event === "rename") process.send?.({ id: message.id });',
+  "      const names = location.names === undefined ? undefined : new Set(location.names.map((name) => name.toLowerCase()));",
+  "      const watcher = fs.watch(location.directory, { persistent: false }, (event, filename) => {",
+  "        const matches = names === undefined || filename === null || names.has(String(filename).toLowerCase());",
+  '        if (matches && (message.allEvents || event === "rename")) process.send?.({ id: message.id });',
   "      });",
   '      watcher.on("error", () => process.send?.({ failed: true, id: message.id }));',
   "      watchers.push(watcher);",
@@ -1957,7 +1990,17 @@ function selectExternalInputPaths(props: {
     }
   }
   if (Array.isArray(props.result.hostInputs)) {
-    members.push(...props.result.hostInputs);
+    for (const input of props.result.hostInputs) {
+      members.push(input);
+      if (typeof input === "string" && input.length !== 0) {
+        // Plugin discovery inputs deliberately include absent config and
+        // resolution probes. A project walk cannot snapshot a path that does
+        // not exist yet, even when its spelling lies below projectRoot.
+        resolutionCandidates.add(
+          pathIdentityKey(path.resolve(props.projectRoot, input), identities),
+        );
+      }
+    }
   }
   const excluded =
     props.temporaryTsconfig === undefined

@@ -1,4 +1,5 @@
 import childProcess from "node:child_process";
+import path from "node:path";
 
 export type JavaScriptRuntimeCapabilities = {
   bun: boolean;
@@ -14,7 +15,7 @@ export function javascriptRuntimeCapabilities(
   cwd: string,
 ): JavaScriptRuntimeCapabilities {
   const effectiveEnv = { ...process.env, ...env };
-  const key = `${runtime}\0${effectiveEnv.PATH ?? ""}`;
+  const key = `${runtime}\0${path.resolve(cwd)}\0${effectiveEnv.PATH ?? ""}`;
   const cached = capabilityCache.get(key);
   if (cached !== undefined) return cached;
   const result = childProcess.spawnSync(

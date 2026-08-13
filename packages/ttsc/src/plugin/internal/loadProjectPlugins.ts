@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { findNearestGoMod } from "../../compiler/internal/paths";
 import { readJsonFile } from "../../compiler/internal/project/readConfigJson";
@@ -79,7 +80,11 @@ export function loadProjectPlugins(options: {
   nativePlugins: ITtscLoadedNativePlugin[];
   project: ITtscParsedProjectConfig;
 } {
-  const effectiveEnv = options.env ?? process.env;
+  // Snapshot the caller environment before `withPluginLoaderEnv` injects
+  // host-owned Node/ttsx locators into process.env. Under a Bun parent the
+  // direct descriptor evaluator must remain Bun unless the caller explicitly
+  // selected another runtime.
+  const effectiveEnv = { ...(options.env ?? process.env) };
   const project = readProjectConfig({
     cwd: options.cwd,
     file: options.file,
@@ -113,13 +118,22 @@ export function loadProjectPlugins(options: {
   };
   const loadedEntries = entries.map((entry) => {
     const request = resolvePluginEntryRequest(entry.config, entry.baseDir);
+    const loaded = loadPluginEntry(
+      entry.config,
+      { ...context, plugin: entry.config },
+      request,
+      effectiveEnv,
+    );
     return {
-      ...loadPluginEntry(
-        entry.config,
-        { ...context, plugin: entry.config },
-        request,
-        effectiveEnv,
-      ),
+      ...loaded,
+      hostInputs: [
+        ...loaded.hostInputs,
+        ...collectModuleResolutionCandidates(
+          entry.config.transform!,
+          path.join(entry.baseDir, "package.json"),
+          request,
+        ),
+      ],
       request,
     };
   });
@@ -317,6 +331,13 @@ export function collectProjectHostInputs(
           dependency,
           projectRoot,
         );
+        for (const candidate of collectDependencyManifestCandidates(
+          dependency,
+          manifest,
+          dependencyManifest,
+        )) {
+          inputs.add(candidate);
+        }
         if (dependencyManifest !== undefined) {
           inputs.add(path.resolve(dependencyManifest));
         }
@@ -336,6 +357,157 @@ function resolvePluginEntryRequest(
     throw new Error(`ttsc: plugin entry is missing a string "transform" field`);
   }
   return resolvePluginRequest(specifier, baseDir);
+}
+
+const MODULE_PROBE_EXTENSIONS = [".js", ".json", ".node"] as const;
+
+/** Record every file whose later appearance can change one module resolution. */
+function collectModuleResolutionCandidates(
+  specifier: string,
+  parentFile: string,
+  resolvedFile: string | undefined,
+): string[] {
+  const inputs = new Set<string>();
+  const recordedBases = new Set<string>();
+  const candidates = (base: string): string[] => [
+    base,
+    ...MODULE_PROBE_EXTENSIONS.map((extension) => base + extension),
+    path.join(base, "package.json"),
+    ...MODULE_PROBE_EXTENSIONS.map((extension) =>
+      path.join(base, `index${extension}`),
+    ),
+  ];
+  const recordBase = (base: string): void => {
+    const resolvedBase = path.resolve(base);
+    if (recordedBases.has(resolvedBase)) return;
+    recordedBases.add(resolvedBase);
+    for (const candidate of candidates(resolvedBase)) {
+      inputs.add(path.resolve(candidate));
+    }
+    try {
+      const manifest = readJsonFile(path.join(resolvedBase, "package.json"));
+      if (
+        isRecord(manifest) &&
+        typeof manifest.main === "string" &&
+        manifest.main.trim() !== ""
+      ) {
+        recordBase(path.resolve(resolvedBase, manifest.main));
+      }
+    } catch {
+      // A malformed selected manifest is reported by normal resolution/load.
+    }
+  };
+  const selectedBy = (base: string): boolean => {
+    if (resolvedFile === undefined) return false;
+    let selected: string;
+    try {
+      selected = fs.realpathSync.native(resolvedFile);
+    } catch {
+      selected = path.resolve(resolvedFile);
+    }
+    for (const candidate of candidates(base)) {
+      try {
+        const canonical = fs.realpathSync.native(candidate);
+        const relative = path.relative(canonical, selected);
+        if (
+          relative === "" ||
+          (fs.statSync(canonical).isDirectory() &&
+            relative !== ".." &&
+            !relative.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(relative))
+        ) {
+          return true;
+        }
+      } catch {
+        // Missing candidates are the inputs this function intentionally keeps.
+      }
+    }
+    return false;
+  };
+
+  if (
+    specifier.startsWith(".") ||
+    path.isAbsolute(specifier) ||
+    specifier.startsWith("file:")
+  ) {
+    try {
+      const base = specifier.startsWith("file:")
+        ? fileURLToPath(specifier)
+        : path.resolve(path.dirname(parentFile), specifier);
+      // An existing exact file wins before extension and directory probes. Its
+      // own recorded identity is therefore sufficient; siblings cannot
+      // supersede it while it exists.
+      if (!selectedByExactFile(base, resolvedFile)) recordBase(base);
+    } catch {
+      // Invalid URL spellings are diagnosed by the real resolver.
+    }
+    return [...inputs];
+  }
+  const parts = specifier.split("/");
+  const packageParts = parts[0]?.startsWith("@")
+    ? parts.slice(0, 2)
+    : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) {
+    return [...inputs];
+  }
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  const searchPaths = createRequire(parentFile).resolve.paths(specifier) ?? [];
+  for (const searchPath of searchPaths) {
+    const packageDirectory = path.join(searchPath, packageName);
+    recordBase(packageDirectory);
+    if (subpath.length !== 0) {
+      recordBase(path.join(packageDirectory, ...subpath));
+    }
+    if (selectedBy(packageDirectory)) break;
+  }
+  return [...inputs];
+}
+
+function selectedByExactFile(
+  candidate: string,
+  selected: string | undefined,
+): boolean {
+  if (selected === undefined) return false;
+  try {
+    return (
+      fs.realpathSync.native(candidate) === fs.realpathSync.native(selected)
+    );
+  } catch {
+    return path.resolve(candidate) === path.resolve(selected);
+  }
+}
+
+/** Record package manifests whose later appearance can redirect discovery. */
+function collectDependencyManifestCandidates(
+  packageName: string,
+  parentFile: string,
+  selectedManifest: string | undefined,
+): string[] {
+  const out: string[] = [];
+  let selectedDirectory: string | undefined;
+  if (selectedManifest !== undefined) {
+    try {
+      selectedDirectory = fs.realpathSync.native(
+        path.dirname(selectedManifest),
+      );
+    } catch {
+      selectedDirectory = path.resolve(path.dirname(selectedManifest));
+    }
+  }
+  for (const searchPath of createRequire(parentFile).resolve.paths(
+    packageName,
+  ) ?? []) {
+    const packageDirectory = path.join(searchPath, ...packageName.split("/"));
+    out.push(path.join(packageDirectory, "package.json"));
+    if (selectedDirectory === undefined) continue;
+    try {
+      if (fs.realpathSync.native(packageDirectory) === selectedDirectory) break;
+    } catch {
+      // Keep searching until the selected package directory is reached.
+    }
+  }
+  return out;
 }
 
 function composePluginSources(
@@ -920,6 +1092,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `const { fileURLToPath } = require("node:url");`,
   `const out = process.env.TTSC_PLUGIN_DESCRIPTOR_OUT;`,
   `let retryWithTtsx = false;`,
+  `const moduleResolutionFailures = new WeakSet();`,
   `function shouldRetryWithTtsx(error, request) {`,
   `  const code = error && error.code;`,
   `  const stackText = String(error && error.stack || "");`,
@@ -927,6 +1100,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  if (code === "ERR_UNKNOWN_FILE_EXTENSION") return error instanceof TypeError && /^Unknown file extension /.test(message) && stackText.includes("node:internal/modules/esm/get_format");`,
   `  if (code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" || code === "ERR_INVALID_TYPESCRIPT_SYNTAX") return error instanceof SyntaxError && stackText.includes("node:internal/modules/typescript");`,
   `  if (code !== "MODULE_NOT_FOUND") return false;`,
+  `  if (!(error instanceof Error) || error.name !== "Error" || !moduleResolutionFailures.has(error)) return false;`,
   `  const firstLine = String(error && error.message || "").split("\\n", 1)[0];`,
   `  const firstQuote = firstLine.indexOf("'");`,
   `  const secondQuote = firstQuote < 0 ? -1 : firstLine.indexOf("'", firstQuote + 1);`,
@@ -941,24 +1115,132 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  const request = process.env.TTSC_PLUGIN_ENTRY;`,
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
   `  const inputs = new Set([path.resolve(request)]);`,
-  `  function recordResolved(resolved) {`,
-  `    if (typeof resolved !== "string") return;`,
-  `    if (resolved.startsWith("file:")) {`,
-  `      try { resolved = fileURLToPath(resolved); } catch { return; }`,
+  `  function asFile(resolved) {`,
+  `    if (typeof resolved !== "string") return undefined;`,
+  `    if (!resolved.startsWith("file:")) return path.isAbsolute(resolved) ? path.resolve(resolved) : undefined;`,
+  `    try { return path.resolve(fileURLToPath(resolved)); } catch { return undefined; }`,
+  `  }`,
+  `  function recordFile(resolved) {`,
+  `    const file = asFile(resolved);`,
+  `    if (file === undefined) return;`,
+  `    inputs.add(file);`,
+  `    for (let directory = path.dirname(file);;) {`,
+  `      const manifest = path.join(directory, "package.json");`,
+  `      inputs.add(manifest);`,
+  `      if (fs.existsSync(manifest)) break;`,
+  `      const parent = path.dirname(directory);`,
+  `      if (parent === directory) break;`,
+  `      directory = parent;`,
   `    }`,
-  `    if (path.isAbsolute(resolved)) inputs.add(path.resolve(resolved));`,
+  `  }`,
+  `  const moduleProbeExtensions = typeof globalThis.Bun === "object" ? [".tsx", ".jsx", ".ts", ".mjs", ".js", ".cjs", ".json"] : Object.keys(Module._extensions);`,
+  `  function moduleCandidates(base) {`,
+  `    return [base, ...moduleProbeExtensions.map((extension) => base + extension), path.join(base, "package.json"), ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension))];`,
+  `  }`,
+  `  const recordedModuleBases = new Set();`,
+  `  function recordModuleCandidates(base) {`,
+  `    const resolvedBase = path.resolve(base);`,
+  `    if (recordedModuleBases.has(resolvedBase)) return;`,
+  `    recordedModuleBases.add(resolvedBase);`,
+  `    for (const candidate of moduleCandidates(resolvedBase)) inputs.add(path.resolve(candidate));`,
+  `    try {`,
+  `      const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));`,
+  `      if (typeof manifest.main === "string" && manifest.main.trim() !== "") recordModuleCandidates(path.resolve(resolvedBase, manifest.main));`,
+  `    } catch {}`,
+  `  }`,
+  `  function candidateSelected(base, selected) {`,
+  `    if (selected === undefined) return false;`,
+  `    for (const candidate of moduleCandidates(base)) {`,
+  `      try {`,
+  `        const canonical = fs.realpathSync.native(candidate);`,
+  `        const relative = path.relative(canonical, selected);`,
+  `        if (relative === "" || (fs.statSync(canonical).isDirectory() && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))) return true;`,
+  `      } catch {}`,
+  `    }`,
+  `    return false;`,
+  `  }`,
+  `  function recordResolutionCandidates(specifier, parent, resolved) {`,
+  `    const parentFile = asFile(parent);`,
+  `    if (typeof specifier !== "string" || parentFile === undefined) return;`,
+  `    let selected;`,
+  `    try { const file = asFile(resolved); selected = file === undefined ? undefined : fs.realpathSync.native(file); } catch {}`,
+  `    if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {`,
+  `      try {`,
+  `        const base = specifier.startsWith("file:") ? fileURLToPath(specifier) : path.resolve(path.dirname(parentFile), specifier);`,
+  `        let exact = false;`,
+  `        try { exact = selected !== undefined && fs.realpathSync.native(base) === selected; } catch {}`,
+  `        if (!exact) recordModuleCandidates(base);`,
+  `      } catch {}`,
+  `      return;`,
+  `    }`,
+  `    if (Module.isBuiltin(specifier) || specifier.startsWith("#")) return;`,
+  `    const parts = specifier.split("/");`,
+  `    const packageParts = parts[0].startsWith("@") ? parts.slice(0, 2) : parts.slice(0, 1);`,
+  `    if (packageParts.some((part) => part === undefined || part === "")) return;`,
+  `    const packageName = packageParts.join("/");`,
+  `    const subpath = parts.slice(packageParts.length);`,
+  `    const searchPaths = Module.createRequire(parentFile).resolve.paths(specifier) ?? [];`,
+  `    for (const searchPath of searchPaths) {`,
+  `      const packageDirectory = path.join(searchPath, packageName);`,
+  `      recordModuleCandidates(packageDirectory);`,
+  `      if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));`,
+  `      if (candidateSelected(packageDirectory, selected)) break;`,
+  `    }`,
+  `  }`,
+  `  function scanBunModuleGraph(entry) {`,
+  `    if (typeof globalThis.Bun !== "object" || typeof globalThis.Bun.Transpiler !== "function") return;`,
+  `    const scanned = new Set();`,
+  `    function scan(file) {`,
+  `      file = asFile(file);`,
+  `      if (file === undefined) return;`,
+  `      let canonical;`,
+  `      try { canonical = fs.realpathSync.native(file); } catch { return; }`,
+  `      if (scanned.has(canonical)) return;`,
+  `      scanned.add(canonical);`,
+  `      const extension = path.extname(canonical).toLowerCase();`,
+  `      if (![".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"].includes(extension)) return;`,
+  `      const loader = extension === ".tsx" ? "tsx" : extension === ".jsx" ? "jsx" : [".ts", ".mts", ".cts"].includes(extension) ? "ts" : "js";`,
+  `      let imports;`,
+  `      try {`,
+  `        const source = fs.readFileSync(canonical, "utf8");`,
+  `        imports = new globalThis.Bun.Transpiler({ loader }).scan(source).imports;`,
+  `      } catch { return; }`,
+  `      for (const imported of imports) {`,
+  `        const specifier = imported && imported.path;`,
+  `        if (typeof specifier !== "string" || specifier.startsWith("node:") || Module.isBuiltin(specifier)) continue;`,
+  `        try {`,
+  `          const resolved = globalThis.Bun.resolveSync(specifier, path.dirname(canonical));`,
+  `          recordResolutionCandidates(specifier, canonical, resolved);`,
+  `          recordFile(resolved);`,
+  `          scan(resolved);`,
+  `        } catch {`,
+  `          // The real descriptor load below owns user-facing resolution errors.`,
+  `        }`,
+  `      }`,
+  `    }`,
+  `    scan(entry);`,
   `  }`,
   `  const resolveFilename = Module._resolveFilename;`,
   `  Module._resolveFilename = function () {`,
-  `    const resolved = Reflect.apply(resolveFilename, this, arguments);`,
-  `    recordResolved(resolved);`,
+  `    let resolved;`,
+  `    try {`,
+  `      resolved = Reflect.apply(resolveFilename, this, arguments);`,
+  `    } catch (error) {`,
+  `      if (error && (typeof error === "object" || typeof error === "function")) moduleResolutionFailures.add(error);`,
+  `      throw error;`,
+  `    }`,
+  `    const parent = arguments[1] && arguments[1].filename;`,
+  `    recordResolutionCandidates(arguments[0], parent, resolved);`,
+  `    recordFile(resolved);`,
   `    return resolved;`,
   `  };`,
   `  if (typeof Module.registerHooks === "function") {`,
   `    Module.registerHooks({`,
   `      resolve(specifier, resolveContext, nextResolve) {`,
   `        const resolved = nextResolve(specifier, resolveContext);`,
-  `        recordResolved(resolved && resolved.url);`,
+  `        const url = typeof resolved === "string" ? resolved : resolved && resolved.url;`,
+  `        recordResolutionCandidates(specifier, resolveContext.parentURL, url);`,
+  `        recordFile(url);`,
   `        return resolved;`,
   `      },`,
   `    });`,
@@ -974,8 +1256,11 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `            insideBunResolve = true;`,
   `            const importer = args.importer && args.importer.startsWith("file:") ? fileURLToPath(args.importer) : args.importer;`,
   `            const from = importer ? path.dirname(importer) : process.cwd();`,
-  `            recordResolved(globalThis.Bun.resolveSync(args.path, from));`,
+  `            const resolved = globalThis.Bun.resolveSync(args.path, from);`,
+  `            recordResolutionCandidates(args.path, importer, resolved);`,
+  `            recordFile(resolved);`,
   `          } catch {`,
+  `            // The real resolver below owns user-facing resolution errors.`,
   `          } finally {`,
   `            insideBunResolve = false;`,
   `          }`,
@@ -983,6 +1268,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `      },`,
   `    });`,
   `  }`,
+  `  scanBunModuleGraph(request);`,
   `  let mod;`,
   `  try {`,
   `    mod = require(request);`,

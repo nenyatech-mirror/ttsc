@@ -14,6 +14,7 @@ import {
   resolveProjectConfig,
   resolveProjectIdentity,
 } from "../../../../packages/ttsc/lib/compiler/internal/project/resolveProjectConfig.js";
+import { resolveNodeBinary } from "../../../../packages/ttsc/lib/internal/resolveNodeBinary.js";
 import { loadProjectPlugins } from "../../../../packages/ttsc/lib/plugin/internal/loadProjectPlugins.js";
 
 export {
@@ -23,6 +24,7 @@ export {
   os,
   path,
   readProjectConfig,
+  resolveNodeBinary,
   resolveProjectConfig,
   resolveProjectIdentity,
 };

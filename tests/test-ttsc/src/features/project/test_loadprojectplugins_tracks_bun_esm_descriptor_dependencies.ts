@@ -24,7 +24,8 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     const root = TestProject.tmpdir("ttsc-bun-esm-descriptor-input-");
     const project = path.join(root, "project");
     const source = path.join(root, "plugin-go");
-    const selection = path.join(root, "selection.mjs");
+    const selectionBase = path.join(root, "selection");
+    const selection = `${selectionBase}.js`;
     const descriptor = path.join(project, "plugin.mts");
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(source, { recursive: true });
@@ -64,7 +65,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     fs.writeFileSync(
       descriptor,
       [
-        `import source from ${JSON.stringify(selection)};`,
+        `import source from "../selection";`,
         `export default { name: "bun-esm", source };`,
         "",
       ].join("\n"),
@@ -87,5 +88,50 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     });
 
     assert.equal(loaded.nativePlugins[0]?.name, "bun-esm");
-    assert.ok(loaded.hostInputs.includes(selection));
+    const canonicalSelection = fs.realpathSync.native(selection);
+    const canonicalSelectionBase = canonicalSelection.slice(
+      0,
+      -path.extname(canonicalSelection).length,
+    );
+    assert.ok(
+      loaded.hostInputs.includes(canonicalSelection),
+      JSON.stringify(loaded.hostInputs),
+    );
+    assert.ok(
+      loaded.hostInputs.includes(`${canonicalSelectionBase}.ts`),
+      JSON.stringify(loaded.hostInputs),
+    );
+
+    const worker = path.join(root, "bun-parent-worker.cjs");
+    fs.writeFileSync(
+      worker,
+      [
+        `const { loadProjectPlugins } = require(${JSON.stringify(path.join(TestProject.WORKSPACE_ROOT, "packages", "ttsc", "lib", "plugin", "internal", "loadProjectPlugins.js"))});`,
+        `const loaded = loadProjectPlugins({`,
+        `  binary: "",`,
+        `  cacheDir: ${JSON.stringify(path.join(root, "cache"))},`,
+        `  cwd: ${JSON.stringify(project)},`,
+        `  tsconfig: ${JSON.stringify(path.join(project, "tsconfig.json"))},`,
+        `});`,
+        `process.stdout.write(JSON.stringify(loaded.hostInputs));`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const workerEnv = {
+      ...process.env,
+      TTSC_GO_BINARY: createFakeGoBinary(fakeGo),
+      TTSC_GO_CACHE_DIR: path.join(root, "go-cache"),
+    };
+    delete workerEnv.TTSC_NODE_BINARY;
+    const fromBunParent = childProcess.spawnSync(bunBinary, [worker], {
+      cwd: project,
+      encoding: "utf8",
+      env: workerEnv,
+      windowsHide: true,
+    });
+    assert.equal(fromBunParent.status, 0, fromBunParent.stderr);
+    const parentInputs = JSON.parse(fromBunParent.stdout) as string[];
+    assert.ok(parentInputs.includes(canonicalSelection));
+    assert.ok(parentInputs.includes(`${canonicalSelectionBase}.ts`));
   };

@@ -159,4 +159,41 @@ export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_pr
     assert.match(counterfeitResult.stderr, /user-assigned loader code/);
     assert.equal(fs.readFileSync(counterfeitCounter, "utf8"), "run\n");
     assert.equal(fs.existsSync(fallbackMarker), false);
+
+    const missingCounter = path.join(root, "counterfeit-missing-runs.txt");
+    const missingDescriptor = path.join(root, "counterfeit-missing.cts");
+    fs.writeFileSync(
+      path.join(root, "phantom.ts"),
+      "export const value = 1;\n",
+    );
+    fs.writeFileSync(
+      missingDescriptor,
+      [
+        `const fs = require("node:fs");`,
+        `fs.appendFileSync(${JSON.stringify(missingCounter)}, "run\\n");`,
+        `const failure = new Error("Cannot find module './phantom'");`,
+        `Object.assign(failure, { code: "MODULE_NOT_FOUND", requireStack: [__filename] });`,
+        `throw failure;`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { plugins: [{ transform: missingDescriptor }] },
+      }),
+      "utf8",
+    );
+    const missingResult = await spawnNodeWorker({
+      env: {
+        TTSC_BINARY: TestProject.NATIVE_BINARY,
+        TTSC_TSGO_BINARY: TestProject.TSGO_BINARY,
+        TTSC_TTSX_BINARY: fakeTtsx,
+      },
+      script,
+    });
+    assert.match(missingResult.stderr, /Cannot find module '\.\/phantom'/);
+    assert.equal(fs.readFileSync(missingCounter, "utf8"), "run\n");
+    assert.equal(fs.existsSync(fallbackMarker), false);
   };
