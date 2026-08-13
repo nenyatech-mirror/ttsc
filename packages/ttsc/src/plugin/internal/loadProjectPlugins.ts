@@ -2052,6 +2052,7 @@ function loadDescriptorViaTtsx(
           dirname: context.dirname,
           filename: context.filename,
           plugin: context.plugin,
+          pluginConfigDir: context.pluginConfigDir,
           projectRoot: context.projectRoot,
           tsconfig: context.tsconfig,
         }),

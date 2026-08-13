@@ -62,6 +62,12 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
         'const path = require("node:path");',
         "const loaderDir = path.dirname(process.argv.at(-1));",
         'fs.writeFileSync(process.env.TTSC_FAKE_DESCRIPTOR_MARKER, loaderDir, "utf8");',
+        "if (process.env.TTSC_EXPECT_PLUGIN_CONFIG_DIR) {",
+        "  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);",
+        "  if (context.pluginConfigDir !== process.env.TTSC_EXPECT_PLUGIN_CONFIG_DIR) {",
+        "    throw new Error(`pluginConfigDir mismatch: ${JSON.stringify(context.pluginConfigDir)}`);",
+        "  }",
+        "}",
         "switch (process.env.TTSC_FAKE_DESCRIPTOR_MODE) {",
         '  case "nonzero":',
         "    for (let i = 1; i <= 7; i++) console.error(`descriptor failure ${i}`);",
@@ -113,6 +119,7 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
         "  new TtscCompiler({",
         `    cwd: ${JSON.stringify(root)},`,
         "    env: process.env,",
+        `    pluginConfigDir: ${JSON.stringify(root)},`,
         `    tsconfig: ${JSON.stringify(tsconfig)},`,
         "  }).prepare();",
         '  process.stderr.write("NO_ERROR\\n");',
@@ -241,7 +248,10 @@ function runNodeSurface(options: {
 }): ReturnType<typeof TestProject.spawn> {
   return TestProject.spawn(process.execPath, options.args, {
     cwd: options.root,
-    env: fakeEnvironment(options.fakeTtsx, options.marker, options.mode),
+    env: {
+      ...fakeEnvironment(options.fakeTtsx, options.marker, options.mode),
+      TTSC_EXPECT_PLUGIN_CONFIG_DIR: options.root,
+    },
   });
 }
 
