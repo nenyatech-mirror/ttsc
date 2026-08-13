@@ -95,10 +95,10 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
       resolutionProject,
       "lint.config.ts",
     );
-    const selectedModule = path.join(resolutionProject, "selection.mjs");
+    const selectedModule = path.join(resolutionProject, "selection.js");
     fs.writeFileSync(
       selectedModule,
-      'export default "warning";\n',
+      'module.exports = "warning";\n',
       "utf8",
     );
     fs.writeFileSync(
