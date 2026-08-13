@@ -89,6 +89,12 @@ jobs:
         shell: bash
         run: echo "TTSC_GO_BINARY=$(go env GOROOT)/bin/go" >> "$GITHUB_ENV"
 
+      - name: Verify Bun Descriptor Dependency Tracking
+        if: matrix.bun
+        run: pnpm --filter @ttsc/test-ttsc start -- --include=loadprojectplugins_tracks_bun_esm_descriptor_dependencies
+        env:
+          TTSC_BUN_BINARY: bun
+
       - name: Build Current Platform For Selected Tasks
         if: matrix.build
         run: pnpm run build:current

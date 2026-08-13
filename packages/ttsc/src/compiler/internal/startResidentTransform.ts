@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import { loadProjectPlugins } from "../../plugin/internal/loadProjectPlugins";
 import type { ITtscCompilerContext } from "../../structures/ITtscCompilerContext";
 import type { ITtscLoadedNativePlugin } from "../../structures/internal/ITtscLoadedNativePlugin";
@@ -101,7 +102,6 @@ function residentEnv(
   const pluginConfigDir = resolvePluginConfigDir(context);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TTSC_NODE_BINARY: process.env.TTSC_NODE_BINARY ?? process.execPath,
     ...(pluginConfigDir === undefined
       ? {}
       : { TTSC_PLUGIN_CONFIG_DIR: pluginConfigDir }),
@@ -111,6 +111,9 @@ function residentEnv(
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
     ...context.env,
   };
+  const node = resolveNodeBinary(env, context.cwd ?? process.cwd());
+  if (node === undefined) delete env.TTSC_NODE_BINARY;
+  else env.TTSC_NODE_BINARY = node;
   // The anchor is per-invocation state owned by this host: when this run
   // declared none (and the caller's env does not name one), drop any value
   // inherited from an ancestor ttsc process so a nested build never

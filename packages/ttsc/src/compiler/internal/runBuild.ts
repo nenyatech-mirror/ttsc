@@ -6,6 +6,7 @@ import {
   type ProjectInputPathIdentityContext,
   createProjectInputPathIdentityContext,
 } from "../../internal/projectInputPathIdentity";
+import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import {
   hasProjectPluginEntries,
   loadProjectPlugins,
@@ -102,12 +103,14 @@ type BuildTiming = {
  * without searching `PATH`.
  */
 function mergeEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const base = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TTSC_NODE_BINARY: process.env.TTSC_NODE_BINARY ?? process.execPath,
+    ...extra,
   };
-  if (!extra) return base;
-  return { ...base, ...extra };
+  const node = resolveNodeBinary(env);
+  if (node === undefined) delete env.TTSC_NODE_BINARY;
+  else env.TTSC_NODE_BINARY = node;
+  return env;
 }
 
 function createBuildTiming(options: TtscCommonOptions): BuildTiming {

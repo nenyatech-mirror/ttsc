@@ -7,6 +7,10 @@ import path from "node:path";
 import { findNearestGoMod } from "../../compiler/internal/paths";
 import { readJsonFile } from "../../compiler/internal/project/readConfigJson";
 import { readProjectConfig } from "../../compiler/internal/project/readProjectConfig";
+import {
+  javascriptRuntimeCapabilities,
+  resolveNodeBinary,
+} from "../../internal/resolveNodeBinary";
 import type { ITtscPlugin } from "../../structures/ITtscPlugin";
 import type { ITtscPluginContributor } from "../../structures/ITtscPluginContributor";
 import type { ITtscPluginFactoryContext } from "../../structures/ITtscPluginFactoryContext";
@@ -794,9 +798,15 @@ function loadCommonJsDescriptor(
   effectiveEnv: NodeJS.ProcessEnv,
 ): IsolatedPluginDescriptor {
   const runtime = pluginDescriptorRuntimeBinary(effectiveEnv);
-  const bunRuntime = pluginDescriptorUsesBunRuntime(runtime);
+  const runtimeCapabilities = javascriptRuntimeCapabilities(
+    runtime,
+    effectiveEnv,
+    context.projectRoot,
+  );
+  const node = resolveNodeBinary(effectiveEnv, context.projectRoot);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
   const out = path.join(dir, "descriptor.json");
+  const diagnostics = path.join(dir, "descriptor.stderr");
   const runtimeHookPreload = path.join(
     __dirname,
     "..",
@@ -806,45 +816,53 @@ function loadCommonJsDescriptor(
     "runtimeHookPreload.js",
   );
   try {
-    const result = childProcess.spawnSync(
-      runtime,
-      [
-        ...(bunRuntime ? [] : ["--require", runtimeHookPreload]),
-        "-e",
-        COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
-      ],
-      {
-        cwd: context.projectRoot,
-        env: {
-          ...effectiveEnv,
-          // `effectiveEnv` can be the instance snapshot taken before
-          // withPluginLoaderEnv supplied these host-owned locators.
-          TTSC_NODE_BINARY:
-            effectiveEnv.TTSC_NODE_BINARY ??
-            process.env.TTSC_NODE_BINARY ??
-            runtime,
-          TTSC_TTSX_BINARY:
-            effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY,
-          TTSC_PLUGIN_CONTEXT: JSON.stringify(context),
-          TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
-          TTSC_PLUGIN_DESCRIPTOR_OUT: out,
-          TTSC_PLUGIN_ENTRY: request,
+    const diagnosticsFd = fs.openSync(diagnostics, "w");
+    let result: ReturnType<typeof childProcess.spawnSync>;
+    try {
+      result = childProcess.spawnSync(
+        runtime,
+        [
+          ...(runtimeCapabilities.registerHooks
+            ? ["--require", runtimeHookPreload]
+            : []),
+          "-e",
+          COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+        ],
+        {
+          cwd: context.projectRoot,
+          env: {
+            ...effectiveEnv,
+            // The direct evaluator may be Bun, but ttsx and native config
+            // loaders require a real Node runtime with synchronous hooks.
+            ...(node === undefined ? {} : { TTSC_NODE_BINARY: node }),
+            TTSC_TTSX_BINARY:
+              effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY,
+            TTSC_PLUGIN_CONTEXT: JSON.stringify(context),
+            TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
+            TTSC_PLUGIN_DESCRIPTOR_OUT: out,
+            TTSC_PLUGIN_ENTRY: request,
+          },
+          // Hold direct-evaluator diagnostics until its retry decision is
+          // known. A successful ttsx fallback must not inherit the expected
+          // loader stack from the discarded first attempt.
+          stdio: ["ignore", diagnosticsFd, diagnosticsFd],
+          windowsHide: true,
         },
-        // Descriptor output is never protocol output. Send both child streams
-        // to the parent's human channel so a console.log cannot corrupt CLI,
-        // API, LSP, or watch JSON written on stdout.
-        stdio: ["ignore", 2, 2],
-        windowsHide: true,
-      },
-    );
+      );
+    } finally {
+      fs.closeSync(diagnosticsFd);
+    }
     const failure = commonJsDescriptorProcessFailure(result, request);
     if (failure !== undefined) {
       const reason = pluginDescriptorFailureReason(out);
+      const retryWithTtsx = commonJsDescriptorRetryWithTtsx(out);
+      if (!retryWithTtsx) replayEvaluationDiagnostics(diagnostics);
       throw new CommonJsDescriptorLoadError(
         reason === "" ? failure.message : `${failure.message}\n${reason}`,
-        commonJsDescriptorRetryWithTtsx(out),
+        retryWithTtsx,
       );
     }
+    replayEvaluationDiagnostics(diagnostics);
     if (!fs.existsSync(out)) {
       throw new Error(
         `ttsc: plugin descriptor "${request}" evaluation in an isolated process produced no descriptor output.`,
@@ -899,11 +917,15 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `const fs = require("node:fs");`,
   `const Module = require("node:module");`,
   `const path = require("node:path");`,
+  `const { fileURLToPath } = require("node:url");`,
   `const out = process.env.TTSC_PLUGIN_DESCRIPTOR_OUT;`,
   `let retryWithTtsx = false;`,
   `function shouldRetryWithTtsx(error, request) {`,
   `  const code = error && error.code;`,
-  `  if (code === "ERR_UNKNOWN_FILE_EXTENSION" || code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" || code === "ERR_INVALID_TYPESCRIPT_SYNTAX") return true;`,
+  `  const stackText = String(error && error.stack || "");`,
+  `  const message = String(error && error.message || "");`,
+  `  if (code === "ERR_UNKNOWN_FILE_EXTENSION") return error instanceof TypeError && /^Unknown file extension /.test(message) && stackText.includes("node:internal/modules/esm/get_format");`,
+  `  if (code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" || code === "ERR_INVALID_TYPESCRIPT_SYNTAX") return error instanceof SyntaxError && stackText.includes("node:internal/modules/typescript");`,
   `  if (code !== "MODULE_NOT_FOUND") return false;`,
   `  const firstLine = String(error && error.message || "").split("\\n", 1)[0];`,
   `  const firstQuote = firstLine.indexOf("'");`,
@@ -919,12 +941,48 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  const request = process.env.TTSC_PLUGIN_ENTRY;`,
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
   `  const inputs = new Set([path.resolve(request)]);`,
+  `  function recordResolved(resolved) {`,
+  `    if (typeof resolved !== "string") return;`,
+  `    if (resolved.startsWith("file:")) {`,
+  `      try { resolved = fileURLToPath(resolved); } catch { return; }`,
+  `    }`,
+  `    if (path.isAbsolute(resolved)) inputs.add(path.resolve(resolved));`,
+  `  }`,
   `  const resolveFilename = Module._resolveFilename;`,
   `  Module._resolveFilename = function () {`,
   `    const resolved = Reflect.apply(resolveFilename, this, arguments);`,
-  `    if (typeof resolved === "string" && path.isAbsolute(resolved)) inputs.add(path.resolve(resolved));`,
+  `    recordResolved(resolved);`,
   `    return resolved;`,
   `  };`,
+  `  if (typeof Module.registerHooks === "function") {`,
+  `    Module.registerHooks({`,
+  `      resolve(specifier, resolveContext, nextResolve) {`,
+  `        const resolved = nextResolve(specifier, resolveContext);`,
+  `        recordResolved(resolved && resolved.url);`,
+  `        return resolved;`,
+  `      },`,
+  `    });`,
+  `  }`,
+  `  if (typeof globalThis.Bun === "object" && typeof globalThis.Bun.plugin === "function") {`,
+  `    let insideBunResolve = false;`,
+  `    globalThis.Bun.plugin({`,
+  `      name: "ttsc-plugin-descriptor-inputs",`,
+  `      setup(build) {`,
+  `        build.onResolve({ filter: /.*/ }, (args) => {`,
+  `          if (insideBunResolve || args.path.startsWith("node:")) return;`,
+  `          try {`,
+  `            insideBunResolve = true;`,
+  `            const importer = args.importer && args.importer.startsWith("file:") ? fileURLToPath(args.importer) : args.importer;`,
+  `            const from = importer ? path.dirname(importer) : process.cwd();`,
+  `            recordResolved(globalThis.Bun.resolveSync(args.path, from));`,
+  `          } catch {`,
+  `          } finally {`,
+  `            insideBunResolve = false;`,
+  `          }`,
+  `        });`,
+  `      },`,
+  `    });`,
+  `  }`,
   `  let mod;`,
   `  try {`,
   `    mod = require(request);`,
@@ -1054,9 +1112,9 @@ function loadDescriptorViaTtsx(
   // Binary discovery prefers the instance environment, then the ambient
   // process.env (where `withPluginLoaderEnv` injects ttsc's own node/ttsx paths
   // just before this runs), then the running interpreter.
-  const node = pluginDescriptorRuntimeBinary(effectiveEnv);
+  const node = resolveNodeBinary(effectiveEnv, context.projectRoot);
   const ttsx = effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY;
-  if (ttsx === undefined || ttsx.length === 0) {
+  if (node === undefined || ttsx === undefined || ttsx.length === 0) {
     return undefined;
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
@@ -1143,7 +1201,10 @@ function errorMessage(error: unknown): string {
 function withPluginLoaderEnv<T>(run: () => T): T {
   const previousNode = process.env.TTSC_NODE_BINARY;
   const previousTtsx = process.env.TTSC_TTSX_BINARY;
-  process.env.TTSC_NODE_BINARY ??= pluginDescriptorRuntimeBinary({});
+  const node = resolveNodeBinary({}, process.cwd());
+  if (process.env.TTSC_NODE_BINARY === undefined && node !== undefined) {
+    process.env.TTSC_NODE_BINARY = node;
+  }
   process.env.TTSC_TTSX_BINARY ??= path.join(
     __dirname,
     "..",
@@ -1170,17 +1231,34 @@ function withPluginLoaderEnv<T>(run: () => T): T {
  * authoritative and receives the preload as usual.
  */
 function pluginDescriptorRuntimeBinary(env: NodeJS.ProcessEnv): string {
+  if (
+    env.TTSC_NODE_BINARY === undefined &&
+    typeof (process.versions as Record<string, string | undefined>).bun ===
+      "string"
+  ) {
+    return process.execPath;
+  }
   return (
     env.TTSC_NODE_BINARY ?? process.env.TTSC_NODE_BINARY ?? process.execPath
   );
 }
 
-/** Whether `runtime` is the current Bun executable rather than Node.js. */
-function pluginDescriptorUsesBunRuntime(runtime: string): boolean {
-  return (
-    typeof (process.versions as Record<string, string | undefined>).bun ===
-      "string" && runtime === process.execPath
-  );
+/** Replay a child's human output without imposing a fixed output ceiling. */
+function replayEvaluationDiagnostics(file: string): void {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, "r");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const length = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (length === 0) break;
+      fs.writeSync(2, buffer, 0, length);
+    }
+  } catch {
+    // Diagnostic replay must never replace the descriptor result.
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 function restoreEnv(

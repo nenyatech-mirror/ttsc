@@ -7,11 +7,11 @@ import path from "node:path";
  * Verifies descriptor failures propagate across setup surfaces and clean up.
  *
  * The generated loader lives in a private temporary directory and executable
- * descriptor evaluation precedes CLI, API, and LSP setup. The fixture emits a
- * loader-classified error to force the `ttsx` fallback after the isolated
- * evaluator has installed its TypeScript hooks. Each returned failure must
- * preserve its cause without leaving loader artifacts; a successful evaluator
- * must clean up before later descriptor validation too.
+ * descriptor evaluation precedes CLI, API, and LSP setup. The fixture imports
+ * an unsupported extension so Node itself emits the loader-classified error
+ * that forces the `ttsx` fallback. Each returned failure must preserve its
+ * cause without leaving loader artifacts; a successful evaluator must clean up
+ * before later descriptor validation too.
  *
  * 1. Drive non-zero, stdout-only, enveloped, foreign-result, missing, malformed,
  *    and successful results.
@@ -32,11 +32,15 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
     fs.writeFileSync(
       path.join(descriptorRoot, "index.ts"),
       [
-        'const failure = new Error("force descriptor fallback");',
-        'Object.assign(failure, { code: "ERR_UNKNOWN_FILE_EXTENSION" });',
-        "throw failure;",
+        'import "./unsupported.xyz";',
+        'export default { name: "unreached", source: "./absent" };',
         "",
       ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(descriptorRoot, "unsupported.xyz"),
+      "export default 1;\n",
       "utf8",
     );
     const tsconfig = path.join(root, "tsconfig.json");
@@ -172,6 +176,11 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
       });
       assert.equal(result.status, 1, testCase.mode);
       assert.match(result.stderr, testCase.pattern, testCase.mode);
+      assert.doesNotMatch(
+        result.stderr,
+        /ERR_UNKNOWN_FILE_EXTENSION|Unknown file extension/,
+        `${testCase.mode} leaked the discarded direct-loader diagnostic`,
+      );
       if ("absent" in testCase) {
         assert.doesNotMatch(result.stderr, testCase.absent, testCase.mode);
       }

@@ -18,6 +18,8 @@ import { assert, fs, path, spawnNodeWorker } from "../../internal/source-build";
  *    factory ran once.
  * 3. Replace it with a top-level side-effect-plus-throw and assert that module
  *    initialization also runs once instead of being retried through ttsx.
+ * 4. Give a user error a loader-like `code` and assert that mutable metadata alone
+ *    cannot trigger the fallback or duplicate its side effect.
  */
 export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_process_boundaries =
   async () => {
@@ -117,4 +119,44 @@ export const test_loadprojectplugins_isolated_typescript_descriptor_preserves_pr
     });
     assert.match(moduleResult.stderr, /module-initialization:loaded/);
     assert.equal(fs.readFileSync(moduleCounter, "utf8"), "run\n");
+
+    const counterfeitCounter = path.join(root, "counterfeit-runs.txt");
+    const fallbackMarker = path.join(root, "counterfeit-fallback.txt");
+    const fakeTtsx = path.join(root, "counterfeit-ttsx.cjs");
+    const counterfeitDescriptor = path.join(root, "counterfeit.cts");
+    fs.writeFileSync(
+      fakeTtsx,
+      `require("node:fs").writeFileSync(${JSON.stringify(fallbackMarker)}, "ran");\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      counterfeitDescriptor,
+      [
+        `const fs = require("node:fs");`,
+        `fs.appendFileSync(${JSON.stringify(counterfeitCounter)}, "run\\n");`,
+        `const failure = new TypeError("user-assigned loader code");`,
+        `Object.assign(failure, { code: "ERR_UNKNOWN_FILE_EXTENSION" });`,
+        `throw failure;`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { plugins: [{ transform: counterfeitDescriptor }] },
+      }),
+      "utf8",
+    );
+    const counterfeitResult = await spawnNodeWorker({
+      env: {
+        TTSC_BINARY: TestProject.NATIVE_BINARY,
+        TTSC_TSGO_BINARY: TestProject.TSGO_BINARY,
+        TTSC_TTSX_BINARY: fakeTtsx,
+      },
+      script,
+    });
+    assert.match(counterfeitResult.stderr, /user-assigned loader code/);
+    assert.equal(fs.readFileSync(counterfeitCounter, "utf8"), "run\n");
+    assert.equal(fs.existsSync(fallbackMarker), false);
   };

@@ -14,6 +14,7 @@ import {
   createProjectInputPathIdentityContext,
   resolveProjectInputPath,
 } from "../../internal/projectInputPathIdentity";
+import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import {
   hasProjectPluginEntries,
   loadProjectPlugins,
@@ -199,12 +200,14 @@ function lspSidecarEnvironment(options: {
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TTSC_NODE_BINARY: process.env.TTSC_NODE_BINARY ?? process.execPath,
     TTSC_TSGO_BINARY: options.tsgoBinary,
     TTSC_TTSX_BINARY:
       process.env.TTSC_TTSX_BINARY ??
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
   };
+  const node = resolveNodeBinary(env);
+  if (node === undefined) delete env.TTSC_NODE_BINARY;
+  else env.TTSC_NODE_BINARY = node;
   if (options.pluginConfigOrigin === undefined) {
     delete env.TTSC_PLUGIN_CONFIG_DIR;
   } else {
