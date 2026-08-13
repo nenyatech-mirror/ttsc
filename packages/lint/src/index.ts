@@ -288,7 +288,8 @@ function resolveConfigFileContributors(
         dependency.scope === "watch" && dependency.kind !== "directory",
     )
     .map((dependency) => dependency.path);
-  const dependencyHashes: Record<string, string | null> = {};
+  const hostInputHashes = { ...discovery.hostInputHashes };
+  const unprovenInputs = new Set<string>();
   const missingOptionalDigest = createHash("sha256")
     .update("missing\0")
     .digest("hex");
@@ -297,20 +298,36 @@ function resolveConfigFileContributors(
       continue;
     }
     const input = path.resolve(dependency.path);
-    if (dependency.kind === "file") {
-      dependencyHashes[input] = dependency.digest;
+    let hash: string | null | undefined;
+    if (
+      dependency.kind === "file" &&
+      /^[0-9a-f]{64}$/.test(dependency.digest)
+    ) {
+      hash = dependency.digest;
     } else if (dependency.digest === missingOptionalDigest) {
       // The evaluator's optional-file digest includes a state prefix. The
       // public host-input contract uses null for the observed missing state.
-      dependencyHashes[input] = null;
+      hash = null;
+    }
+    if (hash === undefined) {
+      delete hostInputHashes[input];
+      unprovenInputs.add(input);
+    } else if (unprovenInputs.has(input)) {
+      // A later observation cannot revive proof another evaluation stage
+      // could not provide for the same combined descriptor result.
+    } else if (
+      Object.prototype.hasOwnProperty.call(hostInputHashes, input) &&
+      hostInputHashes[input] !== hash
+    ) {
+      delete hostInputHashes[input];
+      unprovenInputs.add(input);
+    } else {
+      hostInputHashes[input] = hash;
     }
   }
   return {
     contributors: out,
-    hostInputHashes: {
-      ...discovery.hostInputHashes,
-      ...dependencyHashes,
-    },
+    hostInputHashes,
     hostInputs: [...discovery.hostInputs, ...dependencyInputs],
   };
 }
@@ -2113,7 +2130,10 @@ function normalizeConfigDependencyFingerprints(
     const digest = (candidate as ConfigDependencyFingerprint).digest;
     const kind = (candidate as ConfigDependencyFingerprint).kind;
     const scope = (candidate as ConfigDependencyFingerprint).scope;
-    if (!path.isAbsolute(candidatePath) || !/^[0-9a-f]{64}$/.test(digest)) {
+    if (
+      !path.isAbsolute(candidatePath) ||
+      (digest !== "" && !/^[0-9a-f]{64}$/.test(digest))
+    ) {
       return undefined;
     }
     const location = path.resolve(candidatePath);

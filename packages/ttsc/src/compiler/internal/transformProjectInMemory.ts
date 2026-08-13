@@ -3,7 +3,6 @@ import path from "node:path";
 import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import {
   collectProjectHostInputs,
-  hasProjectPluginEntries,
   hashHostInputPaths,
   loadProjectPlugins,
 } from "../../plugin/internal/loadProjectPlugins";
@@ -16,7 +15,6 @@ import type { TtscBuildResult } from "../../structures/internal/TtscBuildResult"
 import { buildNativeCompiler } from "./buildNativeCompiler";
 import { packageRootDir } from "./paths";
 import { createNativeProjectContextArgs } from "./project/createNativeProjectContextArgs";
-import { readProjectConfig } from "./project/readProjectConfig";
 import { resolveBinary } from "./resolveBinary";
 import { resolveTsgo } from "./resolveTsgo";
 import { appendBuildOutput, normalizeBuildOutput } from "./runBuild";
@@ -54,23 +52,20 @@ export function transformProjectInMemory(options: ITtscCompilerContext): {
   volatile?: string[];
 } {
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const project = readProjectConfig({
+  const loaded = loadProjectPlugins({
+    binary: resolveBinary(options) ?? "",
+    cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
     cwd,
+    entries: options.plugins,
+    env: { ...process.env, ...options.env },
+    pluginConfigDir: options.pluginConfigDir,
     projectRoot: options.projectRoot,
     tsconfig: options.tsconfig,
   });
-  if (hasConfiguredPlugins(options, project)) {
-    return transformProjectWithPlugins(options, cwd, project);
+  if (loaded.nativePlugins.length !== 0) {
+    return transformProjectWithPlugins(options, loaded);
   }
-  return transformProjectWithNativeHost(options, project);
-}
-
-/** Return true when the project or the call-level options declare any plugins. */
-function hasConfiguredPlugins(
-  options: ITtscCompilerContext,
-  project: ITtscParsedProjectConfig,
-): boolean {
-  return hasProjectPluginEntries(project, options.plugins);
+  return transformProjectWithNativeHost(options, loaded.project, loaded);
 }
 
 /**
@@ -81,6 +76,10 @@ function hasConfiguredPlugins(
 function transformProjectWithNativeHost(
   options: ITtscCompilerContext,
   project: ITtscParsedProjectConfig,
+  baseline?: {
+    hostInputHashes: Readonly<Record<string, string | null>>;
+    hostInputs: readonly string[];
+  },
 ): {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
@@ -94,8 +93,21 @@ function transformProjectWithNativeHost(
   // Capture the project inputs before the native host observes them. Pairing a
   // post-build hash with an earlier result can bless a torn generation when a
   // config changes during the child process.
-  const projectHostInputs = collectProjectHostInputs(project);
+  // Plugin discovery already ran in loadProjectPlugins. The native host only
+  // consumes the resolved config chain here, so dependency package manifests
+  // must not become per-project universal inputs a second time.
+  const projectHostInputs = collectProjectHostInputs(project, false);
   const projectHostInputHashes = hashHostInputPaths(projectHostInputs);
+  const observedHostInputs = mergeHostInputs(
+    baseline?.hostInputs,
+    projectHostInputs,
+  );
+  const observedHostInputHashes = mergeCompatibleHostInputHashes(
+    baseline?.hostInputHashes ?? {},
+    projectHostInputHashes,
+    baseline?.hostInputs ?? [],
+    projectHostInputs,
+  );
   const binary = buildNativeCompiler({
     cacheBaseDir: project.root,
     cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
@@ -122,10 +134,12 @@ function transformProjectWithNativeHost(
   return {
     ...envelopeSideChannels(output),
     hostInputHashes: mergeCompatibleHostInputHashes(
-      projectHostInputHashes,
+      observedHostInputHashes,
       output.hostInputHashes,
+      observedHostInputs,
+      output.hostInputs,
     ),
-    hostInputs: mergeHostInputs(projectHostInputs, output.hostInputs),
+    hostInputs: mergeHostInputs(observedHostInputs, output.hostInputs),
     result: {
       diagnostics: output.diagnostics,
       status: res.status ?? 1,
@@ -138,8 +152,7 @@ function transformProjectWithNativeHost(
 
 function transformProjectWithPlugins(
   options: ITtscCompilerContext,
-  cwd: string,
-  project: ITtscParsedProjectConfig,
+  loaded: ReturnType<typeof loadProjectPlugins>,
 ): {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
@@ -150,16 +163,7 @@ function transformProjectWithPlugins(
   typescript: Record<string, string>;
   volatile?: string[];
 } {
-  const loaded = loadProjectPlugins({
-    binary: resolveBinary(options) ?? "",
-    cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
-    cwd,
-    entries: options.plugins,
-    env: { ...process.env, ...options.env },
-    pluginConfigDir: options.pluginConfigDir,
-    projectRoot: options.projectRoot,
-    tsconfig: project.path,
-  });
+  const { project } = loaded;
   const checks = loaded.nativePlugins.filter(
     (plugin) => plugin.stage === "check",
   );
@@ -192,6 +196,8 @@ function transformProjectWithPlugins(
       hostInputHashes: mergeCompatibleHostInputHashes(
         loaded.hostInputHashes,
         transformed.hostInputHashes,
+        loaded.hostInputs,
+        transformed.hostInputs,
       ),
       hostInputs: mergeHostInputs(loaded.hostInputs, transformed.hostInputs),
       result: appendBuildOutput(checked, transformed.result),
@@ -233,6 +239,8 @@ function transformProjectWithPlugins(
     hostInputHashes: mergeCompatibleHostInputHashes(
       loaded.hostInputHashes,
       output.hostInputHashes,
+      loaded.hostInputs,
+      output.hostInputs,
     ),
     hostInputs: mergeHostInputs(loaded.hostInputs, output.hostInputs),
     result: appendBuildOutput(checked, result),
@@ -286,11 +294,40 @@ function mergeHostInputs(
 function mergeCompatibleHostInputHashes(
   first: Readonly<Record<string, string | null>>,
   second: Readonly<Record<string, string | null>> | undefined,
+  firstInputs: readonly string[],
+  secondInputs: readonly string[] | undefined,
 ): Record<string, string | null> {
-  if (second === undefined) return { ...first };
-  const output = { ...first };
-  for (const [file, hash] of Object.entries(second)) {
+  const firstDeclared = new Set(
+    firstInputs.map((input) => path.resolve(input)),
+  );
+  const secondDeclared = new Set(
+    (secondInputs ?? []).map((input) => path.resolve(input)),
+  );
+  const output = Object.fromEntries(
+    Object.entries(first).flatMap(([file, hash]) => {
+      const absolute = path.resolve(file);
+      return firstDeclared.has(absolute) ? [[absolute, hash] as const] : [];
+    }),
+  );
+  const unproven = new Set<string>();
+  for (const input of firstInputs) {
+    const absolute = path.resolve(input);
+    if (!Object.prototype.hasOwnProperty.call(first, absolute)) {
+      delete output[absolute];
+      unproven.add(absolute);
+    }
+  }
+  for (const input of secondInputs ?? []) {
+    const absolute = path.resolve(input);
+    if (!Object.prototype.hasOwnProperty.call(second ?? {}, absolute)) {
+      delete output[absolute];
+      unproven.add(absolute);
+    }
+  }
+  for (const [file, hash] of Object.entries(second ?? {})) {
     const absolute = path.resolve(file);
+    if (!secondDeclared.has(absolute)) continue;
+    if (unproven.has(absolute)) continue;
     if (
       Object.prototype.hasOwnProperty.call(output, absolute) &&
       output[absolute] !== hash
@@ -299,6 +336,7 @@ function mergeCompatibleHostInputHashes(
       // persistent adapters replace the generation without turning advisory
       // cache metadata into a user-facing compile failure.
       delete output[absolute];
+      unproven.add(absolute);
       continue;
     }
     output[absolute] = hash;

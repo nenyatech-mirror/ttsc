@@ -43,6 +43,12 @@ type PackageManifest = {
   ttsc?: unknown;
 };
 
+type ProjectHostInputSnapshot = {
+  hostInputHashes: Record<string, string | null>;
+  hostInputs: string[];
+  project: ITtscParsedProjectConfig;
+};
+
 /**
  * Resolve, load, and build all native plugin sidecars for a TypeScript project.
  *
@@ -89,16 +95,16 @@ export function loadProjectPlugins(options: {
   // direct descriptor evaluator must remain Bun unless the caller explicitly
   // selected another runtime.
   const effectiveEnv = { ...(options.env ?? process.env) };
-  const project = readProjectConfig({
+  const projectSnapshot = readProjectHostInputSnapshot({
     cwd: options.cwd,
     file: options.file,
+    includePluginDiscovery: options.entries === undefined,
     projectRoot: options.projectRoot,
     tsconfig: options.tsconfig,
   });
-  const projectHostInputs = collectProjectHostInputs(project);
-  // These inputs were consumed by project/plugin discovery immediately above;
-  // fingerprint them before any descriptor factory can race their state.
-  const projectHostInputHashes = hashHostInputPaths(projectHostInputs);
+  const { project } = projectSnapshot;
+  const projectHostInputs = projectSnapshot.hostInputs;
+  const projectHostInputHashes = projectSnapshot.hostInputHashes;
   const entries: ProjectPluginEntry[] =
     options.entries === false
       ? []
@@ -108,7 +114,13 @@ export function loadProjectPlugins(options: {
   if (entries.length === 0) {
     options.onWatchInputs?.([]);
     return {
-      ...collectHostInputSnapshot(project, {}, [], projectHostInputHashes),
+      ...collectHostInputSnapshot(
+        project,
+        {},
+        [],
+        projectHostInputs,
+        revalidateHostInputHashes(projectHostInputHashes, projectHostInputs),
+      ),
       nativePlugins: [],
       project,
     };
@@ -147,12 +159,25 @@ export function loadProjectPlugins(options: {
       request,
       effectiveEnv,
     );
+    const loadedHostInputHashes = mergeObservedHostInputHashes(
+      loaded.hostInputHashes,
+      hashHostInputPaths(Object.keys(loaded.hostInputHashes)),
+    );
+    const hostInputHashes = mergeObservedHostInputHashes(
+      entryCandidateHashes,
+      loadedHostInputHashes,
+    );
+    for (const input of loaded.hostInputs) {
+      const absolute = path.resolve(input);
+      if (
+        !Object.prototype.hasOwnProperty.call(loadedHostInputHashes, absolute)
+      ) {
+        delete hostInputHashes[absolute];
+      }
+    }
     return {
       ...loaded,
-      hostInputHashes: mergeObservedHostInputHashes(
-        entryCandidateHashes,
-        loaded.hostInputHashes,
-      ),
+      hostInputHashes,
       hostInputs: [...loaded.hostInputs, ...entryCandidates],
       request,
     };
@@ -205,6 +230,7 @@ export function loadProjectPlugins(options: {
         loadedEntries[index]!.hostInputHashes,
         pluginHostInputHashes,
         loadedEntries[index]!.hostInputs,
+        hostInputs,
       ),
       hostInputs: [...loadedEntries[index]!.hostInputs, ...hostInputs],
       source,
@@ -301,7 +327,8 @@ export function loadProjectPlugins(options: {
       project,
       context,
       records,
-      projectHostInputHashes,
+      projectHostInputs,
+      revalidateHostInputHashes(projectHostInputHashes, projectHostInputs),
     ),
     nativePlugins: orderNativePlugins(nativePlugins),
     project,
@@ -323,12 +350,15 @@ function collectHostInputSnapshot(
     hostInputs: readonly string[];
     request: string;
   }[],
+  baselineInputs: readonly string[],
   baselineHashes: Readonly<Record<string, string | null>>,
 ): {
   hostInputHashes: Record<string, string | null>;
   hostInputs: string[];
 } {
-  const inputs = new Set<string>(collectProjectHostInputs(project));
+  const inputs = new Set<string>(
+    baselineInputs.map((file) => path.resolve(file)),
+  );
   const configBase = context.pluginConfigDir ?? path.dirname(project.path);
   for (const record of records) {
     inputs.add(path.resolve(record.request));
@@ -353,6 +383,16 @@ function collectHostInputSnapshot(
     baselineHashes,
     ...records.map((record) => record.hostInputHashes),
   );
+  for (const record of records) {
+    for (const input of record.hostInputs) {
+      const absolute = path.resolve(input);
+      if (
+        !Object.prototype.hasOwnProperty.call(record.hostInputHashes, absolute)
+      ) {
+        delete evaluationHashes[absolute];
+      }
+    }
+  }
   const hostInputHashes = Object.fromEntries(
     hostInputs.flatMap((file) =>
       Object.prototype.hasOwnProperty.call(evaluationHashes, file)
@@ -361,6 +401,99 @@ function collectHostInputSnapshot(
     ),
   );
   return { hostInputHashes, hostInputs };
+}
+
+/**
+ * Read one project configuration while its complete discovery surface remains
+ * unchanged. The preliminary read discovers the input set; the accepted read is
+ * bracketed by equal fingerprints for that same set. A repeatedly changing
+ * project is still returned so compilation can make progress, but without any
+ * cache proof for the ambiguous snapshot.
+ */
+function readProjectHostInputSnapshot(options: {
+  cwd?: string;
+  file?: string;
+  includePluginDiscovery: boolean;
+  projectRoot?: string;
+  tsconfig?: string;
+}): ProjectHostInputSnapshot {
+  const { includePluginDiscovery, ...projectOptions } = options;
+  let project = readProjectConfig(projectOptions);
+  let hostInputs = collectProjectHostInputs(project, includePluginDiscovery);
+  const observedInputs = new Set(hostInputs);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = hashHostInputPaths(hostInputs);
+    const candidateProject = readProjectConfig(projectOptions);
+    const candidateInputs = collectProjectHostInputs(
+      candidateProject,
+      includePluginDiscovery,
+    );
+    for (const input of candidateInputs) observedInputs.add(input);
+    const after = hashHostInputPaths(candidateInputs);
+    if (
+      equalHostInputLists(hostInputs, candidateInputs) &&
+      equalHostInputHashes(before, after)
+    ) {
+      return {
+        hostInputHashes: after,
+        hostInputs: candidateInputs,
+        project: candidateProject,
+      };
+    }
+    project = candidateProject;
+    hostInputs = candidateInputs;
+  }
+  return {
+    hostInputHashes: {},
+    hostInputs: [...observedInputs].sort(),
+    project,
+  };
+}
+
+function equalHostInputLists(
+  first: readonly string[],
+  second: readonly string[],
+): boolean {
+  return (
+    first.length === second.length &&
+    first.every(
+      (file, index) => path.resolve(file) === path.resolve(second[index]!),
+    )
+  );
+}
+
+function equalHostInputHashes(
+  first: Readonly<Record<string, string | null>>,
+  second: Readonly<Record<string, string | null>>,
+): boolean {
+  const files = Object.keys(first);
+  return (
+    files.length === Object.keys(second).length &&
+    files.every(
+      (file) =>
+        Object.prototype.hasOwnProperty.call(second, file) &&
+        first[file] === second[file],
+    )
+  );
+}
+
+/** Retain proof only for inputs whose initial and final observations agree. */
+function revalidateHostInputHashes(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = hashHostInputPaths(inputs);
+  const output: Record<string, string | null> = {};
+  for (const input of inputs) {
+    const absolute = path.resolve(input);
+    if (
+      Object.prototype.hasOwnProperty.call(initial, absolute) &&
+      initial[absolute] === current[absolute]
+    ) {
+      output[absolute] = current[absolute]!;
+    }
+  }
+  return output;
 }
 
 function hashHostInput(file: string): string | null {
@@ -385,10 +518,12 @@ export function hashHostInputPaths(
 /** Return config ancestry and the manifest controlling package discovery. */
 export function collectProjectHostInputs(
   project: ITtscParsedProjectConfig,
+  includePluginDiscovery: boolean = true,
 ): string[] {
   const inputs = new Set<string>(
     project.configPaths.map((file) => path.resolve(file)),
   );
+  if (!includePluginDiscovery) return [...inputs].sort();
   const manifest = findNearestPackageJson(project.root);
   if (manifest !== undefined) {
     inputs.add(path.resolve(manifest));
@@ -522,7 +657,14 @@ function collectModuleResolutionCandidates(
       // An existing exact file wins before extension and directory probes. Its
       // own recorded identity is therefore sufficient; siblings cannot
       // supersede it while it exists.
-      if (!selectedByExactFile(base, resolvedFile)) recordBase(base);
+      if (
+        selectedByExactFile(base, resolvedFile) ||
+        (resolvedFile === undefined && existingFile(base))
+      ) {
+        inputs.add(path.resolve(base));
+      } else {
+        recordBase(base);
+      }
     } catch {
       // Invalid URL spellings are diagnosed by the real resolver.
     }
@@ -547,6 +689,14 @@ function collectModuleResolutionCandidates(
     if (selectedBy(packageDirectory)) break;
   }
   return [...inputs];
+}
+
+function existingFile(file: string): boolean {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function selectedByExactFile(
@@ -1275,9 +1425,16 @@ function mergePluginHostInputHashes(
   first: Readonly<Record<string, string | null>>,
   second: Readonly<Record<string, string | null>>,
   loaderInputs: readonly string[],
+  pluginInputs: readonly string[],
 ): Record<string, string | null> {
   const output = { ...first };
   const guarded = new Set(loaderInputs.map((file) => path.resolve(file)));
+  for (const input of pluginInputs) {
+    const absolute = path.resolve(input);
+    if (!Object.prototype.hasOwnProperty.call(second, absolute)) {
+      delete output[absolute];
+    }
+  }
   for (const [file, hash] of Object.entries(second)) {
     const absolute = path.resolve(file);
     if (
@@ -1315,8 +1472,11 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `const { fileURLToPath } = require("node:url");`,
   `const out = process.env.TTSC_PLUGIN_DESCRIPTOR_OUT;`,
   `let retryWithTtsx = false;`,
+  `const moduleLoadFailures = new WeakMap();`,
   `const moduleResolutionFailures = new WeakMap();`,
   `function shouldRetryWithTtsx(error, request) {`,
+  `  const loadFailure = error && (typeof error === "object" || typeof error === "function") ? moduleLoadFailures.get(error) : undefined;`,
+  `  if (loadFailure?.code === "ERR_UNKNOWN_FILE_EXTENSION") return true;`,
   `  const failure = error && (typeof error === "object" || typeof error === "function") ? moduleResolutionFailures.get(error) : undefined;`,
   `  if (failure === undefined) return false;`,
   `  const specifier = failure.specifier;`,
@@ -1330,11 +1490,15 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
   `  const inputs = new Set();`,
   `  const inputHashes = new Map();`,
+  `  const unstableInputHashes = new Set();`,
   `  function recordInput(file) {`,
   `    file = path.resolve(file);`,
   `    inputs.add(file);`,
-  `    if (inputHashes.has(file)) return;`,
-  `    try { inputHashes.set(file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")); } catch { inputHashes.set(file, null); }`,
+  `    if (unstableInputHashes.has(file)) return;`,
+  `    let observed;`,
+  `    try { observed = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); } catch { observed = null; }`,
+  `    if (inputHashes.has(file) && inputHashes.get(file) !== observed) { inputHashes.delete(file); unstableInputHashes.add(file); return; }`,
+  `    inputHashes.set(file, observed);`,
   `  }`,
   `  function asFile(resolved) {`,
   `    if (typeof resolved !== "string") return undefined;`,
@@ -1411,7 +1575,8 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `        const base = specifier.startsWith("file:") ? fileURLToPath(specifier) : path.resolve(path.dirname(parentFile), specifier);`,
   `        recordPackageManifests(base);`,
   `        let exact = false;`,
-  `        try { exact = selected !== undefined && fs.realpathSync.native(base) === selected; } catch {}`,
+  `        try { exact = selected === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === selected; } catch {}`,
+  `        if (exact) recordInput(base);`,
   `        if (!exact) recordModuleCandidates(base);`,
   `      } catch {}`,
   `      return;`,
@@ -1454,6 +1619,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `        recordResolutionCandidates(specifier, canonical, undefined);`,
   `        try {`,
   `          const resolved = globalThis.Bun.resolveSync(specifier, path.dirname(canonical));`,
+  `          recordResolutionCandidates(specifier, canonical, resolved);`,
   `          recordFile(resolved);`,
   `          scan(resolved);`,
   `        } catch {`,
@@ -1465,6 +1631,13 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  }`,
   `  if (typeof Module.registerHooks === "function") {`,
   `    Module.registerHooks({`,
+  `      load(url, loadContext, nextLoad) {`,
+  `        try { return nextLoad(url, loadContext); }`,
+  `        catch (error) {`,
+  `          if (error && (typeof error === "object" || typeof error === "function")) moduleLoadFailures.set(error, { code: error.code });`,
+  `          throw error;`,
+  `        }`,
+  `      },`,
   `      resolve(specifier, resolveContext, nextResolve) {`,
   `        recordResolutionCandidates(specifier, resolveContext.parentURL, undefined);`,
   `        let resolved;`,
@@ -1475,6 +1648,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `          throw error;`,
   `        }`,
   `        const url = typeof resolved === "string" ? resolved : resolved && resolved.url;`,
+  `        recordResolutionCandidates(specifier, resolveContext.parentURL, url);`,
   `        recordFile(url);`,
   `        return resolved;`,
   `      },`,
@@ -1493,6 +1667,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `            const from = importer ? path.dirname(importer) : process.cwd();`,
   `            recordResolutionCandidates(args.path, importer, undefined);`,
   `            const resolved = globalThis.Bun.resolveSync(args.path, from);`,
+  `            recordResolutionCandidates(args.path, importer, resolved);`,
   `            recordFile(resolved);`,
   `          } catch {`,
   `            // The real resolver below owns user-facing resolution errors.`,
@@ -1521,6 +1696,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   // lazily require a config; snapshotting inputs first would silently omit
   // that influence.
   `  const serializedDescriptor = JSON.stringify(descriptor);`,
+  `  for (const input of [...inputs]) recordInput(input);`,
   `  const payload = { inputHashes: Object.fromEntries(inputHashes), inputs: [...inputs].sort() };`,
   `  if (serializedDescriptor !== undefined) payload.descriptor = JSON.parse(serializedDescriptor);`,
   `  fs.writeFileSync(out, JSON.stringify(payload));`,

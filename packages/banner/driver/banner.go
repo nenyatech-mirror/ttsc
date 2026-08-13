@@ -373,13 +373,21 @@ const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const inputs = new Set();
 const hashes = new Map();
+const unstableHashes = new Set();
 
 function recordInput(file) {
   file = path.resolve(file);
   inputs.add(file);
-  if (hashes.has(file)) return;
-  try { hashes.set(file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")); }
-  catch { hashes.set(file, null); }
+  if (unstableHashes.has(file)) return;
+  let observed;
+  try { observed = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+  catch { observed = null; }
+  if (hashes.has(file) && hashes.get(file) !== observed) {
+    hashes.delete(file);
+    unstableHashes.add(file);
+    return;
+  }
+  hashes.set(file, observed);
 }
 
 function recordFile(file) {
@@ -470,7 +478,10 @@ function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
         ? fileURLToPath(specifier)
         : path.resolve(parentDirectory, specifier);
       recordPackageManifests(base);
-      recordModuleCandidates(base);
+      let exact = false;
+      try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
+      if (exact) recordInput(base);
+      else recordModuleCandidates(base);
     } catch {}
     return;
   }
@@ -495,6 +506,7 @@ registerHooks({
     recordResolutionCandidates(specifier, context.parentURL, undefined);
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved && resolved.url;
+    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
@@ -516,7 +528,9 @@ registerHooks({
     break;
   }
   const value = typeof current === "function" ? await current() : current;
-  process.stdout.write(JSON.stringify({ value: toSerializableBanner(value), hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
+  const serializedValue = toSerializableBanner(value);
+  for (const input of [...inputs]) recordInput(input);
+  process.stdout.write(JSON.stringify({ value: serializedValue, hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
   // The stack above is for the reader. This is for the caller: the parent reads
@@ -686,13 +700,21 @@ import { fileURLToPath } from "node:url";
 
 const inputs = new Set<string>();
 const hashes = new Map<string, string | null>();
+const unstableHashes = new Set<string>();
 
 function recordInput(file: string): void {
   file = path.resolve(file);
   inputs.add(file);
-  if (hashes.has(file)) return;
-  try { hashes.set(file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")); }
-  catch { hashes.set(file, null); }
+  if (unstableHashes.has(file)) return;
+  let observed: string | null;
+  try { observed = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+  catch { observed = null; }
+  if (hashes.has(file) && hashes.get(file) !== observed) {
+    hashes.delete(file);
+    unstableHashes.add(file);
+    return;
+  }
+  hashes.set(file, observed);
 }
 
 function recordFile(file: string): void {
@@ -783,7 +805,10 @@ function recordResolutionCandidates(specifier: string, parentURL: string | undef
         ? fileURLToPath(specifier)
         : path.resolve(parentDirectory, specifier);
       recordPackageManifests(base);
-      recordModuleCandidates(base);
+      let exact = false;
+      try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
+      if (exact) recordInput(base);
+      else recordModuleCandidates(base);
     } catch {}
     return;
   }
@@ -807,6 +832,7 @@ registerHooks({
     recordResolutionCandidates(specifier, context.parentURL, undefined);
     const resolved = nextResolve(specifier, context);
     const url = typeof resolved === "string" ? resolved : resolved?.url;
+    recordResolutionCandidates(specifier, context.parentURL, url);
     if (typeof url === "string" && url.startsWith("file:")) {
       recordFile(fileURLToPath(url));
     }
@@ -830,8 +856,10 @@ declare const process: {
   try {
     const importedConfig = await import(%s);
     const value = await resolveConfig(importedConfig);
+    const serializedValue = toSerializableBanner(value);
+    for (const input of [...inputs]) recordInput(input);
     process.stdout.write(JSON.stringify({
-      value: toSerializableBanner(value),
+      value: serializedValue,
       hashes: Object.fromEntries(hashes),
       inputs: [...inputs].sort(),
     }));

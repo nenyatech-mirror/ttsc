@@ -77,7 +77,9 @@ export const test_ttsc_utility_plugins_descriptors_own_separate_native_source_di
       assert.equal(descriptor.stage, expectation.stage);
       assert.deepEqual(Object.keys(descriptor).sort(), [
         ...(expectation.capabilities !== undefined ? ["capabilities"] : []),
-        ...(expectation.reportsHostInputs === true ? ["hostInputs"] : []),
+        ...(expectation.reportsHostInputs === true
+          ? ["hostInputHashes", "hostInputs"]
+          : []),
         "name",
         ...(expectation.reportsTypeScriptDiagnostics !== undefined
           ? ["reportsTypeScriptDiagnostics"]
@@ -87,6 +89,15 @@ export const test_ttsc_utility_plugins_descriptors_own_separate_native_source_di
       ]);
       if (expectation.reportsHostInputs === true) {
         assert.ok(Array.isArray(descriptor.hostInputs));
+        assert.equal(
+          descriptor.hostInputs.every((input: string) =>
+            Object.prototype.hasOwnProperty.call(
+              descriptor.hostInputHashes,
+              input,
+            ),
+          ),
+          true,
+        );
         assert.ok(
           descriptor.hostInputs.every(
             (input: unknown) =>

@@ -145,8 +145,17 @@ type EmitTransformPlugin interface {
 type linkedPluginState struct {
   cwd      string
   entries  []PluginEntry
-  inputs   *pluginHostInputs
+  inputs   *pluginHostInputScopes
   tsconfig string
+}
+
+// pluginHostInputScopes keeps one observation set per plugin hook. A hash from
+// one hook cannot prove another hook's same-file dependency when that hook only
+// reported the path, while ReportHostInput followed by ReportHostInputHash in
+// one hook remains one complete observation.
+type pluginHostInputScopes struct {
+  mu     sync.Mutex
+  scopes []*pluginHostInputs
 }
 
 type pluginHostInputs struct {
@@ -160,11 +169,35 @@ type pluginHostInputHash struct {
   known bool
 }
 
+func newPluginHostInputScopes() *pluginHostInputScopes {
+  return &pluginHostInputScopes{}
+}
+
 func newPluginHostInputs() *pluginHostInputs {
   return &pluginHostInputs{
     files:  map[string]struct{}{},
     hashes: map[string]pluginHostInputHash{},
   }
+}
+
+func (inputs *pluginHostInputScopes) newScope() *pluginHostInputs {
+  scope := newPluginHostInputs()
+  if inputs == nil {
+    return scope
+  }
+  inputs.mu.Lock()
+  inputs.scopes = append(inputs.scopes, scope)
+  inputs.mu.Unlock()
+  return scope
+}
+
+func (inputs *pluginHostInputScopes) snapshot() []*pluginHostInputs {
+  if inputs == nil {
+    return nil
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  return append([]*pluginHostInputs(nil), inputs.scopes...)
 }
 
 func (inputs *pluginHostInputs) addHash(file string, hash *string) {
@@ -208,28 +241,62 @@ func (inputs *pluginHostInputs) add(file string) {
   inputs.mu.Unlock()
 }
 
-func (inputs *pluginHostInputs) list() []string {
+func (inputs *pluginHostInputs) snapshot() (map[string]struct{}, map[string]pluginHostInputHash) {
   if inputs == nil {
-    return nil
+    return nil, nil
   }
   inputs.mu.Lock()
-  files := make([]string, 0, len(inputs.files))
+  defer inputs.mu.Unlock()
+  files := make(map[string]struct{}, len(inputs.files))
   for file := range inputs.files {
+    files[file] = struct{}{}
+  }
+  hashes := make(map[string]pluginHostInputHash, len(inputs.hashes))
+  for file, observation := range inputs.hashes {
+    hashes[file] = pluginHostInputHash{
+      hash:  cloneStringPointer(observation.hash),
+      known: observation.known,
+    }
+  }
+  return files, hashes
+}
+
+func (inputs *pluginHostInputScopes) list() []string {
+  union := map[string]struct{}{}
+  for _, scope := range inputs.snapshot() {
+    files, _ := scope.snapshot()
+    for file := range files {
+      union[file] = struct{}{}
+    }
+  }
+  files := make([]string, 0, len(union))
+  for file := range union {
     files = append(files, file)
   }
-  inputs.mu.Unlock()
   sort.Strings(files)
   return files
 }
 
-func (inputs *pluginHostInputs) hashList() map[string]*string {
-  if inputs == nil {
-    return nil
+func (inputs *pluginHostInputScopes) hashList() map[string]*string {
+  combined := map[string]pluginHostInputHash{}
+  for _, scope := range inputs.snapshot() {
+    files, hashes := scope.snapshot()
+    for file := range files {
+      observation, exists := hashes[file]
+      if !exists || !observation.known {
+        combined[file] = pluginHostInputHash{known: false}
+        continue
+      }
+      previous, exists := combined[file]
+      if !exists {
+        combined[file] = observation
+      } else if !previous.known || !sameStringPointer(previous.hash, observation.hash) {
+        combined[file] = pluginHostInputHash{known: false}
+      }
+    }
   }
-  inputs.mu.Lock()
-  defer inputs.mu.Unlock()
   hashes := map[string]*string{}
-  for file, observation := range inputs.hashes {
+  for file, observation := range combined {
     if observation.known {
       hashes[file] = cloneStringPointer(observation.hash)
     }
@@ -258,7 +325,7 @@ func RegisterPlugin(plugin any) {
 func loadLinkedPluginState(cwd, tsconfigPath string) (linkedPluginState, error) {
   input := strings.TrimSpace(os.Getenv(LinkedPluginsEnv))
   if input == "" {
-    return linkedPluginState{cwd: cwd, inputs: newPluginHostInputs(), tsconfig: tsconfigPath}, nil
+    return linkedPluginState{cwd: cwd, inputs: newPluginHostInputScopes(), tsconfig: tsconfigPath}, nil
   }
   var entries []PluginEntry
   if err := json.Unmarshal([]byte(input), &entries); err != nil {
@@ -267,7 +334,7 @@ func loadLinkedPluginState(cwd, tsconfigPath string) (linkedPluginState, error) 
   return linkedPluginState{
     cwd:      cwd,
     entries:  entries,
-    inputs:   newPluginHostInputs(),
+    inputs:   newPluginHostInputScopes(),
     tsconfig: tsconfigPath,
   }, nil
 }
@@ -364,12 +431,13 @@ func registeredPlugin(index int) (any, bool) {
 
 // context builds the PluginContext the driver passes to each plugin hook.
 func (state linkedPluginState) context(entry PluginEntry) PluginContext {
+  inputs := state.inputs.newScope()
   return PluginContext{
     Cwd:                 state.cwd,
     Entry:               entry,
     Tsconfig:            state.tsconfig,
-    reportHostInput:     state.inputs.add,
-    reportHostInputHash: state.inputs.addHash,
+    reportHostInput:     inputs.add,
+    reportHostInputHash: inputs.addHash,
   }
 }
 

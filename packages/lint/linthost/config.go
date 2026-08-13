@@ -1848,7 +1848,7 @@ func normalizeConfigDependencyFingerprints(
   for _, dependency := range input {
     if strings.TrimSpace(dependency.Path) == "" ||
       !filepath.IsAbs(dependency.Path) ||
-      len(dependency.Digest) != sha256.Size*2 ||
+      (dependency.Digest != "" && len(dependency.Digest) != sha256.Size*2) ||
       strings.ToLower(dependency.Digest) != dependency.Digest ||
       (dependency.Kind != configDependencyFile &&
         dependency.Kind != configDependencyDir &&
@@ -1858,8 +1858,10 @@ func normalizeConfigDependencyFingerprints(
         dependency.Scope != configDependencyWatch) {
       return nil, false
     }
-    if _, err := hex.DecodeString(dependency.Digest); err != nil {
-      return nil, false
+    if dependency.Digest != "" {
+      if _, err := hex.DecodeString(dependency.Digest); err != nil {
+        return nil, false
+      }
     }
     absolute := filepath.Clean(dependency.Path)
     key := dependency.Kind + "\x00" + absolute

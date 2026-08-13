@@ -27,8 +27,8 @@ import (
 //     to its original state on deletion.
 //  6. Evaluate a real executable config in a directory with those names twice
 //     and prove the JavaScript fingerprint is accepted by the Go cache reader.
-//  7. Reject every malformed dependency-envelope class while accepting an
-//     idempotent duplicate, so corrupt cache state can only become a soft miss.
+//  7. Accept the evaluator's empty conflict sentinel as an unstable soft miss,
+//     while rejecting every malformed dependency-envelope class.
 func TestConfigCacheInvalidatesTransitiveDependencyDigests(t *testing.T) {
   t.Setenv("TTSC_LINT_DISABLE_CONFIG_CACHE", "")
   root := t.TempDir()
@@ -295,7 +295,6 @@ module.exports = { rules: {} };`)
   invalid := [][]configDependencyFingerprint{
     nil,
     {{Path: "relative.cjs", Digest: valid.Digest, Kind: configDependencyFile, Scope: configDependencyWatch}},
-    {{Path: helper, Digest: "", Kind: configDependencyFile, Scope: configDependencyWatch}},
     {{Path: helper, Digest: strings.Repeat("A", sha256.Size*2), Kind: configDependencyFile, Scope: configDependencyWatch}},
     {{Path: helper, Digest: strings.Repeat("g", sha256.Size*2), Kind: configDependencyFile, Scope: configDependencyWatch}},
     {{Path: helper, Digest: valid.Digest, Kind: "invalid", Scope: configDependencyWatch}},
@@ -313,6 +312,17 @@ module.exports = { rules: {} };`)
   )
   if !ok || len(normalized) != 1 || normalized[0] != valid {
     t.Fatalf("idempotent duplicate normalized to %v, %v", normalized, ok)
+  }
+  unstableFingerprint := valid
+  unstableFingerprint.Digest = ""
+  normalized, ok = normalizeConfigDependencyFingerprints(
+    []configDependencyFingerprint{unstableFingerprint},
+  )
+  if !ok || len(normalized) != 1 || normalized[0] != unstableFingerprint {
+    t.Fatalf("unstable conflict normalized to %v, %v", normalized, ok)
+  }
+  if configDependencyDigestsAreCurrent(normalized) {
+    t.Fatal("an unstable conflict fingerprint must never authorize cache reuse")
   }
 }
 

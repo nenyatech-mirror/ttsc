@@ -513,7 +513,7 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     capturedGeneration.result.type === "exception"
       ? []
       : (capturedGeneration.result.hostInputs ?? []).filter(
-          (input) =>
+          (input: string) =>
             !Object.prototype.hasOwnProperty.call(
               publishedHashes,
               path.resolve(input),
