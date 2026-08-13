@@ -1338,6 +1338,7 @@ function loadCommonJsDescriptor(
   const out = path.join(dir, "descriptor.json");
   const inputsOut = path.join(dir, "descriptor-inputs.ndjson");
   const diagnostics = path.join(dir, "descriptor.stderr");
+  const bunConfig = path.join(dir, "bunfig.toml");
   const runtimeHookPreload = path.join(
     __dirname,
     "..",
@@ -1347,12 +1348,24 @@ function loadCommonJsDescriptor(
     "runtimeHookPreload.js",
   );
   try {
+    if (runtimeCapabilities.bun) {
+      // A descriptor receives exactly the environment supplied by its ttsc
+      // invocation. Bun otherwise auto-loads project `.env*`, local/global
+      // bunfig preloads and loaders, and may install a missing package from the
+      // network. Those implicit authorities are neither part of Node's loader
+      // contract nor reproducible host inputs, so isolate this evaluator from
+      // them while retaining Bun's native TypeScript/module semantics.
+      fs.writeFileSync(bunConfig, "", "utf8");
+    }
     const diagnosticsFd = fs.openSync(diagnostics, "w");
     let result: ReturnType<typeof childProcess.spawnSync>;
     try {
       result = childProcess.spawnSync(
         runtime,
         [
+          ...(runtimeCapabilities.bun
+            ? ["--no-env-file", "--no-install", `--config=${bunConfig}`]
+            : []),
           ...(runtimeCapabilities.registerHooks
             ? ["--require", runtimeHookPreload]
             : []),

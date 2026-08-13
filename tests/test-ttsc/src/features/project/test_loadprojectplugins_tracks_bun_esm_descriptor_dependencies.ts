@@ -5,7 +5,8 @@ import { assert, fs, loadProjectPlugins, path } from "../../internal/project";
 import { createFakeGoBinary } from "../../internal/source-build";
 
 /**
- * Verifies a descriptor evaluated by Bun reports its static ESM dependencies.
+ * Verifies a descriptor evaluated by Bun reports its static ESM dependencies
+ * without accepting untracked ambient runtime configuration.
  *
  * Bun resolves static imports outside Node's `Module._resolveFilename` path.
  * The isolated evaluator must therefore observe Bun's resolver as well, or a
@@ -24,11 +25,13 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     const root = TestProject.tmpdir("ttsc-bun-esm-descriptor-input-");
     const project = path.join(root, "project");
     const source = path.join(root, "plugin-go");
+    const ambientSource = path.join(root, "ambient-plugin-go");
     const selectionBase = path.join(root, "selection");
     const selection = `${selectionBase}.js`;
     const descriptor = path.join(project, "plugin.mts");
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(source, { recursive: true });
+    fs.mkdirSync(ambientSource, { recursive: true });
     fs.writeFileSync(
       path.join(project, "package.json"),
       JSON.stringify({ private: true, type: "module" }),
@@ -47,6 +50,31 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       "utf8",
     );
     fs.writeFileSync(path.join(source, "main.go"), "package main\n", "utf8");
+    fs.writeFileSync(
+      path.join(ambientSource, "go.mod"),
+      "module example.com/ambient-bun-esm-descriptor\n\ngo 1.26\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(ambientSource, "main.go"),
+      "package main\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(project, ".env.local"),
+      `TTSC_BUN_DESCRIPTOR_SOURCE=${ambientSource.replace(/\\/g, "/")}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(project, "ambient-preload.ts"),
+      `process.env.TTSC_BUN_DESCRIPTOR_SOURCE = ${JSON.stringify(ambientSource)};\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(project, "bunfig.toml"),
+      `preload = ["./ambient-preload.ts"]\n`,
+      "utf8",
+    );
     for (const relative of [
       "vendor/local/value.go",
       "lib/helper.go",
@@ -66,7 +94,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       descriptor,
       [
         `import source from "../selection";`,
-        `export default { name: "bun-esm", source };`,
+        `export default { name: "bun-esm", source: process.env.TTSC_BUN_DESCRIPTOR_SOURCE ?? source };`,
         "",
       ].join("\n"),
       "utf8",
@@ -88,6 +116,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     });
 
     assert.equal(loaded.nativePlugins[0]?.name, "bun-esm");
+    assert.equal(loaded.nativePlugins[0]?.source, source);
     const canonicalSelection = fs.realpathSync.native(selection);
     const canonicalSelectionBase = canonicalSelection.slice(
       0,
@@ -107,6 +136,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       worker,
       [
         `const { loadProjectPlugins } = require(${JSON.stringify(path.join(TestProject.WORKSPACE_ROOT, "packages", "ttsc", "lib", "plugin", "internal", "loadProjectPlugins.js"))});`,
+        `delete process.env.TTSC_BUN_DESCRIPTOR_SOURCE;`,
         `const loaded = loadProjectPlugins({`,
         `  binary: "",`,
         `  cacheDir: ${JSON.stringify(path.join(root, "cache"))},`,
@@ -124,6 +154,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       TTSC_GO_CACHE_DIR: path.join(root, "go-cache"),
     };
     delete workerEnv.TTSC_NODE_BINARY;
+    delete workerEnv.TTSC_BUN_DESCRIPTOR_SOURCE;
     const fromBunParent = childProcess.spawnSync(bunBinary, [worker], {
       cwd: project,
       encoding: "utf8",
