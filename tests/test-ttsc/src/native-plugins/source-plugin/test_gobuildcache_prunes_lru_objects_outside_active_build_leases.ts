@@ -78,6 +78,25 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       [false, false, true, true],
     );
 
+    const unevenCache = path.join(root, "uneven-recent-go-build");
+    const uneven = [
+      writeObject(unevenCache, "14", "old", now - 30_000),
+      writeObject(unevenCache, "15", "recent-a", now - 2_000, "123456"),
+      writeObject(unevenCache, "16", "recent-b", now - 1_000, "123456"),
+    ];
+    pruneGoBuildCacheRoot(unevenCache, {
+      force: true,
+      maxBytes: 8,
+      now,
+      protectedAgeMs: 60_000,
+      targetBytes: 8,
+    });
+    assert.deepEqual(
+      uneven.map((file) => fs.existsSync(file)),
+      [false, false, true],
+      "an uneven recent cohort must not overshoot its protection budget",
+    );
+
     const futureMarkerCache = path.join(root, "future-marker-go-build");
     const futureMarkerObject = writeObject(
       futureMarkerCache,
@@ -316,11 +335,12 @@ function writeObject(
   bucket: string,
   name: string,
   mtimeMs: number,
+  contents: string = "data",
 ): string {
   const directory = path.join(root, bucket);
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, name);
-  fs.writeFileSync(file, "data", "utf8");
+  fs.writeFileSync(file, contents, "utf8");
   const modified = new Date(mtimeMs);
   fs.utimesSync(file, modified, modified);
   return file;

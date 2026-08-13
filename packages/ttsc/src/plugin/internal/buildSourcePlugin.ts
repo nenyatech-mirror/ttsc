@@ -3336,6 +3336,9 @@ function pruneGoBuildCacheEntries(
     if (protectedBytes >= options.targetBytes) {
       break;
     }
+    if (protectedBytes + entry.size > options.targetBytes) {
+      break;
+    }
     protectedFiles.add(entry.file);
     protectedBytes += entry.size;
   }
