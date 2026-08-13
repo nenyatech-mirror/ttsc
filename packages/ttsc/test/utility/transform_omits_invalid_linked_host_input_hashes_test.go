@@ -15,20 +15,25 @@ type invalidHostInputHashPlugin struct {
 }
 
 func (plugin invalidHostInputHashPlugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
+  ctx.ReportHostInputHash(plugin.input, stringPointer(strings.Repeat("a", 64)))
   ctx.ReportHostInputHash(plugin.input, stringPointer("NOT-A-SHA256"))
+  ctx.ReportHostInputHash(plugin.input, stringPointer(strings.Repeat("a", 64)))
+  ctx.ReportHostInputRealpath(plugin.input, stringPointer(filepath.Join(filepath.Dir(plugin.input), "selected")))
+  ctx.ReportHostInputRealpath(plugin.input, stringPointer(" "))
+  ctx.ReportHostInputRealpath(plugin.input, stringPointer(filepath.Join(filepath.Dir(plugin.input), "selected")))
   return "", nil
 }
 
 // TestUtilityTransformOmitsInvalidLinkedHostInputHashes verifies the public Go
-// reporting seam cannot publish malformed fingerprint evidence.
+// reporting seam cannot publish malformed fingerprint or identity evidence.
 //
 // Third-party linked plugins call this API directly. An invalid value must keep
 // the path as a watch input while withholding proof, so JavaScript adapters
 // fall back conservatively instead of trusting non-SHA metadata.
 //
-//  1. Register a linked plugin that reports a malformed digest.
+//  1. Register a linked plugin that reports valid, malformed, then valid proof.
 //  2. Run the real utility transform entrypoint.
-//  3. Assert the path remains and its fingerprint is omitted.
+//  3. Assert the path remains and both kinds of proof stay omitted.
 func TestUtilityTransformOmitsInvalidLinkedHostInputHashes(t *testing.T) {
   resetLinkedPluginRegistry()
   root := t.TempDir()
@@ -59,5 +64,8 @@ func TestUtilityTransformOmitsInvalidLinkedHostInputHashes(t *testing.T) {
   }
   if _, ok := result.HostInputHashes[input]; ok {
     t.Fatalf("invalid hash must be omitted: %#v", result.HostInputHashes)
+  }
+  if _, ok := result.HostInputRealpaths[input]; ok {
+    t.Fatalf("invalid realpath must be omitted: %#v", result.HostInputRealpaths)
   }
 }

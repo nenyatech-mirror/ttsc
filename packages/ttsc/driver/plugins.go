@@ -101,9 +101,11 @@ type PluginContext struct {
   Entry    PluginEntry
   Tsconfig string
 
-  reportHostInput         func(string)
-  reportHostInputHash     func(string, *string)
-  reportHostInputRealpath func(string, *string)
+  reportHostInput                func(string)
+  reportHostInputHash            func(string, *string)
+  reportHostInputHashUnknown     func(string)
+  reportHostInputRealpath        func(string, *string)
+  reportHostInputRealpathUnknown func(string)
 }
 
 // ReportHostInputHash declares the exact file state consumed by a native
@@ -120,7 +122,9 @@ func (ctx PluginContext) ReportHostInputHash(file string, hash *string) {
   }
   file = filepath.Clean(file)
   if hash != nil && !isLowerSHA256(*hash) {
-    if ctx.reportHostInput != nil {
+    if ctx.reportHostInputHashUnknown != nil {
+      ctx.reportHostInputHashUnknown(file)
+    } else if ctx.reportHostInput != nil {
       ctx.reportHostInput(file)
     }
     return
@@ -143,7 +147,9 @@ func (ctx PluginContext) ReportHostInputRealpath(file string, realpath *string) 
   file = filepath.Clean(file)
   if realpath != nil {
     if strings.TrimSpace(*realpath) == "" {
-      if ctx.reportHostInput != nil {
+      if ctx.reportHostInputRealpathUnknown != nil {
+        ctx.reportHostInputRealpathUnknown(file)
+      } else if ctx.reportHostInput != nil {
         ctx.reportHostInput(file)
       }
       return
@@ -288,6 +294,16 @@ func (inputs *pluginHostInputs) addHash(file string, hash *string) {
   }
 }
 
+func (inputs *pluginHostInputs) invalidateHash(file string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  inputs.hashes[file] = pluginHostInputHash{known: false}
+}
+
 func (inputs *pluginHostInputs) addRealpath(file string, realpath *string) {
   if inputs == nil {
     return
@@ -303,6 +319,16 @@ func (inputs *pluginHostInputs) addRealpath(file string, realpath *string) {
   if !previous.known || !sameStringPointer(previous.hash, realpath) {
     inputs.realpaths[file] = pluginHostInputHash{known: false}
   }
+}
+
+func (inputs *pluginHostInputs) invalidateRealpath(file string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  inputs.realpaths[file] = pluginHostInputHash{known: false}
 }
 
 func cloneStringPointer(value *string) *string {
@@ -558,12 +584,14 @@ func registeredPlugin(index int) (any, bool) {
 func (state linkedPluginState) context(entry PluginEntry) PluginContext {
   inputs := state.inputs.newScope()
   return PluginContext{
-    Cwd:                     state.cwd,
-    Entry:                   entry,
-    Tsconfig:                state.tsconfig,
-    reportHostInput:         inputs.add,
-    reportHostInputHash:     inputs.addHash,
-    reportHostInputRealpath: inputs.addRealpath,
+    Cwd:                            state.cwd,
+    Entry:                          entry,
+    Tsconfig:                       state.tsconfig,
+    reportHostInput:                inputs.add,
+    reportHostInputHash:            inputs.addHash,
+    reportHostInputHashUnknown:     inputs.invalidateHash,
+    reportHostInputRealpath:        inputs.addRealpath,
+    reportHostInputRealpathUnknown: inputs.invalidateRealpath,
   }
 }
 
