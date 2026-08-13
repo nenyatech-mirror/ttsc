@@ -336,32 +336,35 @@ function compileSourcePlugin(opts: {
     );
     const scratchBinaryName =
       process.platform === "win32" ? ".ttsc-plugin.exe" : ".ttsc-plugin";
-    let attemptedGoBuild = false;
+    let attemptedGoBuildCacheRoot: string | undefined;
     try {
       withGoBuildCacheLease(
         opts.goBuildCacheRoot,
         opts.manageGoBuildCache,
-        () => {
-          attemptedGoBuild = true;
+        (goBuildCacheRoot) => {
+          attemptedGoBuildCacheRoot = goBuildCacheRoot;
           runGoBuild(
             scratchDir,
             opts.entry,
             scratchBinaryName,
             opts.pluginName,
             opts.goBinary,
-            opts.goBuildCacheRoot,
+            goBuildCacheRoot,
             opts.env,
             opts.normalizeGoToolPermissions,
           );
         },
       );
     } finally {
-      if (opts.manageGoBuildCache && attemptedGoBuild) {
+      if (
+        opts.manageGoBuildCache &&
+        attemptedGoBuildCacheRoot !== undefined
+      ) {
         // The daily pre-build pass cannot see objects the build is about to
         // add, including objects left behind by a failed compile. Enforce the
         // size policy after every actual cold-build attempt so churn cannot
         // grow the cache unchecked behind a fresh daily marker.
-        pruneGoBuildCacheRoot(opts.goBuildCacheRoot, { force: true });
+        pruneGoBuildCacheRoot(attemptedGoBuildCacheRoot, { force: true });
       }
     }
     const builtBinary = path.join(scratchDir, scratchBinaryName);
@@ -3192,8 +3195,8 @@ export function pruneGoBuildCacheRoot(
 ): void {
   let intent: GoBuildCacheCoordinationRecord | undefined;
   try {
-    fs.mkdirSync(root, { recursive: true });
-    const marker = path.join(root, GO_BUILD_CACHE_GC_MARKER_FILE);
+    const cacheRoot = canonicalGoBuildCacheRoot(root);
+    const marker = path.join(cacheRoot, GO_BUILD_CACHE_GC_MARKER_FILE);
     const now = options.now ?? Date.now();
     const lastRun = readTimestamp(marker);
     if (
@@ -3206,7 +3209,7 @@ export function pruneGoBuildCacheRoot(
     }
 
     intent = createGoBuildCacheCoordinationRecord(
-      root,
+      cacheRoot,
       GO_BUILD_CACHE_MAINTENANCE_DIR,
     );
     if (!intent.startHeartbeat()) {
@@ -3217,7 +3220,7 @@ export function pruneGoBuildCacheRoot(
     }
     if (
       collectLiveGoBuildCacheCoordinationRecords(
-        root,
+        cacheRoot,
         GO_BUILD_CACHE_LEASE_DIR,
         now,
       ).length !== 0
@@ -3225,7 +3228,7 @@ export function pruneGoBuildCacheRoot(
       return;
     }
 
-    const remainingBytes = pruneGoBuildCacheEntries(root, {
+    const remainingBytes = pruneGoBuildCacheEntries(cacheRoot, {
       maxBytes: options.maxBytes ?? GO_BUILD_CACHE_MAX_BYTES,
       now,
       protectedAgeMs: options.protectedAgeMs ?? GO_BUILD_CACHE_PROTECTED_AGE_MS,
@@ -3260,19 +3263,20 @@ export function pruneGoBuildCacheRoot(
 export function withGoBuildCacheLease<T>(
   root: string,
   managed: boolean,
-  callback: () => T,
+  callback: (cacheRoot: string) => T,
 ): T {
   if (!managed) {
-    return callback();
+    return callback(root);
   }
+  const cacheRoot = canonicalGoBuildCacheRoot(root);
   const started = Date.now();
   for (;;) {
     const lease = createGoBuildCacheCoordinationRecord(
-      root,
+      cacheRoot,
       GO_BUILD_CACHE_LEASE_DIR,
     );
     const maintenance = collectLiveGoBuildCacheCoordinationRecords(
-      root,
+      cacheRoot,
       GO_BUILD_CACHE_MAINTENANCE_DIR,
       Date.now(),
     );
@@ -3280,10 +3284,10 @@ export function withGoBuildCacheLease<T>(
       try {
         if (!lease.startHeartbeat()) {
           throw new Error(
-            `ttsc: unable to start Go build cache lease heartbeat at ${root}`,
+            `ttsc: unable to start Go build cache lease heartbeat at ${cacheRoot}`,
           );
         }
-        return callback();
+        return callback(cacheRoot);
       } finally {
         lease.finish();
       }
@@ -3291,11 +3295,28 @@ export function withGoBuildCacheLease<T>(
     lease.finish();
     if (Date.now() - started > PLUGIN_BUILD_LOCK_STEAL_MS) {
       throw new Error(
-        `ttsc: timed out waiting for Go build cache maintenance at ${root}`,
+        `ttsc: timed out waiting for Go build cache maintenance at ${cacheRoot}`,
       );
     }
     sleepSync(GO_BUILD_CACHE_COORDINATION_POLL_MS);
   }
+}
+
+/**
+ * Create and pin the owned Go cache to an ordinary physical directory.
+ *
+ * The leaf may be user-controlled inside `node_modules/.cache`; accepting a
+ * symlink or junction there would let LRU deletion escape into an arbitrary
+ * two-hex directory. Returning the canonical spelling also keeps the build,
+ * leases, and maintenance on the same directory if an ancestor alias moves.
+ */
+function canonicalGoBuildCacheRoot(root: string): string {
+  fs.mkdirSync(root, { recursive: true });
+  const stats = fs.lstatSync(root);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`ttsc: unsafe Go build cache root: ${root}`);
+  }
+  return fs.realpathSync.native(root);
 }
 
 interface GoBuildCacheObject {

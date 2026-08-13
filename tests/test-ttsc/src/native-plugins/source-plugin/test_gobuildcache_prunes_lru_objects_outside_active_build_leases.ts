@@ -27,8 +27,8 @@ import {
  *    future-dated intent and fresh orphan lease retain a conservative grace.
  * 6. Deny Worker permission and prove the IPC heartbeat fallback cleans up its
  *    lease after running the callback.
- * 7. Reject a coordination-directory junction without deleting its external
- *    JSON files.
+ * 7. Reject cache-root and coordination-directory junctions without deleting
+ *    their external objects or JSON files.
  * 8. Resolve user and explicitly named cache layouts and assert their objects
  *    and maintenance metadata remain untouched at the exact resolved roots.
  */
@@ -231,6 +231,36 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
       fs.existsSync(outsideRecord),
       true,
       "coordination cleanup escaped through a junction",
+    );
+
+    const linkedRootCache = path.join(root, "linked-root");
+    const outsideRootCache = path.join(root, "outside-root");
+    const outsideObject = writeObject(
+      outsideRootCache,
+      "aa",
+      "keep-a",
+      now - 30_000,
+    );
+    fs.symlinkSync(
+      outsideRootCache,
+      linkedRootCache,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    assert.throws(
+      () => withGoBuildCacheLease(linkedRootCache, true, () => {}),
+      /unsafe Go build cache root/,
+    );
+    pruneGoBuildCacheRoot(linkedRootCache, {
+      force: true,
+      maxBytes: 0,
+      now,
+      protectedAgeMs: 0,
+      targetBytes: 0,
+    });
+    assert.equal(
+      fs.existsSync(outsideObject),
+      true,
+      "Go cache GC escaped through a root junction",
     );
 
     const orphanCache = path.join(root, "orphan-go-build");
