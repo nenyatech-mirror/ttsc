@@ -1380,7 +1380,12 @@ function loadCommonJsDescriptor(
         runtime,
         [
           ...(runtimeCapabilities.bun
-            ? ["--no-env-file", "--no-install", `--config=${bunConfig}`]
+            ? [
+                "--no-env-file",
+                "--no-install",
+                `--config=${bunConfig}`,
+                `--tsconfig-override=${context.tsconfig}`,
+              ]
             : []),
           ...(runtimeCapabilities.registerHooks
             ? ["--require", runtimeHookPreload]

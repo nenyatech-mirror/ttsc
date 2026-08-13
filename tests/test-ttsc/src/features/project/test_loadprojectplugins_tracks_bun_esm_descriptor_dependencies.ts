@@ -28,6 +28,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     const ambientSource = path.join(root, "ambient-plugin-go");
     const selectionBase = path.join(root, "selection");
     const selection = `${selectionBase}.js`;
+    const ambientSelection = path.join(root, "ambient-selection.js");
     const explicitPackage = path.join(root, "external");
     const explicitDirectory = path.join(explicitPackage, "nested");
     const explicitManifest = path.join(explicitPackage, "package.json");
@@ -45,10 +46,25 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       JSON.stringify({ private: true, type: "module" }),
       "utf8",
     );
+    const selectedConfig = path.join(project, "tsconfig.ttsc.json");
+    fs.writeFileSync(
+      selectedConfig,
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "descriptor-selection": ["../selection.js"] },
+          plugins: [{ transform: descriptor }],
+        },
+      }),
+      "utf8",
+    );
     fs.writeFileSync(
       path.join(project, "tsconfig.json"),
       JSON.stringify({
-        compilerOptions: { plugins: [{ transform: descriptor }] },
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "descriptor-selection": ["../ambient-selection.js"] },
+        },
       }),
       "utf8",
     );
@@ -98,6 +114,11 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       `export default ${JSON.stringify(source)};\n`,
       "utf8",
     );
+    fs.writeFileSync(
+      ambientSelection,
+      `export default ${JSON.stringify(ambientSource)};\n`,
+      "utf8",
+    );
     fs.mkdirSync(nearerManifestCandidate, { recursive: true });
     fs.writeFileSync(
       explicitManifest,
@@ -109,7 +130,9 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       descriptor,
       [
         `import source from "../selection";`,
+        `import configuredSource from "descriptor-selection";`,
         `import explicit from "../external/nested/explicit.js";`,
+        `if (configuredSource !== source) throw new Error("selected tsconfig paths were ignored");`,
         `if (!explicit) throw new Error("explicit JavaScript substitution failed");`,
         `export default { name: "bun-esm", source: process.env.TTSC_BUN_DESCRIPTOR_SOURCE ?? source };`,
         "",
@@ -129,24 +152,22 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
         TTSC_GO_CACHE_DIR: path.join(root, "go-cache"),
         TTSC_NODE_BINARY: bunBinary,
       },
-      tsconfig: path.join(project, "tsconfig.json"),
+      tsconfig: selectedConfig,
     });
 
     assert.equal(loaded.nativePlugins[0]?.name, "bun-esm");
     assert.equal(loaded.nativePlugins[0]?.source, source);
-    const canonicalSelection = fs.realpathSync.native(selection);
-    const canonicalSelectionBase = canonicalSelection.slice(
-      0,
-      -path.extname(canonicalSelection).length,
+    const observedSelection = loaded.hostInputs.find((input) =>
+      sameExistingFile(input, selection),
     );
+    assert.ok(observedSelection !== undefined, JSON.stringify(loaded.hostInputs));
     assert.ok(
-      loaded.hostInputs.includes(canonicalSelection),
+      loaded.hostInputs.some((input) =>
+        sameMissingFile(input, `${selectionBase}.ts`),
+      ),
       JSON.stringify(loaded.hostInputs),
     );
-    assert.ok(
-      loaded.hostInputs.includes(`${canonicalSelectionBase}.ts`),
-      JSON.stringify(loaded.hostInputs),
-    );
+    assert.equal(loaded.hostInputs.includes(path.join(project, "tsconfig.json")), false);
     const missingExplicitTs = path.join(explicitDirectory, "explicit.ts");
     assert.ok(
       loaded.hostInputs.includes(missingExplicitTs),
@@ -166,7 +187,7 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
         `  binary: "",`,
         `  cacheDir: ${JSON.stringify(path.join(root, "cache"))},`,
         `  cwd: ${JSON.stringify(project)},`,
-        `  tsconfig: ${JSON.stringify(path.join(project, "tsconfig.json"))},`,
+        `  tsconfig: ${JSON.stringify(selectedConfig)},`,
         `});`,
         `process.stdout.write(JSON.stringify(loaded.hostInputs));`,
         "",
@@ -188,7 +209,31 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     });
     assert.equal(fromBunParent.status, 0, fromBunParent.stderr);
     const parentInputs = JSON.parse(fromBunParent.stdout) as string[];
-    assert.ok(parentInputs.includes(canonicalSelection));
-    assert.ok(parentInputs.includes(`${canonicalSelectionBase}.ts`));
+    const parentSelection = parentInputs.find((input) =>
+      sameExistingFile(input, selection),
+    );
+    assert.ok(parentSelection !== undefined);
+    assert.ok(
+      parentInputs.some((input) =>
+        sameMissingFile(input, `${selectionBase}.ts`),
+      ),
+    );
     assert.ok(parentInputs.includes(missingExplicitTs));
   };
+
+function sameExistingFile(left: string, right: string): boolean {
+  try {
+    const leftStats = fs.statSync(left);
+    const rightStats = fs.statSync(right);
+    return leftStats.dev === rightStats.dev && leftStats.ino === rightStats.ino;
+  } catch {
+    return false;
+  }
+}
+
+function sameMissingFile(left: string, right: string): boolean {
+  return (
+    path.basename(left).toLowerCase() === path.basename(right).toLowerCase() &&
+    sameExistingFile(path.dirname(left), path.dirname(right))
+  );
+}
