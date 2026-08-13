@@ -47,3 +47,31 @@ func TestCLIReportsDiagnosticsWithoutEmit(t *testing.T) {
     t.Fatalf("expected serialized error diagnostics: %#v", transformed.Diagnostics)
   }
 }
+
+// TestCLIReportsInvalidConfigWithoutProgram verifies api-transform preserves
+// its structured diagnostic envelope when config parsing stops before a Program
+// exists. Host-input metadata is Program-owned and must remain absent rather
+// than dereferencing the nil program on this ordinary failure path.
+func TestCLIReportsInvalidConfigWithoutProgram(t *testing.T) {
+  root := t.TempDir()
+  writeProjectFile(t, root, "tsconfig.json", `{
+  "compilerOptions": {
+    "module": "not-a-module-kind"
+  },
+  "files": ["index.ts"]
+}
+`)
+  writeProjectFile(t, root, "index.ts", "export const value = 1;\n")
+
+  code, out, errOut := runNativeCommand(t, "api-transform", "--cwd", root)
+  if code != 2 {
+    t.Fatalf("api-transform should fail with config diagnostics: code=%d stdout=%q stderr=%q", code, out, errOut)
+  }
+  var transformed apiTransformResult
+  if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &transformed); err != nil {
+    t.Fatalf("config diagnostic JSON decode failed: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+  }
+  if len(transformed.Diagnostics) == 0 || transformed.Diagnostics[0].Category != "error" {
+    t.Fatalf("expected serialized config diagnostics: %#v", transformed.Diagnostics)
+  }
+}
