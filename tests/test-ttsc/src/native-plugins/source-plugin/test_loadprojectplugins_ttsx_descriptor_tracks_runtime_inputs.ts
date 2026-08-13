@@ -96,6 +96,37 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
       "utf8",
     );
     fs.writeFileSync(orphanSource, 'export const orphan = "orphan";\n');
+    const refreshPackage = path.join(
+      TestProject.tmpdir("ttsc-ttsx-config-refresh-"),
+      "node_modules",
+      "config-refresh",
+    );
+    fs.mkdirSync(refreshPackage, { recursive: true });
+    fs.writeFileSync(
+      path.join(refreshPackage, "package.json"),
+      JSON.stringify({ private: true, type: "module" }),
+      "utf8",
+    );
+    const refreshSeed = path.join(refreshPackage, "seed.ts");
+    const refreshSelection = path.join(refreshPackage, "selection.tsx");
+    fs.writeFileSync(
+      refreshSelection,
+      'function factory() { return "configured"; }\nexport const value = <probe />;\n',
+      "utf8",
+    );
+    const refreshConfig = path.join(refreshPackage, "tsconfig.json");
+    fs.writeFileSync(
+      refreshSeed,
+      [
+        'import { writeFileSync } from "node:fs";',
+        'import { createRequire } from "node:module";',
+        `writeFileSync(${JSON.stringify(refreshConfig)}, ${JSON.stringify(JSON.stringify({ compilerOptions: { jsx: "react", jsxFactory: "factory", module: "nodenext", moduleResolution: "nodenext", target: "es2022" }, include: ["*.ts", "*.tsx"] }))});`,
+        'export const seed = "seed";',
+        'export const { value } = createRequire(import.meta.url)("./selection.tsx");',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     const entry = path.join(descriptor, "index.ts");
     fs.writeFileSync(
       entry,
@@ -103,8 +134,10 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
         `import { createRequire } from "node:module";`,
         `import { source } from "./selection";`,
         `import { orphan } from ${JSON.stringify(pathToFileURL(orphanSource).href)};`,
+        `import { seed, value } from ${JSON.stringify(pathToFileURL(refreshSeed).href)};`,
         `const require = createRequire(import.meta.url);`,
         `if (require("descriptor-probe") !== "probe" || orphan !== "orphan") throw new Error("descriptor probe failed");`,
+        `if (seed !== "seed" || value !== "configured") throw new Error("descriptor config refresh failed");`,
         `export default () => ({ name: "ttsx-inputs", source });`,
         "",
       ].join("\n"),
@@ -167,6 +200,18 @@ export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
     );
     assert.ok(missingOrphanConfig, JSON.stringify(inputs));
     assert.equal(loaded.hostInputHashes[missingOrphanConfig], null);
+    const observedRefreshConfig = inputs.find((input) =>
+      sameExistingFile(input, refreshConfig),
+    );
+    assert.ok(observedRefreshConfig, JSON.stringify(inputs));
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        loaded.hostInputHashes,
+        observedRefreshConfig,
+      ),
+      false,
+      "a config created during descriptor evaluation must remain unproven",
+    );
     assert.ok(
       Object.entries(loaded.hostInputHashes).some(
         ([input, hash]) =>

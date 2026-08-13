@@ -2519,8 +2519,17 @@ function nearestTsconfig(file: string): string | null {
   for (;;) {
     const cached = tsconfigCache.get(directory);
     if (cached !== undefined) {
-      recordPluginDescriptorTsconfigCandidates(cached.candidates);
-      return rememberTsconfig(chain, cached.result, cached.candidates);
+      if (
+        process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1" ||
+        nearestExistingTsconfig(cached.candidates) === cached.result
+      ) {
+        recordPluginDescriptorTsconfigCandidates(cached.candidates);
+        return rememberTsconfig(chain, cached.result, cached.candidates);
+      }
+      // Descriptor factories can deliberately create a config before a lazy
+      // import. A lookup cached while an earlier import ran must not keep
+      // serving the orphan lane after the nearest candidate changed.
+      tsconfigCache.delete(directory);
     }
     if (path.basename(directory) === "node_modules") {
       return rememberTsconfig(chain, null);
@@ -2537,6 +2546,13 @@ function nearestTsconfig(file: string): string | null {
     }
     directory = parent;
   }
+}
+
+function nearestExistingTsconfig(candidates: readonly string[]): string | null {
+  for (const candidate of candidates) {
+    if (isFile(candidate)) return path.resolve(candidate);
+  }
+  return null;
 }
 
 function rememberTsconfig(
