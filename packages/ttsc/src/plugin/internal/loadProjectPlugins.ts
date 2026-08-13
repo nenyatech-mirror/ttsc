@@ -625,9 +625,10 @@ export function collectProjectHostInputs(
     project.configPaths.map((file) => path.resolve(file)),
   );
   if (!includePluginDiscovery) return [...inputs].sort();
-  const manifest = findNearestPackageJson(project.root);
+  const manifestCandidates = collectNearestPackageJsonCandidates(project.root);
+  for (const candidate of manifestCandidates) inputs.add(candidate);
+  const manifest = manifestCandidates.find(existingFile);
   if (manifest !== undefined) {
-    inputs.add(path.resolve(manifest));
     const projectManifest = readPackageManifest(manifest);
     if (projectManifest !== undefined) {
       const projectRoot = path.dirname(manifest);
@@ -1129,7 +1130,7 @@ function resolveDependencyPackageJson(
 ): string | undefined {
   const direct = path.join(projectRoot, "node_modules", ...name.split("/"));
   const directManifest = path.join(direct, "package.json");
-  if (fs.existsSync(directManifest)) {
+  if (existingFile(directManifest)) {
     return resolveRealPath(directManifest);
   }
   const projectPackage = path.join(projectRoot, "package.json");
@@ -1146,18 +1147,24 @@ function resolveDependencyPackageJson(
 }
 
 function findNearestPackageJson(location: string): string | undefined {
+  const selected = collectNearestPackageJsonCandidates(location).find(
+    existingFile,
+  );
+  return selected === undefined ? undefined : resolveRealPath(selected);
+}
+
+/** Every package-scope candidate through the first regular manifest file. */
+function collectNearestPackageJsonCandidates(location: string): string[] {
   let current = fs.statSync(location).isDirectory()
     ? location
     : path.dirname(location);
+  const candidates: string[] = [];
   while (true) {
-    const manifest = path.join(current, "package.json");
-    if (fs.existsSync(manifest)) {
-      return resolveRealPath(manifest);
-    }
+    const manifest = path.resolve(current, "package.json");
+    candidates.push(manifest);
+    if (existingFile(manifest)) return candidates;
     const parent = path.dirname(current);
-    if (parent === current) {
-      return undefined;
-    }
+    if (parent === current) return candidates;
     current = parent;
   }
 }
@@ -1169,7 +1176,7 @@ function findNearestPackageJson(location: string): string | undefined {
  * message worse here than anywhere else.
  */
 function readPackageManifest(file: string): PackageManifest | undefined {
-  if (!fs.existsSync(file)) {
+  if (!existingFile(file)) {
     return undefined;
   }
   const parsed = readJsonFile(file);
@@ -1717,7 +1724,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    for (let directory = path.dirname(file);;) {`,
   `      const manifest = path.join(directory, "package.json");`,
   `      recordInput(manifest);`,
-  `      if (fs.existsSync(manifest)) break;`,
+  `      if (existingFile(manifest)) break;`,
   `      const parent = path.dirname(directory);`,
   `      if (parent === directory) break;`,
   `      directory = parent;`,
@@ -1727,7 +1734,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    for (let directory = path.dirname(path.resolve(file));;) {`,
   `      const manifest = path.join(directory, "package.json");`,
   `      recordInput(manifest);`,
-  `      if (fs.existsSync(manifest)) return;`,
+  `      if (existingFile(manifest)) return;`,
   `      const parent = path.dirname(directory);`,
   `      if (parent === directory) return;`,
   `      directory = parent;`,

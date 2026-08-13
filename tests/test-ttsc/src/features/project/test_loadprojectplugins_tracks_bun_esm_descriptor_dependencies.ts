@@ -28,7 +28,14 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     const ambientSource = path.join(root, "ambient-plugin-go");
     const selectionBase = path.join(root, "selection");
     const selection = `${selectionBase}.js`;
-    const explicitSelection = path.join(root, "explicit.tsx");
+    const explicitPackage = path.join(root, "external");
+    const explicitDirectory = path.join(explicitPackage, "nested");
+    const explicitManifest = path.join(explicitPackage, "package.json");
+    const nearerManifestCandidate = path.join(
+      explicitDirectory,
+      "package.json",
+    );
+    const explicitSelection = path.join(explicitDirectory, "explicit.tsx");
     const descriptor = path.join(project, "plugin.mts");
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(source, { recursive: true });
@@ -91,12 +98,18 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       `export default ${JSON.stringify(source)};\n`,
       "utf8",
     );
+    fs.mkdirSync(nearerManifestCandidate, { recursive: true });
+    fs.writeFileSync(
+      explicitManifest,
+      JSON.stringify({ private: true, type: "module" }),
+      "utf8",
+    );
     fs.writeFileSync(explicitSelection, `export default true;\n`, "utf8");
     fs.writeFileSync(
       descriptor,
       [
         `import source from "../selection";`,
-        `import explicit from "../explicit.js";`,
+        `import explicit from "../external/nested/explicit.js";`,
         `if (!explicit) throw new Error("explicit JavaScript substitution failed");`,
         `export default { name: "bun-esm", source: process.env.TTSC_BUN_DESCRIPTOR_SOURCE ?? source };`,
         "",
@@ -134,12 +147,14 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
       loaded.hostInputs.includes(`${canonicalSelectionBase}.ts`),
       JSON.stringify(loaded.hostInputs),
     );
-    const missingExplicitTs = path.join(root, "explicit.ts");
+    const missingExplicitTs = path.join(explicitDirectory, "explicit.ts");
     assert.ok(
       loaded.hostInputs.includes(missingExplicitTs),
       JSON.stringify(loaded.hostInputs),
     );
     assert.equal(loaded.hostInputHashes[missingExplicitTs], null);
+    assert.ok(loaded.hostInputs.includes(nearerManifestCandidate));
+    assert.ok(loaded.hostInputs.includes(explicitManifest));
 
     const worker = path.join(root, "bun-parent-worker.cjs");
     fs.writeFileSync(
