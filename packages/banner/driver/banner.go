@@ -542,6 +542,14 @@ function candidateSelected(base, resolvedFile) {
   }
   return false;
 }
+function localBases(specifier, parentDirectory) {
+  if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];
+  const raw = path.resolve(parentDirectory, specifier);
+  const suffixStart = specifier.search(/[?#]/);
+  if (suffixStart === -1) return [raw];
+  const pathname = specifier.slice(0, suffixStart);
+  return pathname === "" ? [raw] : [...new Set([raw, path.resolve(parentDirectory, pathname)])];
+}
 function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
   if (typeof parentURL !== "string" || !parentURL.startsWith("file:")) return;
   const parentDirectory = path.dirname(fileURLToPath(parentURL));
@@ -553,14 +561,13 @@ function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
   } catch {}
   if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {
     try {
-      const base = specifier.startsWith("file:")
-        ? fileURLToPath(specifier)
-        : path.resolve(parentDirectory, specifier);
-      recordPackageManifests(base);
-      let exact = false;
-      try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
-      if (exact) recordInput(base);
-      else recordModuleCandidates(base);
+      for (const base of localBases(specifier, parentDirectory)) {
+        recordPackageManifests(base);
+        let exact = false;
+        try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
+        if (exact) recordInput(base);
+        else recordModuleCandidates(base);
+      }
     } catch {}
     return;
   }
@@ -889,6 +896,14 @@ function candidateSelected(base: string, resolvedFile: string): boolean {
   }
   return false;
 }
+function localBases(specifier: string, parentDirectory: string): string[] {
+  if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];
+  const raw = path.resolve(parentDirectory, specifier);
+  const suffixStart = specifier.search(/[?#]/);
+  if (suffixStart === -1) return [raw];
+  const pathname = specifier.slice(0, suffixStart);
+  return pathname === "" ? [raw] : [...new Set([raw, path.resolve(parentDirectory, pathname)])];
+}
 function recordResolutionCandidates(specifier: string, parentURL: string | undefined, resolvedURL: string | undefined): void {
   if (typeof parentURL !== "string" || !parentURL.startsWith("file:")) return;
   const parentDirectory = path.dirname(fileURLToPath(parentURL));
@@ -900,14 +915,13 @@ function recordResolutionCandidates(specifier: string, parentURL: string | undef
   } catch {}
   if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {
     try {
-      const base = specifier.startsWith("file:")
-        ? fileURLToPath(specifier)
-        : path.resolve(parentDirectory, specifier);
-      recordPackageManifests(base);
-      let exact = false;
-      try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
-      if (exact) recordInput(base);
-      else recordModuleCandidates(base);
+      for (const base of localBases(specifier, parentDirectory)) {
+        recordPackageManifests(base);
+        let exact = false;
+        try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
+        if (exact) recordInput(base);
+        else recordModuleCandidates(base);
+      }
     } catch {}
     return;
   }

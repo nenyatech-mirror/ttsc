@@ -275,7 +275,7 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
       config,
       format === "cjs"
         ? `module.exports = require(${JSON.stringify(external)});\n`
-        : `import selection from ${JSON.stringify(specifier.startsWith(".") ? specifier : `./${specifier}`)};\nimport explicit from ${JSON.stringify(explicitSpecifier.startsWith(".") ? explicitSpecifier : `./${explicitSpecifier}`)};\nif (!explicit) throw new Error("explicit JavaScript substitution failed");\nexport default selection;\n`,
+        : `import selection from ${JSON.stringify(specifier.startsWith(".") ? specifier : `./${specifier}`)};\nimport explicit from ${JSON.stringify(`${explicitSpecifier.startsWith(".") ? explicitSpecifier : `./${explicitSpecifier}`}?utility-input`)};\nif (!explicit) throw new Error("explicit JavaScript substitution failed");\nexport default selection;\n`,
       "utf8",
     );
     const configValue = (phase: "NEW" | "OLD") =>

@@ -20,9 +20,9 @@ import {
  *
  * 1. Load a TypeScript descriptor that imports extensionless ESM source.
  * 2. Capture its descriptor inputs through the real isolated ttsx fallback.
- * 3. Assert the selected source, owning tsconfig, and missing candidates for
- *    both extensionless and explicit-JavaScript substitutions carry
- *    evaluation-time fingerprints.
+ * 3. Assert the selected source, owning tsconfig, and missing candidates for both
+ *    extensionless and explicit-JavaScript substitutions carry evaluation-time
+ *    fingerprints.
  */
 export const test_loadprojectplugins_ttsx_descriptor_tracks_runtime_inputs =
   async () => {

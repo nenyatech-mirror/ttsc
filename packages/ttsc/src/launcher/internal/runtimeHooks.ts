@@ -465,6 +465,16 @@ function recordPluginDescriptorResolutionCandidates(
       if (parentDirectory === directory) return;
     }
   };
+  const localBases = (value: string): string[] => {
+    if (value.startsWith("file:")) return [fileURLToPath(value)];
+    const raw = path.resolve(path.dirname(parent), value);
+    const suffixStart = value.search(/[?#]/);
+    if (suffixStart === -1) return [raw];
+    const pathname = value.slice(0, suffixStart);
+    return pathname === ""
+      ? [raw]
+      : [...new Set([raw, path.resolve(path.dirname(parent), pathname)])];
+  };
   const bases = new Set<string>();
   const recordBase = (base: string): void => {
     const resolvedBase = path.resolve(base);
@@ -502,12 +512,11 @@ function recordPluginDescriptorResolutionCandidates(
     specifier.startsWith("file:")
   ) {
     try {
-      const base = specifier.startsWith("file:")
-        ? fileURLToPath(specifier)
-        : path.resolve(path.dirname(parent), specifier);
-      recordPackageManifests(base);
-      if (isFile(base)) record(base);
-      else recordBase(base);
+      for (const base of localBases(specifier)) {
+        recordPackageManifests(base);
+        if (isFile(base)) record(base);
+        else recordBase(base);
+      }
     } catch {
       // The real resolver owns invalid URL spellings.
     }

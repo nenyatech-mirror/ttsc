@@ -755,6 +755,17 @@ function collectModuleResolutionCandidates(
     }
     return false;
   };
+  const localBases = (): string[] => {
+    if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];
+    const directory = path.dirname(parentFile);
+    const raw = path.resolve(directory, specifier);
+    const suffixStart = specifier.search(/[?#]/);
+    if (suffixStart === -1) return [raw];
+    const pathname = specifier.slice(0, suffixStart);
+    return pathname === ""
+      ? [raw]
+      : [...new Set([raw, path.resolve(directory, pathname)])];
+  };
 
   if (
     specifier.startsWith(".") ||
@@ -762,19 +773,18 @@ function collectModuleResolutionCandidates(
     specifier.startsWith("file:")
   ) {
     try {
-      const base = specifier.startsWith("file:")
-        ? fileURLToPath(specifier)
-        : path.resolve(path.dirname(parentFile), specifier);
-      // An existing exact file wins before extension and directory probes. Its
-      // own recorded identity is therefore sufficient; siblings cannot
-      // supersede it while it exists.
-      if (
-        selectedByExactFile(base, resolvedFile) ||
-        (resolvedFile === undefined && existingFile(base))
-      ) {
-        inputs.add(path.resolve(base));
-      } else {
-        recordBase(base);
+      for (const base of localBases()) {
+        // An existing exact file wins before extension and directory probes.
+        // Its own recorded identity is therefore sufficient; siblings cannot
+        // supersede it while it exists.
+        if (
+          selectedByExactFile(base, resolvedFile) ||
+          (resolvedFile === undefined && existingFile(base))
+        ) {
+          inputs.add(path.resolve(base));
+        } else {
+          recordBase(base);
+        }
       }
     } catch {
       // Invalid URL spellings are diagnosed by the real resolver.
@@ -1147,9 +1157,8 @@ function resolveDependencyPackageJson(
 }
 
 function findNearestPackageJson(location: string): string | undefined {
-  const selected = collectNearestPackageJsonCandidates(location).find(
-    existingFile,
-  );
+  const selected =
+    collectNearestPackageJsonCandidates(location).find(existingFile);
   return selected === undefined ? undefined : resolveRealPath(selected);
 }
 
@@ -1785,6 +1794,15 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    }`,
   `    return false;`,
   `  }`,
+  `  function localBases(specifier, parentFile) {`,
+  `    if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];`,
+  `    const directory = path.dirname(parentFile);`,
+  `    const raw = path.resolve(directory, specifier);`,
+  `    const suffixStart = specifier.search(/[?#]/);`,
+  `    if (suffixStart === -1) return [raw];`,
+  `    const pathname = specifier.slice(0, suffixStart);`,
+  `    return pathname === "" ? [raw] : [...new Set([raw, path.resolve(directory, pathname)])];`,
+  `  }`,
   `  function recordResolutionCandidates(specifier, parent, resolved) {`,
   `    const parentFile = asFile(parent);`,
   `    if (typeof specifier !== "string" || parentFile === undefined) return;`,
@@ -1792,12 +1810,13 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `    try { const file = asFile(resolved); selected = file === undefined ? undefined : fs.realpathSync.native(file); } catch {}`,
   `    if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {`,
   `      try {`,
-  `        const base = specifier.startsWith("file:") ? fileURLToPath(specifier) : path.resolve(path.dirname(parentFile), specifier);`,
-  `        recordPackageManifests(base);`,
-  `        let exact = false;`,
-  `        try { exact = selected === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === selected; } catch {}`,
-  `        if (exact) recordInput(base);`,
-  `        if (!exact) recordModuleCandidates(base);`,
+  `        for (const base of localBases(specifier, parentFile)) {`,
+  `          recordPackageManifests(base);`,
+  `          let exact = false;`,
+  `          try { exact = selected === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === selected; } catch {}`,
+  `          if (exact) recordInput(base);`,
+  `          if (!exact) recordModuleCandidates(base);`,
+  `        }`,
   `      } catch {}`,
   `      return;`,
   `    }`,

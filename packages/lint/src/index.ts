@@ -1101,26 +1101,37 @@ function recordLocalResolutionCandidates(
   parentUrl: string,
 ): void {
   if (!isLocalModuleSpecifier(specifier)) return;
-  let base: string;
+  let bases: string[];
   try {
-    base = specifier.startsWith("file:")
-      ? fileURLToPath(specifier)
-      : path.resolve(path.dirname(fileURLToPath(parentUrl)), specifier);
+    if (specifier.startsWith("file:")) {
+      bases = [fileURLToPath(specifier)];
+    } else {
+      const directory = path.dirname(fileURLToPath(parentUrl));
+      const raw = path.resolve(directory, specifier);
+      const suffixStart = specifier.search(/[?#]/);
+      const pathname =
+        suffixStart === -1 ? specifier : specifier.slice(0, suffixStart);
+      bases = pathname === ""
+        ? [raw]
+        : [...new Set([raw, path.resolve(directory, pathname)])];
+    }
   } catch {
     return;
   }
   const owners = [parentUrl];
-  try {
-    if (fs.statSync(base).isFile()) {
-      recordOptionalFileDependency(base, owners);
-      return;
+  for (const base of bases) {
+    try {
+      if (fs.statSync(base).isFile()) {
+        recordOptionalFileDependency(base, owners);
+        continue;
+      }
+    } catch {
+      // A missing exact spelling falls through to source/extension/directory
+      // probes, all of which can redirect a later evaluation.
     }
-  } catch {
-    // A missing exact spelling falls through to source/extension/directory
-    // probes, all of which can redirect a later evaluation.
-  }
-  for (const candidate of moduleResolutionCandidates(base)) {
-    recordOptionalFileDependency(candidate, owners);
+    for (const candidate of moduleResolutionCandidates(base)) {
+      recordOptionalFileDependency(candidate, owners);
+    }
   }
 }
 
