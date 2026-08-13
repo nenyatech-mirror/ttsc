@@ -150,6 +150,24 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
     assert.equal(completedIntentYielded, true);
     assert.equal(fs.existsSync(completedIntent), false);
 
+    const linkedLeaseCache = path.join(root, "linked-lease-record");
+    const externalLease = path.join(root, "external-lease-record.json");
+    let externalLeaseContents = "";
+    withGoBuildCacheLease(linkedLeaseCache, true, () => {
+      const leaseDirectory = path.join(
+        linkedLeaseCache,
+        ".ttsc-build-leases",
+      );
+      const lease = path.join(leaseDirectory, fs.readdirSync(leaseDirectory)[0]!);
+      externalLeaseContents = fs.readFileSync(lease, "utf8");
+      fs.linkSync(lease, externalLease);
+    });
+    assert.equal(
+      fs.readFileSync(externalLease, "utf8"),
+      externalLeaseContents,
+      "lease completion rewrote an external hard-linked file",
+    );
+
     const futureIntent = writeCoordinationRecord(
       goCache,
       ".ttsc-maintenance",

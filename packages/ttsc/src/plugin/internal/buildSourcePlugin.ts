@@ -3514,10 +3514,9 @@ function writeGoBuildCacheCoordinationRecord(
   },
   status: "active" | "complete",
 ): void {
-  fs.writeFileSync(
+  replaceCacheMetadataFile(
     file,
     `${JSON.stringify({ ...metadata, status, version: 1 })}\n`,
-    "utf8",
   );
 }
 
