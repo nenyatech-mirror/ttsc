@@ -1,5 +1,6 @@
 import { TestProject } from "@ttsc/testing";
 import assert from "node:assert/strict";
+import os from "node:os";
 import path from "node:path";
 
 /**
@@ -7,7 +8,9 @@ import path from "node:path";
  *
  * The dependency cache outlives evaluator processes. Its descriptor lane must
  * therefore key on a per-process nonce rather than the recyclable numeric PID,
- * while ordinary ttsx workers retain their cross-process sharing key.
+ * while ordinary ttsx workers retain their cross-process sharing key. The
+ * evaluator's dependency cache also belongs beside its result so the parent's
+ * existing recursive temp cleanup reclaims the isolated generation.
  */
 export const test_ttsx_descriptor_dependency_cache_uses_a_non_reusable_process_nonce =
   () => {
@@ -43,4 +46,14 @@ export const test_ttsx_descriptor_dependency_cache_uses_a_non_reusable_process_n
     assert.equal(ordinaryA, ordinaryB);
     assert.notEqual(descriptorA, descriptorB);
     assert.notEqual(descriptorA, ordinaryA);
+
+    const evaluationDir = path.join(os.tmpdir(), "ttsc-descriptor-evaluation");
+    const result = path.join(evaluationDir, "descriptor.json");
+    assert.equal(
+      mod.dependencyCacheRoot({
+        TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
+        TTSC_PLUGIN_DESCRIPTOR_OUT: result,
+      }),
+      path.join(evaluationDir, "dependency-cache"),
+    );
   };
