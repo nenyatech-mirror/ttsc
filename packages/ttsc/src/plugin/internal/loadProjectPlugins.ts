@@ -45,6 +45,7 @@ type PackageManifest = {
 
 type ProjectHostInputSnapshot = {
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   hostInputs: string[];
   project: ITtscParsedProjectConfig;
 };
@@ -86,6 +87,7 @@ export function loadProjectPlugins(options: {
   tsconfig?: string;
 }): {
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   hostInputs: string[];
   nativePlugins: ITtscLoadedNativePlugin[];
   project: ITtscParsedProjectConfig;
@@ -105,6 +107,7 @@ export function loadProjectPlugins(options: {
   const { project } = projectSnapshot;
   const projectHostInputs = projectSnapshot.hostInputs;
   const projectHostInputHashes = projectSnapshot.hostInputHashes;
+  const projectHostInputRealpaths = projectSnapshot.hostInputRealpaths;
   const entries: ProjectPluginEntry[] =
     options.entries === false
       ? []
@@ -120,6 +123,10 @@ export function loadProjectPlugins(options: {
         [],
         projectHostInputs,
         revalidateHostInputHashes(projectHostInputHashes, projectHostInputs),
+        revalidateHostInputRealpaths(
+          projectHostInputRealpaths,
+          projectHostInputs,
+        ),
       ),
       nativePlugins: [],
       project,
@@ -153,6 +160,7 @@ export function loadProjectPlugins(options: {
       // A post-resolution snapshot could bless a higher-priority file created
       // after the resolver had already selected the old entry.
       const entryCandidateHashes = hashHostInputPaths(entryCandidates);
+      const entryCandidateRealpaths = realpathHostInputPaths(entryCandidates);
       const request = resolvePluginRequest(specifier, entry.baseDir);
       const loaded = loadPluginEntry(
         entry.config,
@@ -164,9 +172,17 @@ export function loadProjectPlugins(options: {
         loaded.hostInputHashes,
         hashHostInputPaths(Object.keys(loaded.hostInputHashes)),
       );
+      const loadedHostInputRealpaths = mergeObservedHostInputRealpaths(
+        loaded.hostInputRealpaths,
+        realpathHostInputPaths(Object.keys(loaded.hostInputRealpaths)),
+      );
       const hostInputHashes = mergeObservedHostInputHashes(
         entryCandidateHashes,
         loadedHostInputHashes,
+      );
+      const hostInputRealpaths = mergeObservedHostInputRealpaths(
+        entryCandidateRealpaths,
+        loadedHostInputRealpaths,
       );
       for (const input of loaded.hostInputs) {
         const absolute = path.resolve(input);
@@ -179,6 +195,7 @@ export function loadProjectPlugins(options: {
       return {
         ...loaded,
         hostInputHashes,
+        hostInputRealpaths,
         hostInputs: [...loaded.hostInputs, ...entryCandidates],
         request,
       };
@@ -217,6 +234,11 @@ export function loadProjectPlugins(options: {
       index,
       hostInputs,
     );
+    const pluginHostInputRealpaths = validatePluginHostInputRealpaths(
+      plugin,
+      index,
+      hostInputs,
+    );
     return {
       capabilities: plugin.capabilities,
       contributors,
@@ -231,6 +253,12 @@ export function loadProjectPlugins(options: {
       hostInputHashes: mergePluginHostInputHashes(
         loadedEntries[index]!.hostInputHashes,
         pluginHostInputHashes,
+        loadedEntries[index]!.hostInputs,
+        hostInputs,
+      ),
+      hostInputRealpaths: mergePluginHostInputHashes(
+        loadedEntries[index]!.hostInputRealpaths,
+        pluginHostInputRealpaths,
         loadedEntries[index]!.hostInputs,
         hostInputs,
       ),
@@ -331,6 +359,10 @@ export function loadProjectPlugins(options: {
       records,
       projectHostInputs,
       revalidateHostInputHashes(projectHostInputHashes, projectHostInputs),
+      revalidateHostInputRealpaths(
+        projectHostInputRealpaths,
+        projectHostInputs,
+      ),
     ),
     nativePlugins: orderNativePlugins(nativePlugins),
     project,
@@ -349,13 +381,16 @@ function collectHostInputSnapshot(
   records: readonly {
     config: ITtscProjectPluginConfig;
     hostInputHashes: Readonly<Record<string, string | null>>;
+    hostInputRealpaths: Readonly<Record<string, string | null>>;
     hostInputs: readonly string[];
     request: string;
   }[],
   baselineInputs: readonly string[],
   baselineHashes: Readonly<Record<string, string | null>>,
+  baselineRealpaths: Readonly<Record<string, string | null>>,
 ): {
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   hostInputs: string[];
 } {
   const inputs = new Set<string>(
@@ -385,6 +420,10 @@ function collectHostInputSnapshot(
     baselineHashes,
     ...records.map((record) => record.hostInputHashes),
   );
+  const evaluationRealpaths = mergeObservedHostInputRealpaths(
+    baselineRealpaths,
+    ...records.map((record) => record.hostInputRealpaths),
+  );
   for (const record of records) {
     for (const input of record.hostInputs) {
       const absolute = path.resolve(input);
@@ -392,6 +431,14 @@ function collectHostInputSnapshot(
         !Object.prototype.hasOwnProperty.call(record.hostInputHashes, absolute)
       ) {
         delete evaluationHashes[absolute];
+      }
+      if (
+        !Object.prototype.hasOwnProperty.call(
+          record.hostInputRealpaths,
+          absolute,
+        )
+      ) {
+        delete evaluationRealpaths[absolute];
       }
     }
   }
@@ -402,7 +449,14 @@ function collectHostInputSnapshot(
         : [],
     ),
   );
-  return { hostInputHashes, hostInputs };
+  const hostInputRealpaths = Object.fromEntries(
+    hostInputs.flatMap((file) =>
+      Object.prototype.hasOwnProperty.call(evaluationRealpaths, file)
+        ? ([[file, evaluationRealpaths[file]!]] as const)
+        : [],
+    ),
+  );
+  return { hostInputHashes, hostInputRealpaths, hostInputs };
 }
 
 /**
@@ -425,6 +479,7 @@ function readProjectHostInputSnapshot(options: {
   const observedInputs = new Set(hostInputs);
   for (let attempt = 0; attempt < 3; attempt++) {
     const before = hashHostInputPaths(hostInputs);
+    const beforeRealpaths = realpathHostInputPaths(hostInputs);
     const candidateProject = readProjectConfig(projectOptions);
     const candidateInputs = collectProjectHostInputs(
       candidateProject,
@@ -432,12 +487,15 @@ function readProjectHostInputSnapshot(options: {
     );
     for (const input of candidateInputs) observedInputs.add(input);
     const after = hashHostInputPaths(candidateInputs);
+    const afterRealpaths = realpathHostInputPaths(candidateInputs);
     if (
       equalHostInputLists(hostInputs, candidateInputs) &&
-      equalHostInputHashes(before, after)
+      equalHostInputHashes(before, after) &&
+      equalHostInputHashes(beforeRealpaths, afterRealpaths)
     ) {
       return {
         hostInputHashes: after,
+        hostInputRealpaths: afterRealpaths,
         hostInputs: candidateInputs,
         project: candidateProject,
       };
@@ -447,6 +505,7 @@ function readProjectHostInputSnapshot(options: {
   }
   return {
     hostInputHashes: {},
+    hostInputRealpaths: {},
     hostInputs: [...observedInputs].sort(),
     project,
   };
@@ -498,6 +557,23 @@ function revalidateHostInputHashes(
   return output;
 }
 
+/** Keep physical-identity proof only while the same path resolves identically. */
+function revalidateHostInputRealpaths(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = realpathHostInputPaths(inputs);
+  return Object.fromEntries(
+    inputs.flatMap((input) => {
+      const absolute = path.resolve(input);
+      return Object.prototype.hasOwnProperty.call(initial, absolute) &&
+        initial[absolute] === current[absolute]
+        ? ([[absolute, current[absolute]!]] as const)
+        : [];
+    }),
+  );
+}
+
 function hashHostInput(file: string): string | null {
   try {
     if (fs.statSync(file).isDirectory()) {
@@ -520,6 +596,23 @@ export function hashHostInputPaths(
 ): Record<string, string | null> {
   return Object.fromEntries(
     files.map((file) => [path.resolve(file), hashHostInput(file)]),
+  );
+}
+
+/** Physical path selected by a host input, or null while it is unresolved. */
+export function realpathHostInput(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
+  }
+}
+
+export function realpathHostInputPaths(
+  files: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    files.map((file) => [path.resolve(file), realpathHostInput(file)]),
   );
 }
 
@@ -1125,6 +1218,7 @@ function loadPluginEntry(
   effectiveEnv: NodeJS.ProcessEnv,
 ): {
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   hostInputs: string[];
   plugin: ITtscPlugin;
 } {
@@ -1148,6 +1242,7 @@ function loadPluginEntry(
     rejectJsTransformFunctions(specifier, loaded.descriptor);
     return {
       hostInputHashes: loaded.hostInputHashes,
+      hostInputRealpaths: loaded.hostInputRealpaths,
       hostInputs: loaded.inputs,
       plugin: loaded.descriptor,
     };
@@ -1198,6 +1293,7 @@ function loadPluginDescriptor(
 interface IsolatedPluginDescriptor {
   descriptor: unknown;
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   inputs: string[];
 }
 
@@ -1327,6 +1423,33 @@ function loadCommonJsDescriptor(
           ),
         )
       : {};
+    const parsedRealpaths = isRecord(parsed.inputRealpaths)
+      ? Object.fromEntries(
+          Object.entries(parsed.inputRealpaths).flatMap(([file, realpath]) =>
+            (typeof realpath === "string" && path.isAbsolute(realpath)) ||
+            realpath === null
+              ? [
+                  [
+                    path.resolve(file),
+                    realpath === null ? null : path.resolve(realpath),
+                  ],
+                ]
+              : [],
+          ),
+        )
+      : {};
+    const stableParsedRealpaths = mergeObservedHostInputRealpaths(
+      parsedRealpaths,
+      realpathHostInputPaths(Object.keys(parsedRealpaths)),
+    );
+    for (const input of parsed.inputs) {
+      const absolute = path.resolve(String(input));
+      if (
+        !Object.prototype.hasOwnProperty.call(stableParsedRealpaths, absolute)
+      ) {
+        delete parsedHashes[absolute];
+      }
+    }
     const runtimeInputs = readTtsxDescriptorInputs(inputsOut, request);
     return {
       descriptor: parsed.descriptor,
@@ -1336,6 +1459,10 @@ function loadCommonJsDescriptor(
           runtimeInputs.hostInputHashes,
         ),
         runtimeInputs.unstableInputs,
+      ),
+      hostInputRealpaths: mergeObservedHostInputRealpaths(
+        stableParsedRealpaths,
+        runtimeInputs.hostInputRealpaths,
       ),
       inputs: [
         ...new Set([
@@ -1414,6 +1541,50 @@ function validatePluginHostInputHashes(
   return output;
 }
 
+/** Validate descriptor-supplied physical identities for host inputs. */
+function validatePluginHostInputRealpaths(
+  plugin: ITtscPlugin,
+  index: number,
+  hostInputs: readonly string[],
+): Record<string, string | null> {
+  const label = plugin.name ?? `#${index + 1}`;
+  if (plugin.hostInputRealpaths === undefined) return {};
+  if (
+    !isRecord(plugin.hostInputRealpaths) ||
+    Array.isArray(plugin.hostInputRealpaths)
+  ) {
+    throw new Error(
+      `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputRealpaths"; expected an object keyed by absolute hostInputs paths`,
+    );
+  }
+  const allowed = new Set(hostInputs.map((file) => path.resolve(file)));
+  const output: Record<string, string | null> = {};
+  for (const [file, realpath] of Object.entries(plugin.hostInputRealpaths)) {
+    if (!path.isAbsolute(file)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputRealpaths" key ${JSON.stringify(file)}; expected an absolute path`,
+      );
+    }
+    const absolute = path.resolve(file);
+    if (!allowed.has(absolute)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} identifies ${JSON.stringify(file)} without listing it in "hostInputs"`,
+      );
+    }
+    if (
+      realpath !== null &&
+      (typeof realpath !== "string" || !path.isAbsolute(realpath))
+    ) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid physical identity for ${JSON.stringify(file)}; expected an absolute realpath or null`,
+      );
+    }
+    output[absolute] =
+      realpath === null ? null : path.resolve(realpath as string);
+  }
+  return output;
+}
+
 /** Merge snapshots and omit every path observed in contradictory states. */
 function mergeObservedHostInputHashes(
   ...sources: Readonly<Record<string, string | null>>[]
@@ -1437,6 +1608,8 @@ function mergeObservedHostInputHashes(
   }
   return output;
 }
+
+const mergeObservedHostInputRealpaths = mergeObservedHostInputHashes;
 
 /** Prevent a later plugin claim from reviving an unstable loader input. */
 function mergePluginHostInputHashes(
@@ -1504,11 +1677,16 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
   `  const inputs = new Set();`,
   `  const inputHashes = new Map();`,
+  `  const inputRealpaths = new Map();`,
   `  const unstableInputHashes = new Set();`,
   `  function recordInput(file) {`,
   `    file = path.resolve(file);`,
   `    inputs.add(file);`,
   `    if (unstableInputHashes.has(file)) return;`,
+  `    let observedRealpath;`,
+  `    try { observedRealpath = fs.realpathSync.native(file); } catch { observedRealpath = null; }`,
+  `    if (inputRealpaths.has(file) && inputRealpaths.get(file) !== observedRealpath) { inputHashes.delete(file); inputRealpaths.delete(file); unstableInputHashes.add(file); return; }`,
+  `    inputRealpaths.set(file, observedRealpath);`,
   `    let observed;`,
   `    try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); } catch { observed = null; }`,
   `    if (inputHashes.has(file) && inputHashes.get(file) !== observed) { inputHashes.delete(file); unstableInputHashes.add(file); return; }`,
@@ -1717,7 +1895,7 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   // that influence.
   `  const serializedDescriptor = JSON.stringify(descriptor);`,
   `  for (const input of [...inputs]) recordInput(input);`,
-  `  const payload = { inputHashes: Object.fromEntries(inputHashes), inputs: [...inputs].sort() };`,
+  `  const payload = { inputHashes: Object.fromEntries(inputHashes), inputRealpaths: Object.fromEntries(inputRealpaths), inputs: [...inputs].sort() };`,
   `  if (serializedDescriptor !== undefined) payload.descriptor = JSON.parse(serializedDescriptor);`,
   `  fs.writeFileSync(out, JSON.stringify(payload));`,
   `} catch (error) {`,
@@ -1914,6 +2092,7 @@ ${reason}`);
           inputSnapshot.hostInputHashes,
           inputSnapshot.unstableInputs,
         ),
+        hostInputRealpaths: inputSnapshot.hostInputRealpaths,
         inputs: inputSnapshot.inputs,
       };
     } catch (error) {
@@ -1929,6 +2108,7 @@ ${reason}`);
 interface TtsxDescriptorResolutionRecord {
   hash?: string | null;
   parent?: string;
+  realpath?: string | null;
   resolved?: string;
   specifier?: string;
   unstable?: boolean;
@@ -1943,17 +2123,24 @@ function readTtsxDescriptorInputs(
   request: string,
 ): {
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   inputs: string[];
   unstableInputs: string[];
 } {
   const inputs = new Set<string>([path.resolve(request)]);
   const hashes = new Map<string, string | null>();
+  const realpaths = new Map<string, string | null>();
   const unstableInputs = new Set<string>();
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch {
-    return { hostInputHashes: {}, inputs: [...inputs], unstableInputs: [] };
+    return {
+      hostInputHashes: {},
+      hostInputRealpaths: {},
+      inputs: [...inputs],
+      unstableInputs: [],
+    };
   }
   for (const line of text.split(/\r?\n/)) {
     if (line.trim() === "") continue;
@@ -1968,8 +2155,24 @@ function readTtsxDescriptorInputs(
       inputs.add(resolved);
       if (record.unstable === true) {
         hashes.delete(resolved);
+        realpaths.delete(resolved);
         unstableInputs.add(resolved);
         continue;
+      }
+      if (
+        (typeof record.realpath === "string" &&
+          path.isAbsolute(record.realpath)) ||
+        record.realpath === null
+      ) {
+        const observed =
+          record.realpath === null ? null : path.resolve(record.realpath);
+        if (realpaths.has(resolved) && realpaths.get(resolved) !== observed) {
+          hashes.delete(resolved);
+          realpaths.delete(resolved);
+          unstableInputs.add(resolved);
+          continue;
+        }
+        realpaths.set(resolved, observed);
       }
       if (typeof record.hash === "string" || record.hash === null) {
         if (unstableInputs.has(resolved)) {
@@ -1979,6 +2182,7 @@ function readTtsxDescriptorInputs(
           hashes.get(resolved) !== record.hash
         ) {
           hashes.delete(resolved);
+          realpaths.delete(resolved);
           unstableInputs.add(resolved);
         } else {
           hashes.set(resolved, record.hash);
@@ -1998,8 +2202,15 @@ function readTtsxDescriptorInputs(
       }
     }
   }
+  for (const [resolved, observed] of realpaths) {
+    if (realpathHostInput(resolved) === observed) continue;
+    hashes.delete(resolved);
+    realpaths.delete(resolved);
+    unstableInputs.add(resolved);
+  }
   return {
     hostInputHashes: Object.fromEntries(hashes),
+    hostInputRealpaths: Object.fromEntries(realpaths),
     inputs: [...inputs].sort(),
     unstableInputs: [...unstableInputs],
   };

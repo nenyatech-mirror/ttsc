@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
@@ -5,6 +6,7 @@ import {
   collectProjectHostInputs,
   hashHostInputPaths,
   loadProjectPlugins,
+  realpathHostInputPaths,
 } from "../../plugin/internal/loadProjectPlugins";
 import type { ITtscCompilerContext } from "../../structures/ITtscCompilerContext";
 import type { ITtscCompilerDiagnostic } from "../../structures/ITtscCompilerDiagnostic";
@@ -48,6 +50,7 @@ export function transformProjectInMemory(options: ITtscCompilerContext): {
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
   hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
   hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
@@ -80,6 +83,7 @@ function transformProjectWithNativeHost(
   project: ITtscParsedProjectConfig,
   baseline?: {
     hostInputHashes: Readonly<Record<string, string | null>>;
+    hostInputRealpaths: Readonly<Record<string, string | null>>;
     hostInputs: readonly string[];
   },
 ): {
@@ -87,6 +91,7 @@ function transformProjectWithNativeHost(
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
   hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
   hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
@@ -100,6 +105,7 @@ function transformProjectWithNativeHost(
   // must not become per-project universal inputs a second time.
   const projectHostInputs = collectProjectHostInputs(project, false);
   const projectHostInputHashes = hashHostInputPaths(projectHostInputs);
+  const projectHostInputRealpaths = realpathHostInputPaths(projectHostInputs);
   const observedHostInputs = mergeHostInputs(
     baseline?.hostInputs,
     projectHostInputs,
@@ -107,6 +113,12 @@ function transformProjectWithNativeHost(
   const observedHostInputHashes = mergeCompatibleHostInputHashes(
     baseline?.hostInputHashes ?? {},
     projectHostInputHashes,
+    baseline?.hostInputs ?? [],
+    projectHostInputs,
+  );
+  const observedHostInputRealpaths = mergeCompatibleHostInputHashes(
+    baseline?.hostInputRealpaths ?? {},
+    projectHostInputRealpaths,
     baseline?.hostInputs ?? [],
     projectHostInputs,
   );
@@ -141,11 +153,25 @@ function transformProjectWithNativeHost(
     output.hostInputHashes ?? {},
     output.hostInputs ?? [],
   );
+  const finalObservedHostInputRealpaths = revalidateHostInputRealpaths(
+    observedHostInputRealpaths,
+    observedHostInputs,
+  );
+  const finalOutputHostInputRealpaths = revalidateHostInputRealpaths(
+    output.hostInputRealpaths ?? {},
+    output.hostInputs ?? [],
+  );
   return {
     ...envelopeSideChannels(output),
     hostInputHashes: mergeCompatibleHostInputHashes(
       finalObservedHostInputHashes,
       finalOutputHostInputHashes,
+      observedHostInputs,
+      output.hostInputs,
+    ),
+    hostInputRealpaths: mergeCompatibleHostInputHashes(
+      finalObservedHostInputRealpaths,
+      finalOutputHostInputRealpaths,
       observedHostInputs,
       output.hostInputs,
     ),
@@ -168,6 +194,7 @@ function transformProjectWithPlugins(
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
   hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
   hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
@@ -197,6 +224,10 @@ function transformProjectWithPlugins(
         loaded.hostInputHashes,
         loaded.hostInputs,
       ),
+      hostInputRealpaths: revalidateHostInputRealpaths(
+        loaded.hostInputRealpaths,
+        loaded.hostInputs,
+      ),
       hostInputs: loaded.hostInputs,
       result: checked,
       typescript: {},
@@ -208,11 +239,21 @@ function transformProjectWithPlugins(
       loaded.hostInputHashes,
       loaded.hostInputs,
     );
+    const finalLoadedHostInputRealpaths = revalidateHostInputRealpaths(
+      loaded.hostInputRealpaths,
+      loaded.hostInputs,
+    );
     return {
       ...envelopeSideChannels(transformed),
       hostInputHashes: mergeCompatibleHostInputHashes(
         finalLoadedHostInputHashes,
         transformed.hostInputHashes,
+        loaded.hostInputs,
+        transformed.hostInputs,
+      ),
+      hostInputRealpaths: mergeCompatibleHostInputHashes(
+        finalLoadedHostInputRealpaths,
+        transformed.hostInputRealpaths,
         loaded.hostInputs,
         transformed.hostInputs,
       ),
@@ -259,11 +300,25 @@ function transformProjectWithPlugins(
     output.hostInputHashes ?? {},
     output.hostInputs ?? [],
   );
+  const finalLoadedHostInputRealpaths = revalidateHostInputRealpaths(
+    loaded.hostInputRealpaths,
+    loaded.hostInputs,
+  );
+  const finalOutputHostInputRealpaths = revalidateHostInputRealpaths(
+    output.hostInputRealpaths ?? {},
+    output.hostInputs ?? [],
+  );
   return {
     ...envelopeSideChannels(output),
     hostInputHashes: mergeCompatibleHostInputHashes(
       finalLoadedHostInputHashes,
       finalOutputHostInputHashes,
+      loaded.hostInputs,
+      output.hostInputs,
+    ),
+    hostInputRealpaths: mergeCompatibleHostInputHashes(
+      finalLoadedHostInputRealpaths,
+      finalOutputHostInputRealpaths,
       loaded.hostInputs,
       output.hostInputs,
     ),
@@ -279,6 +334,23 @@ function revalidateHostInputHashes(
   inputs: readonly string[],
 ): Record<string, string | null> {
   const current = hashHostInputPaths(inputs);
+  return Object.fromEntries(
+    inputs.flatMap((input) => {
+      const absolute = path.resolve(input);
+      return Object.prototype.hasOwnProperty.call(initial, absolute) &&
+        initial[absolute] === current[absolute]
+        ? ([[absolute, current[absolute]!]] as const)
+        : [];
+    }),
+  );
+}
+
+/** Keep evaluation proof only while each lexical path selects the same target. */
+function revalidateHostInputRealpaths(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = realpathHostInputPaths(inputs);
   return Object.fromEntries(
     inputs.flatMap((input) => {
       const absolute = path.resolve(input);
@@ -572,6 +644,7 @@ function parseNativeTransformOutput(
   diagnostics: ITtscCompilerDiagnostic[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
   hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
   hostInputs?: string[];
   typescript: Record<string, string>;
   volatile?: string[];
@@ -583,6 +656,7 @@ function parseNativeTransformOutput(
       diagnostics?: ITtscCompilerDiagnostic[];
       graph?: ITtscCompilerTransformation.IReferenceGraph;
       hostInputHashes?: Record<string, string | null>;
+      hostInputRealpaths?: Record<string, string | null>;
       hostInputs?: string[];
       typescript?: Record<string, string>;
       volatile?: string[];
@@ -596,6 +670,9 @@ function parseNativeTransformOutput(
     const dependenciesComplete = parseFileList(parsed.dependenciesComplete);
     const graph = parseReferenceGraph(parsed.graph);
     const hostInputHashes = parseHostInputHashes(parsed.hostInputHashes);
+    const hostInputRealpaths = parseHostInputRealpaths(
+      parsed.hostInputRealpaths,
+    );
     const hostInputs = parseFileList(parsed.hostInputs);
     const volatile = parseFileList(parsed.volatile);
     return {
@@ -603,6 +680,7 @@ function parseNativeTransformOutput(
       ...(dependenciesComplete === undefined ? {} : { dependenciesComplete }),
       ...(graph === undefined ? {} : { graph }),
       ...(hostInputHashes === undefined ? {} : { hostInputHashes }),
+      ...(hostInputRealpaths === undefined ? {} : { hostInputRealpaths }),
       ...(hostInputs === undefined ? {} : { hostInputs }),
       ...(volatile === undefined ? {} : { volatile }),
       diagnostics: Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [],
@@ -636,6 +714,35 @@ function parseHostInputHashes(
       continue;
     }
     output[path.resolve(file)] = hash;
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
+}
+
+/** Parse native evaluation-time realpath/null host-input identities. */
+function parseHostInputRealpaths(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, realpath] of Object.entries(value)) {
+    if (
+      !path.isAbsolute(file) ||
+      (realpath !== null &&
+        (typeof realpath !== "string" || !path.isAbsolute(realpath)))
+    ) {
+      continue;
+    }
+    if (realpath === null) {
+      output[path.resolve(file)] = null;
+      continue;
+    }
+    try {
+      output[path.resolve(file)] = fs.realpathSync.native(realpath as string);
+    } catch {
+      output[path.resolve(file)] = path.resolve(realpath as string);
+    }
   }
   return Object.keys(output).length === 0 ? undefined : output;
 }

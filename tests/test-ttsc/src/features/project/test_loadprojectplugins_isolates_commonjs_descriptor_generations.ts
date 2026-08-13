@@ -99,6 +99,14 @@ export const test_loadprojectplugins_isolates_commonjs_descriptor_generations =
     assert.ok(first.hostInputs.includes(shared));
     assert.ok(first.hostInputs.includes(getterSelection));
     assert.ok(first.hostInputs.includes(`${getterSelectionBase}.js`));
+    assert.equal(
+      first.hostInputRealpaths[shared],
+      fs.realpathSync.native(shared),
+    );
+    assert.equal(
+      first.hostInputRealpaths[getterSelection],
+      fs.realpathSync.native(getterSelection),
+    );
     assert.equal(first.nativePlugins[0]?.name, "good");
     const second = load();
     assert.equal(second.nativePlugins[0]?.name, "good");

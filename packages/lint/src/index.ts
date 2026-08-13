@@ -35,6 +35,7 @@ type TtscPluginDescriptor = {
   };
   contributors?: TtscPluginContributor[];
   hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
   hostInputs?: string[];
   name: string;
   reportsTypeScriptDiagnostics?: boolean;
@@ -150,6 +151,7 @@ export default function createTtscPlugin(
       threadingArgs: true,
     },
     hostInputHashes: resolvedConfig.hostInputHashes,
+    hostInputRealpaths: resolvedConfig.hostInputRealpaths,
     hostInputs: resolvedConfig.hostInputs,
     name: "@ttsc/lint",
     reportsTypeScriptDiagnostics: true,
@@ -244,6 +246,7 @@ function resolveConfigFileContributors(
 ): {
   contributors: TtscPluginContributor[];
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   hostInputs: string[];
 } {
   const configFile = readConfigFileOption(context);
@@ -257,6 +260,7 @@ function resolveConfigFileContributors(
       : {
           configPath: explicitConfigPath,
           hostInputHashes: hashHostInputPaths([explicitConfigPath]),
+          hostInputRealpaths: realpathHostInputPaths([explicitConfigPath]),
           hostInputs: [explicitConfigPath],
         };
   const { configPath } = discovery;
@@ -264,6 +268,7 @@ function resolveConfigFileContributors(
     return {
       contributors: [],
       hostInputHashes: discovery.hostInputHashes,
+      hostInputRealpaths: discovery.hostInputRealpaths,
       hostInputs: discovery.hostInputs,
     };
   }
@@ -289,6 +294,8 @@ function resolveConfigFileContributors(
     )
     .map((dependency) => dependency.path);
   const hostInputHashes = { ...discovery.hostInputHashes };
+  const hostInputRealpaths = { ...discovery.hostInputRealpaths };
+  const unstableRealpaths = new Set<string>();
   const unprovenInputs = new Set<string>();
   const missingOptionalDigest = createHash("sha256")
     .update("missing\0")
@@ -298,6 +305,17 @@ function resolveConfigFileContributors(
       continue;
     }
     const input = path.resolve(dependency.path);
+    const realpath = hostInputRealpath(input);
+    if (
+      Object.prototype.hasOwnProperty.call(hostInputRealpaths, input) &&
+      hostInputRealpaths[input] !== realpath
+    ) {
+      delete hostInputRealpaths[input];
+      delete hostInputHashes[input];
+      unstableRealpaths.add(input);
+    } else if (!unstableRealpaths.has(input)) {
+      hostInputRealpaths[input] = realpath;
+    }
     let hash: string | null | undefined;
     if (
       dependency.kind === "file" &&
@@ -328,6 +346,7 @@ function resolveConfigFileContributors(
   return {
     contributors: out,
     hostInputHashes,
+    hostInputRealpaths,
     hostInputs: [...discovery.hostInputs, ...dependencyInputs],
   };
 }
@@ -359,15 +378,36 @@ function hashHostInputPaths(
   );
 }
 
+function hostInputRealpath(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
+  }
+}
+
+function realpathHostInputPaths(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => {
+      const file = path.resolve(input);
+      return [file, hostInputRealpath(file)] as const;
+    }),
+  );
+}
+
 /** Mirror native discovery and fingerprint every candidate before selecting. */
 function discoverLintConfigFile(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): {
   configPath?: string;
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   hostInputs: string[];
 } {
   const hostInputHashes: Record<string, string | null> = {};
+  const hostInputRealpaths: Record<string, string | null> = {};
   const hostInputs: string[] = [];
   const recordCandidates = (candidates: readonly string[]): void => {
     for (const candidate of candidates) {
@@ -377,6 +417,7 @@ function discoverLintConfigFile(
       }
       hostInputs.push(absolute);
       Object.assign(hostInputHashes, hashHostInputPaths([absolute]));
+      Object.assign(hostInputRealpaths, realpathHostInputPaths([absolute]));
     }
   };
   for (const origin of discoveryConfigBaseDirs(context)) {
@@ -387,7 +428,12 @@ function discoverLintConfigFile(
       recordCandidates(candidates);
       const matches = lintConfigMatchesIn(directory);
       if (matches.length === 1) {
-        return { configPath: matches[0], hostInputHashes, hostInputs };
+        return {
+          configPath: matches[0],
+          hostInputHashes,
+          hostInputRealpaths,
+          hostInputs,
+        };
       }
       if (matches.length > 1) {
         throw new Error(
@@ -400,7 +446,7 @@ function discoverLintConfigFile(
       if (parent === directory) break;
     }
   }
-  return { hostInputHashes, hostInputs };
+  return { hostInputHashes, hostInputRealpaths, hostInputs };
 }
 
 function assertContributorNamespacesDoNotCollide(

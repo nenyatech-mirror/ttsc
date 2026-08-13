@@ -156,6 +156,9 @@ export namespace ITtscCompilerTransformation {
      */
     hostInputHashes?: Record<string, string | null>;
 
+    /** Evaluation-time physical identities paired with {@link hostInputs}. */
+    hostInputRealpaths?: Record<string, string | null>;
+
     /**
      * Transformed files (keyed like {@link typescript}) whose output depends on
      * non-file inputs (environment, time, network) as declared by the transform
@@ -209,6 +212,9 @@ export namespace ITtscCompilerTransformation {
 
     /** Generation-time host-input fingerprints. */
     hostInputHashes?: Record<string, string | null>;
+
+    /** Generation-time physical host-input identities. */
+    hostInputRealpaths?: Record<string, string | null>;
 
     /**
      * Volatile transformed files. Same shape and semantics as

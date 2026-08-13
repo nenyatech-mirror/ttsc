@@ -101,8 +101,9 @@ type PluginContext struct {
   Entry    PluginEntry
   Tsconfig string
 
-  reportHostInput     func(string)
-  reportHostInputHash func(string, *string)
+  reportHostInput         func(string)
+  reportHostInputHash     func(string, *string)
+  reportHostInputRealpath func(string, *string)
 }
 
 // ReportHostInputHash declares the exact file state consumed by a native
@@ -125,6 +126,36 @@ func (ctx PluginContext) ReportHostInputHash(file string, hash *string) {
     return
   }
   ctx.reportHostInputHash(file, hash)
+}
+
+// ReportHostInputRealpath declares the physical path resolved while a native
+// plugin consumed file. realpath is absolute for an observed path and nil for
+// a missing candidate. Conflicting observations remain host inputs but are
+// omitted from PluginHostInputRealpaths so adapters cannot attach an earlier
+// result to a retargeted symlink or junction.
+func (ctx PluginContext) ReportHostInputRealpath(file string, realpath *string) {
+  if ctx.reportHostInputRealpath == nil || strings.TrimSpace(file) == "" {
+    return
+  }
+  if !filepath.IsAbs(file) {
+    file = filepath.Join(ctx.Cwd, file)
+  }
+  file = filepath.Clean(file)
+  if realpath != nil {
+    if strings.TrimSpace(*realpath) == "" {
+      if ctx.reportHostInput != nil {
+        ctx.reportHostInput(file)
+      }
+      return
+    }
+    resolved := *realpath
+    if !filepath.IsAbs(resolved) {
+      resolved = filepath.Join(ctx.Cwd, resolved)
+    }
+    resolved = filepath.Clean(resolved)
+    realpath = &resolved
+  }
+  ctx.reportHostInputRealpath(file, realpath)
 }
 
 func isLowerSHA256(value string) bool {
@@ -197,9 +228,10 @@ type pluginHostInputScopes struct {
 }
 
 type pluginHostInputs struct {
-  files  map[string]struct{}
-  hashes map[string]pluginHostInputHash
-  mu     sync.Mutex
+  files     map[string]struct{}
+  hashes    map[string]pluginHostInputHash
+  realpaths map[string]pluginHostInputHash
+  mu        sync.Mutex
 }
 
 type pluginHostInputHash struct {
@@ -213,8 +245,9 @@ func newPluginHostInputScopes() *pluginHostInputScopes {
 
 func newPluginHostInputs() *pluginHostInputs {
   return &pluginHostInputs{
-    files:  map[string]struct{}{},
-    hashes: map[string]pluginHostInputHash{},
+    files:     map[string]struct{}{},
+    hashes:    map[string]pluginHostInputHash{},
+    realpaths: map[string]pluginHostInputHash{},
   }
 }
 
@@ -255,6 +288,23 @@ func (inputs *pluginHostInputs) addHash(file string, hash *string) {
   }
 }
 
+func (inputs *pluginHostInputs) addRealpath(file string, realpath *string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  previous, exists := inputs.realpaths[file]
+  if !exists {
+    inputs.realpaths[file] = pluginHostInputHash{hash: cloneStringPointer(realpath), known: true}
+    return
+  }
+  if !previous.known || !sameStringPointer(previous.hash, realpath) {
+    inputs.realpaths[file] = pluginHostInputHash{known: false}
+  }
+}
+
 func cloneStringPointer(value *string) *string {
   if value == nil {
     return nil
@@ -279,9 +329,9 @@ func (inputs *pluginHostInputs) add(file string) {
   inputs.mu.Unlock()
 }
 
-func (inputs *pluginHostInputs) snapshot() (map[string]struct{}, map[string]pluginHostInputHash) {
+func (inputs *pluginHostInputs) snapshot() (map[string]struct{}, map[string]pluginHostInputHash, map[string]pluginHostInputHash) {
   if inputs == nil {
-    return nil, nil
+    return nil, nil, nil
   }
   inputs.mu.Lock()
   defer inputs.mu.Unlock()
@@ -296,13 +346,20 @@ func (inputs *pluginHostInputs) snapshot() (map[string]struct{}, map[string]plug
       known: observation.known,
     }
   }
-  return files, hashes
+  realpaths := make(map[string]pluginHostInputHash, len(inputs.realpaths))
+  for file, observation := range inputs.realpaths {
+    realpaths[file] = pluginHostInputHash{
+      hash:  cloneStringPointer(observation.hash),
+      known: observation.known,
+    }
+  }
+  return files, hashes, realpaths
 }
 
 func (inputs *pluginHostInputScopes) list() []string {
   union := map[string]struct{}{}
   for _, scope := range inputs.snapshot() {
-    files, _ := scope.snapshot()
+    files, _, _ := scope.snapshot()
     for file := range files {
       union[file] = struct{}{}
     }
@@ -318,7 +375,7 @@ func (inputs *pluginHostInputScopes) list() []string {
 func (inputs *pluginHostInputScopes) hashList() map[string]*string {
   combined := map[string]pluginHostInputHash{}
   for _, scope := range inputs.snapshot() {
-    files, hashes := scope.snapshot()
+    files, hashes, _ := scope.snapshot()
     for file := range files {
       observation, exists := hashes[file]
       if !exists || !observation.known {
@@ -343,6 +400,36 @@ func (inputs *pluginHostInputScopes) hashList() map[string]*string {
     return nil
   }
   return hashes
+}
+
+func (inputs *pluginHostInputScopes) realpathList() map[string]*string {
+  combined := map[string]pluginHostInputHash{}
+  for _, scope := range inputs.snapshot() {
+    files, _, realpaths := scope.snapshot()
+    for file := range files {
+      observation, exists := realpaths[file]
+      if !exists || !observation.known {
+        combined[file] = pluginHostInputHash{known: false}
+        continue
+      }
+      previous, exists := combined[file]
+      if !exists {
+        combined[file] = observation
+      } else if !previous.known || !sameStringPointer(previous.hash, observation.hash) {
+        combined[file] = pluginHostInputHash{known: false}
+      }
+    }
+  }
+  realpaths := map[string]*string{}
+  for file, observation := range combined {
+    if observation.known {
+      realpaths[file] = cloneStringPointer(observation.hash)
+    }
+  }
+  if len(realpaths) == 0 {
+    return nil
+  }
+  return realpaths
 }
 
 var pluginRegistry []any
@@ -471,11 +558,12 @@ func registeredPlugin(index int) (any, bool) {
 func (state linkedPluginState) context(entry PluginEntry) PluginContext {
   inputs := state.inputs.newScope()
   return PluginContext{
-    Cwd:                 state.cwd,
-    Entry:               entry,
-    Tsconfig:            state.tsconfig,
-    reportHostInput:     inputs.add,
-    reportHostInputHash: inputs.addHash,
+    Cwd:                     state.cwd,
+    Entry:                   entry,
+    Tsconfig:                state.tsconfig,
+    reportHostInput:         inputs.add,
+    reportHostInputHash:     inputs.addHash,
+    reportHostInputRealpath: inputs.addRealpath,
   }
 }
 
@@ -487,4 +575,8 @@ func (state linkedPluginState) hostInputs() []string {
 
 func (state linkedPluginState) hostInputHashes() map[string]*string {
   return state.inputs.hashList()
+}
+
+func (state linkedPluginState) hostInputRealpaths() map[string]*string {
+  return state.inputs.realpathList()
 }

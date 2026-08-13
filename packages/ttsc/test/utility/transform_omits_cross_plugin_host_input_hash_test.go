@@ -18,6 +18,10 @@ type scopedHostInputPlugin struct {
 func (plugin scopedHostInputPlugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
   if plugin.hash {
     ctx.ReportHostInputHash(plugin.input, stringPointer(strings.Repeat("a", 64)))
+    ctx.ReportHostInputRealpath(
+      plugin.input,
+      stringPointer(filepath.Join(filepath.Dir(plugin.input), "physical")),
+    )
   } else {
     ctx.ReportHostInput(plugin.input)
   }
@@ -25,7 +29,8 @@ func (plugin scopedHostInputPlugin) SourcePreamble(ctx driver.PluginContext) (st
 }
 
 // TestUtilityTransformOmitsCrossPluginHostInputHash verifies one plugin's
-// fingerprint cannot prove another plugin's unfingerprinted dependency.
+// fingerprint and physical identity cannot prove another plugin's unproven
+// dependency.
 //
 // The transform envelope describes the combined result of every linked hook.
 // If any hook lists a path without an exact observation, persistent adapters
@@ -61,5 +66,8 @@ func TestUtilityTransformOmitsCrossPluginHostInputHash(t *testing.T) {
   }
   if _, ok := result.HostInputHashes[input]; ok {
     t.Fatalf("another plugin's hash must not revive missing proof: %#v", result.HostInputHashes)
+  }
+  if _, ok := result.HostInputRealpaths[input]; ok {
+    t.Fatalf("another plugin's realpath must not revive missing proof: %#v", result.HostInputRealpaths)
   }
 }

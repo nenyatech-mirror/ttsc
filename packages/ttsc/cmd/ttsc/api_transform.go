@@ -28,8 +28,9 @@ type apiTransformResult struct {
   Graph *driver.TransformGraph `json:"graph,omitempty"`
   // HostInputs are absolute native plugin config files evaluated while this
   // generation loaded. JavaScript hosts merge them with descriptor inputs.
-  HostInputs      []string           `json:"hostInputs,omitempty"`
-  HostInputHashes map[string]*string `json:"hostInputHashes,omitempty"`
+  HostInputs         []string           `json:"hostInputs,omitempty"`
+  HostInputHashes    map[string]*string `json:"hostInputHashes,omitempty"`
+  HostInputRealpaths map[string]*string `json:"hostInputRealpaths,omitempty"`
 }
 
 // runAPITransform implements the `api-transform` sub-command. It loads the
@@ -88,11 +89,12 @@ func runAPITransform(args []string) int {
   }
 
   result := apiTransformResult{
-    Diagnostics:     make([]apiCompileDiagnostic, 0, len(diags)),
-    Graph:           graph,
-    HostInputs:      prog.PluginHostInputs(),
-    HostInputHashes: prog.PluginHostInputHashes(),
-    TypeScript:      typescript,
+    Diagnostics:        make([]apiCompileDiagnostic, 0, len(diags)),
+    Graph:              graph,
+    HostInputs:         prog.PluginHostInputs(),
+    HostInputHashes:    prog.PluginHostInputHashes(),
+    HostInputRealpaths: prog.PluginHostInputRealpaths(),
+    TypeScript:         typescript,
   }
   for _, diag := range diags {
     result.Diagnostics = append(result.Diagnostics, toAPICompileDiagnostic(diag))

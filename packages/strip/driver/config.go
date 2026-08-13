@@ -46,10 +46,10 @@ func loadStripConfigMap(pluginConfig map[string]any, cwd, tsconfigPath string) (
 }
 
 func loadStripConfigMapWithReporter(pluginConfig map[string]any, cwd, tsconfigPath string, reporter func(string)) (map[string]any, error) {
-  return loadStripConfigMapWithReporters(pluginConfig, cwd, tsconfigPath, reporter, nil)
+  return loadStripConfigMapWithReporters(pluginConfig, cwd, tsconfigPath, reporter, nil, nil)
 }
 
-func loadStripConfigMapWithReporters(pluginConfig map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string)) (map[string]any, error) {
+func loadStripConfigMapWithReporters(pluginConfig map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter, realpathReporter func(string, *string)) (map[string]any, error) {
   // Reject any key that @ttsc/strip does not recognise. This surfaces
   // stale inline keys (calls, statements) with a clear error so users
   // migrate to a config file instead of silently using defaults.
@@ -94,7 +94,7 @@ func loadStripConfigMapWithReporters(pluginConfig map[string]any, cwd, tsconfigP
   if err != nil {
     return nil, err
   }
-  reportStripConfigInputs(loaded.inputs, loaded.hashes, reporter, hashReporter)
+  reportStripConfigInputs(loaded.inputs, loaded.hashes, loaded.realpaths, reporter, hashReporter, realpathReporter)
   cfg, ok := loaded.value.(map[string]any)
   if !ok {
     return nil, fmt.Errorf("@ttsc/strip: config file %s must export an object", configFilePath)
@@ -172,9 +172,10 @@ func loadStripConfigFile(location, resolutionRoot string) (any, error) {
 }
 
 type stripLoadedConfig struct {
-  hashes map[string]*string
-  inputs []string
-  value  any
+  hashes    map[string]*string
+  inputs    []string
+  realpaths map[string]*string
+  value     any
 }
 
 func loadStripConfigFileWithInputs(location, resolutionRoot string) (stripLoadedConfig, error) {
@@ -187,7 +188,7 @@ func loadStripConfigFileWithInputs(location, resolutionRoot string) (stripLoaded
     }
     value, err := parseStripJSONConfigFile(location, body)
     digest := fmt.Sprintf("%x", sha256.Sum256(body))
-    return stripLoadedConfig{hashes: map[string]*string{location: &digest}, inputs: []string{location}, value: value}, err
+    return stripLoadedConfig{hashes: map[string]*string{location: &digest}, inputs: []string{location}, realpaths: map[string]*string{location: stripPhysicalHostInput(location)}, value: value}, err
   case ".js", ".cjs", ".mjs":
     return loadStripScriptConfigFileWithInputs(location)
   case ".ts", ".cts", ".mts":
@@ -197,8 +198,8 @@ func loadStripConfigFileWithInputs(location, resolutionRoot string) (stripLoaded
   }
 }
 
-func reportStripConfigInputs(inputs []string, hashes map[string]*string, reporter func(string), hashReporter func(string, *string)) {
-  if reporter == nil && hashReporter == nil {
+func reportStripConfigInputs(inputs []string, hashes, realpaths map[string]*string, reporter func(string), hashReporter, realpathReporter func(string, *string)) {
+  if reporter == nil && hashReporter == nil && realpathReporter == nil {
     return
   }
   for _, input := range inputs {
@@ -210,7 +211,25 @@ func reportStripConfigInputs(inputs []string, hashes map[string]*string, reporte
         hashReporter(input, hash)
       }
     }
+    if realpathReporter != nil {
+      if realpath, ok := realpaths[input]; ok {
+        realpathReporter(input, realpath)
+      }
+    }
   }
+}
+
+func stripPhysicalHostInput(file string) *string {
+  resolved, err := filepath.EvalSymlinks(file)
+  if err != nil {
+    return nil
+  }
+  resolved, err = filepath.Abs(resolved)
+  if err != nil {
+    return nil
+  }
+  resolved = filepath.Clean(resolved)
+  return &resolved
 }
 
 // loadStripJSONConfigFile reads and JSON-parses a strip config file. A leading
@@ -244,6 +263,7 @@ const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const inputs = new Set();
 const hashes = new Map();
+const realpaths = new Map();
 const unstableHashes = new Set();
 
 function recordInput(file) {
@@ -251,14 +271,19 @@ function recordInput(file) {
   inputs.add(file);
   if (unstableHashes.has(file)) return;
   let observed;
+  let observedRealpath;
   try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
-  if (hashes.has(file) && hashes.get(file) !== observed) {
+  try { observedRealpath = fs.realpathSync.native(file); }
+  catch { observedRealpath = null; }
+  if ((hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
     hashes.delete(file);
+    realpaths.delete(file);
     unstableHashes.add(file);
     return;
   }
   hashes.set(file, observed);
+  realpaths.set(file, observedRealpath);
 }
 
 function recordFile(file) {
@@ -401,15 +426,9 @@ registerHooks({
   }
   const serializedValue = JSON.stringify(value);
   for (const input of [...inputs]) recordInput(input);
-  process.stdout.write(JSON.stringify({ value: JSON.parse(serializedValue), hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
+  process.stdout.write(JSON.stringify({ value: JSON.parse(serializedValue), hashes: Object.fromEntries(hashes), inputs: [...inputs].sort(), realpaths: Object.fromEntries(realpaths) }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
-  // The stack above is for the reader. This is for the caller: the parent reads
-  // stdout as the payload channel either way, so a failure reason travels as
-  // data rather than as text scraped back out of a captured stream. The exit
-  // code is set before the write so a callback that never fires still fails the
-  // load, and the write's completion is what triggers the exit, because
-  // process.exit abandons a pending pipe write.
   process.exitCode = 1;
   process.stdout.write(JSON.stringify({ __ttscLoaderError: error && error.message ? String(error.message) : String(error) }), () => process.exit(1));
 });
@@ -456,10 +475,11 @@ func loadStripScriptConfigFileWithInputs(location string) (stripLoadedConfig, er
 
 func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
   var envelope struct {
-    Error  string             `json:"__ttscLoaderError"`
-    Hashes map[string]*string `json:"hashes"`
-    Inputs []string           `json:"inputs"`
-    Value  json.RawMessage    `json:"value"`
+    Error     string             `json:"__ttscLoaderError"`
+    Hashes    map[string]*string `json:"hashes"`
+    Inputs    []string           `json:"inputs"`
+    Realpaths map[string]*string `json:"realpaths"`
+    Value     json.RawMessage    `json:"value"`
   }
   if err := json.Unmarshal(output, &envelope); err != nil {
     return stripLoadedConfig{}, err
@@ -481,7 +501,7 @@ func decodeStripConfigLoaderOutput(output []byte) (stripLoadedConfig, error) {
   if err := json.Unmarshal(envelope.Value, &value); err != nil {
     return stripLoadedConfig{}, err
   }
-  return stripLoadedConfig{hashes: envelope.Hashes, inputs: envelope.Inputs, value: value}, nil
+  return stripLoadedConfig{hashes: envelope.Hashes, inputs: envelope.Inputs, realpaths: envelope.Realpaths, value: value}, nil
 }
 
 // stripTypeScriptLoaderSource returns the TypeScript source of the ephemeral
@@ -498,6 +518,7 @@ import { fileURLToPath } from "node:url";
 
 const inputs = new Set<string>();
 const hashes = new Map<string, string | null>();
+const realpaths = new Map<string, string | null>();
 const unstableHashes = new Set<string>();
 
 function recordInput(file: string): void {
@@ -505,14 +526,19 @@ function recordInput(file: string): void {
   inputs.add(file);
   if (unstableHashes.has(file)) return;
   let observed: string | null;
+  let observedRealpath: string | null;
   try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
-  if (hashes.has(file) && hashes.get(file) !== observed) {
+  try { observedRealpath = fs.realpathSync.native(file); }
+  catch { observedRealpath = null; }
+  if ((hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
     hashes.delete(file);
+    realpaths.delete(file);
     unstableHashes.add(file);
     return;
   }
   hashes.set(file, observed);
+  realpaths.set(file, observedRealpath);
 }
 
 function recordFile(file: string): void {
@@ -669,7 +695,7 @@ declare const process: {
     }
     const serializedValue = JSON.stringify(current);
     for (const input of [...inputs]) recordInput(input);
-    process.stdout.write(JSON.stringify({ value: JSON.parse(serializedValue), hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
+    process.stdout.write(JSON.stringify({ value: JSON.parse(serializedValue), hashes: Object.fromEntries(hashes), inputs: [...inputs].sort(), realpaths: Object.fromEntries(realpaths) }));
   } catch (error) {
     process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
     // The stack above is for the reader. This is for the caller: the parent

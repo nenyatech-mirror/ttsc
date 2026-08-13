@@ -17,6 +17,7 @@ type utilityPreamblePlugin struct {
 func (plugin utilityPreamblePlugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
   const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   ctx.ReportHostInputHash(plugin.input, stringPointer(digest))
+  ctx.ReportHostInputRealpath(plugin.input, nil)
   return "// utility linked preamble\n", nil
 }
 
@@ -69,5 +70,8 @@ func TestUtilityTransformAppliesLinkedSourcePreamble(t *testing.T) {
   }
   if digest := result.HostInputHashes[input]; digest == nil || *digest != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
     t.Fatalf("host input hashes mismatch: %#v", result.HostInputHashes)
+  }
+  if realpath, ok := result.HostInputRealpaths[input]; !ok || realpath != nil {
+    t.Fatalf("host input realpaths mismatch: %#v", result.HostInputRealpaths)
   }
 }

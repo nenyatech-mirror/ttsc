@@ -22,6 +22,7 @@ declare function createTtscStrip(context: {
   tsconfig: string;
 }): {
   hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
   hostInputs: string[];
   name: string;
   source: string;

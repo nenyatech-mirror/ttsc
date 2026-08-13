@@ -17,6 +17,8 @@ type conflictingHostInputPlugin struct {
 func (plugin conflictingHostInputPlugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
   ctx.ReportHostInputHash(plugin.input, stringPointer(strings.Repeat("a", 64)))
   ctx.ReportHostInputHash(plugin.input, stringPointer(strings.Repeat("b", 64)))
+  ctx.ReportHostInputRealpath(plugin.input, stringPointer(filepath.Join(filepath.Dir(plugin.input), "old")))
+  ctx.ReportHostInputRealpath(plugin.input, stringPointer(filepath.Join(filepath.Dir(plugin.input), "new")))
   return "", nil
 }
 
@@ -60,5 +62,8 @@ func TestUtilityTransformOmitsConflictingLinkedHostInputHashes(t *testing.T) {
   }
   if _, ok := result.HostInputHashes[input]; ok {
     t.Fatalf("conflicting hash must be omitted: %#v", result.HostInputHashes)
+  }
+  if _, ok := result.HostInputRealpaths[input]; ok {
+    t.Fatalf("conflicting realpath must be omitted: %#v", result.HostInputRealpaths)
   }
 }

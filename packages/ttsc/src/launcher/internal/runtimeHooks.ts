@@ -573,6 +573,7 @@ function recordPluginDescriptorResolution(
 function recordPluginDescriptorInput(record: {
   hash?: string | null;
   parent?: string;
+  realpath?: string | null;
   resolved: string;
   specifier?: string;
   unstable?: boolean;
@@ -581,10 +582,22 @@ function recordPluginDescriptorInput(record: {
   const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
   if (out === undefined || out.length === 0) return;
   try {
-    fs.appendFileSync(out, `${JSON.stringify(record)}\n`, "utf8");
+    fs.appendFileSync(
+      out,
+      `${JSON.stringify({ realpath: pluginDescriptorInputRealpath(record.resolved), ...record })}\n`,
+      "utf8",
+    );
   } catch {
     // Dependency reporting is advisory to cache reuse; the selected entry is
     // still retained by the parent if this best-effort side channel fails.
+  }
+}
+
+function pluginDescriptorInputRealpath(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
   }
 }
 

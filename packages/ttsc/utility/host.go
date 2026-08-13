@@ -46,11 +46,12 @@ type hostOptions struct {
 // so cache layers can register every file whose content can influence a
 // transformed module without per-plugin reporting.
 type transformResult struct {
-  Diagnostics     []any                  `json:"diagnostics,omitempty"`
-  Graph           *driver.TransformGraph `json:"graph,omitempty"`
-  HostInputs      []string               `json:"hostInputs,omitempty"`
-  HostInputHashes map[string]*string     `json:"hostInputHashes,omitempty"`
-  TypeScript      map[string]string      `json:"typescript"`
+  Diagnostics        []any                  `json:"diagnostics,omitempty"`
+  Graph              *driver.TransformGraph `json:"graph,omitempty"`
+  HostInputs         []string               `json:"hostInputs,omitempty"`
+  HostInputHashes    map[string]*string     `json:"hostInputHashes,omitempty"`
+  HostInputRealpaths map[string]*string     `json:"hostInputRealpaths,omitempty"`
+  TypeScript         map[string]string      `json:"typescript"`
 }
 
 // RunCheck validates the project and linked plugin configuration without
@@ -154,6 +155,7 @@ func RunTransformWithIO(args []string, stdout, stderr io.Writer) int {
   }
   out.HostInputs = prog.PluginHostInputs()
   out.HostInputHashes = prog.PluginHostInputHashes()
+  out.HostInputRealpaths = prog.PluginHostInputRealpaths()
   data, _ := json.Marshal(out)
   fmt.Fprintln(opts.stdout, string(data))
   return 0

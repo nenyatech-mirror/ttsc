@@ -266,6 +266,7 @@ interface ProjectTransformation {
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
   hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
   hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
@@ -385,6 +386,7 @@ function toCompilerTransformation(
     dependenciesComplete,
     graph,
     hostInputHashes,
+    hostInputRealpaths,
     hostInputs,
     result,
     typescript,
@@ -395,6 +397,7 @@ function toCompilerTransformation(
     ...(dependenciesComplete === undefined ? {} : { dependenciesComplete }),
     ...(graph === undefined ? {} : { graph }),
     ...(hostInputHashes === undefined ? {} : { hostInputHashes }),
+    ...(hostInputRealpaths === undefined ? {} : { hostInputRealpaths }),
     ...(hostInputs === undefined ? {} : { hostInputs }),
     ...(volatile === undefined ? {} : { volatile }),
   };

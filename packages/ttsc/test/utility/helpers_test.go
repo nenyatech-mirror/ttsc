@@ -27,9 +27,10 @@ type apiTransformResult struct {
 }
 
 type utilityTransformResult struct {
-  HostInputHashes map[string]*string `json:"hostInputHashes,omitempty"`
-  HostInputs      []string           `json:"hostInputs,omitempty"`
-  TypeScript      map[string]string  `json:"typescript"`
+  HostInputHashes    map[string]*string `json:"hostInputHashes,omitempty"`
+  HostInputRealpaths map[string]*string `json:"hostInputRealpaths,omitempty"`
+  HostInputs         []string           `json:"hostInputs,omitempty"`
+  TypeScript         map[string]string  `json:"typescript"`
 }
 
 // packageRoot returns the `packages/ttsc` module root from this black-box test

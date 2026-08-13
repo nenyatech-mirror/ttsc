@@ -33,6 +33,7 @@ module.exports = function createTtscStrip(context) {
   const configInputs = stripConfigInputs(context);
   return {
     hostInputHashes: configInputs.hashes,
+    hostInputRealpaths: configInputs.realpaths,
     hostInputs: configInputs.inputs,
     name: "@ttsc/strip",
     // `context.dirname` is this descriptor's own directory in every load mode —
@@ -61,10 +62,15 @@ function stripConfigInputs(context) {
     const file = path.isAbsolute(configFile)
       ? path.resolve(configFile)
       : path.resolve(base, configFile);
-    return { hashes: { [file]: hostInputHash(file) }, inputs: [file] };
+    return {
+      hashes: { [file]: hostInputHash(file) },
+      inputs: [file],
+      realpaths: { [file]: hostInputRealpath(file) },
+    };
   }
   const inputs = [];
   const hashes = {};
+  const realpaths = {};
   for (let directory = base; ; directory = path.dirname(directory)) {
     const candidates = STRIP_CONFIG_FILENAMES.map((name) =>
       path.join(directory, name),
@@ -72,12 +78,21 @@ function stripConfigInputs(context) {
     inputs.push(...candidates);
     for (const candidate of candidates) {
       hashes[candidate] = hostInputHash(candidate);
+      realpaths[candidate] = hostInputRealpath(candidate);
     }
     if (candidates.some(configCandidateExists)) break;
     const parent = path.dirname(directory);
     if (parent === directory) break;
   }
-  return { hashes, inputs };
+  return { hashes, inputs, realpaths };
+}
+
+function hostInputRealpath(file) {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
+  }
 }
 
 /** Hash the exact candidate state observed before discovery selects a file. */

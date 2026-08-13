@@ -62,7 +62,7 @@ func validateBannerConfig(config map[string]any) error {
 // SourcePreamble resolves the banner text from the plugin config and returns it
 // formatted as a JSDoc block comment suitable for prepending to each emitted file.
 func (plugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
-  return parseBannerWithReporters(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput, ctx.ReportHostInputHash)
+  return parseBannerWithReporters(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput, ctx.ReportHostInputHash, ctx.ReportHostInputRealpath)
 }
 
 // parseBanner resolves and formats banner text into a JSDoc block comment.
@@ -72,11 +72,11 @@ func parseBanner(config map[string]any, cwd, tsconfigPath string) (string, error
 }
 
 func parseBannerWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
-  return parseBannerWithReporters(config, cwd, tsconfigPath, reporter, nil)
+  return parseBannerWithReporters(config, cwd, tsconfigPath, reporter, nil, nil)
 }
 
-func parseBannerWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string)) (string, error) {
-  text, err := resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, hashReporter)
+func parseBannerWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string), realpathReporter func(string, *string)) (string, error) {
+  text, err := resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, hashReporter, realpathReporter)
   if err != nil {
     return "", err
   }
@@ -121,10 +121,10 @@ func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string,
 }
 
 func resolveBannerTextWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
-  return resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, nil)
+  return resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, nil, nil)
 }
 
-func resolveBannerTextWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string)) (string, error) {
+func resolveBannerTextWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string), realpathReporter func(string, *string)) (string, error) {
   if err := validateBannerConfig(config); err != nil {
     return "", err
   }
@@ -140,7 +140,7 @@ func resolveBannerTextWithReporters(config map[string]any, cwd, tsconfigPath str
     if err != nil {
       return "", err
     }
-    reportBannerConfigInputs(loaded.inputs, loaded.hashes, reporter, hashReporter)
+    reportBannerConfigInputs(loaded.inputs, loaded.hashes, loaded.realpaths, reporter, hashReporter, realpathReporter)
     text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
     if err != nil {
       return "", err
@@ -162,7 +162,7 @@ func resolveBannerTextWithReporters(config map[string]any, cwd, tsconfigPath str
   if err != nil {
     return "", err
   }
-  reportBannerConfigInputs(loaded.inputs, loaded.hashes, reporter, hashReporter)
+  reportBannerConfigInputs(loaded.inputs, loaded.hashes, loaded.realpaths, reporter, hashReporter, realpathReporter)
   text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
   if err != nil {
     return "", err
@@ -277,9 +277,10 @@ func loadBannerConfigFile(location, resolutionRoot string) (any, error) {
 }
 
 type bannerLoadedConfig struct {
-  hashes map[string]*string
-  inputs []string
-  value  any
+  hashes    map[string]*string
+  inputs    []string
+  realpaths map[string]*string
+  value     any
 }
 
 func loadBannerConfigFileWithInputs(location, resolutionRoot string) (bannerLoadedConfig, error) {
@@ -295,15 +296,15 @@ func loadBannerConfigFileWithInputs(location, resolutionRoot string) (bannerLoad
     }
     value, err := parseBannerJSONConfigFile(location, body)
     digest := fmt.Sprintf("%x", sha256.Sum256(body))
-    return bannerLoadedConfig{hashes: map[string]*string{location: &digest}, inputs: []string{location}, value: value}, err
+    return bannerLoadedConfig{hashes: map[string]*string{location: &digest}, inputs: []string{location}, realpaths: map[string]*string{location: physicalHostInput(location)}, value: value}, err
   case ".js", ".cjs", ".mjs":
     return loadBannerScriptConfigFileWithInputs(location)
   }
   return loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot)
 }
 
-func reportBannerConfigInputs(inputs []string, hashes map[string]*string, reporter func(string), hashReporter func(string, *string)) {
-  if reporter == nil && hashReporter == nil {
+func reportBannerConfigInputs(inputs []string, hashes, realpaths map[string]*string, reporter func(string), hashReporter, realpathReporter func(string, *string)) {
+  if reporter == nil && hashReporter == nil && realpathReporter == nil {
     return
   }
   for _, input := range inputs {
@@ -315,7 +316,25 @@ func reportBannerConfigInputs(inputs []string, hashes map[string]*string, report
         hashReporter(input, hash)
       }
     }
+    if realpathReporter != nil {
+      if realpath, ok := realpaths[input]; ok {
+        realpathReporter(input, realpath)
+      }
+    }
   }
+}
+
+func physicalHostInput(file string) *string {
+  resolved, err := filepath.EvalSymlinks(file)
+  if err != nil {
+    return nil
+  }
+  resolved, err = filepath.Abs(resolved)
+  if err != nil {
+    return nil
+  }
+  resolved = filepath.Clean(resolved)
+  return &resolved
 }
 
 // isBannerConfigFileName reports whether name is an allowed banner config file name.
@@ -373,6 +392,7 @@ const path = require("node:path");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const inputs = new Set();
 const hashes = new Map();
+const realpaths = new Map();
 const unstableHashes = new Set();
 
 function recordInput(file) {
@@ -380,14 +400,19 @@ function recordInput(file) {
   inputs.add(file);
   if (unstableHashes.has(file)) return;
   let observed;
+  let observedRealpath;
   try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
-  if (hashes.has(file) && hashes.get(file) !== observed) {
+  try { observedRealpath = fs.realpathSync.native(file); }
+  catch { observedRealpath = null; }
+  if ((hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
     hashes.delete(file);
+    realpaths.delete(file);
     unstableHashes.add(file);
     return;
   }
   hashes.set(file, observed);
+  realpaths.set(file, observedRealpath);
 }
 
 function recordFile(file) {
@@ -530,15 +555,9 @@ registerHooks({
   const value = typeof current === "function" ? await current() : current;
   const serializedValue = toSerializableBanner(value);
   for (const input of [...inputs]) recordInput(input);
-  process.stdout.write(JSON.stringify({ value: serializedValue, hashes: Object.fromEntries(hashes), inputs: [...inputs].sort() }));
+  process.stdout.write(JSON.stringify({ value: serializedValue, hashes: Object.fromEntries(hashes), inputs: [...inputs].sort(), realpaths: Object.fromEntries(realpaths) }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
-  // The stack above is for the reader. This is for the caller: the parent reads
-  // stdout as the payload channel either way, so a failure reason travels as
-  // data rather than as text scraped back out of a captured stream. The exit
-  // code is set before the write so a callback that never fires still fails the
-  // load, and the write's completion is what triggers the exit, because
-  // process.exit abandons a pending pipe write.
   process.exitCode = 1;
   process.stdout.write(JSON.stringify({ __ttscLoaderError: error && error.message ? String(error.message) : String(error) }), () => process.exit(1));
 });
@@ -582,10 +601,11 @@ function toSerializableBanner(value) {
 
 func decodeBannerConfigLoaderOutput(output []byte) (bannerLoadedConfig, error) {
   var envelope struct {
-    Error  string             `json:"__ttscLoaderError"`
-    Hashes map[string]*string `json:"hashes"`
-    Inputs []string           `json:"inputs"`
-    Value  json.RawMessage    `json:"value"`
+    Error     string             `json:"__ttscLoaderError"`
+    Hashes    map[string]*string `json:"hashes"`
+    Inputs    []string           `json:"inputs"`
+    Realpaths map[string]*string `json:"realpaths"`
+    Value     json.RawMessage    `json:"value"`
   }
   if err := json.Unmarshal(output, &envelope); err != nil {
     return bannerLoadedConfig{}, err
@@ -607,7 +627,7 @@ func decodeBannerConfigLoaderOutput(output []byte) (bannerLoadedConfig, error) {
   if err := json.Unmarshal(envelope.Value, &value); err != nil {
     return bannerLoadedConfig{}, err
   }
-  return bannerLoadedConfig{hashes: envelope.Hashes, inputs: envelope.Inputs, value: value}, nil
+  return bannerLoadedConfig{hashes: envelope.Hashes, inputs: envelope.Inputs, realpaths: envelope.Realpaths, value: value}, nil
 }
 
 // loadBannerTypeScriptConfigFile compiles and runs a TypeScript banner config
@@ -700,6 +720,7 @@ import { fileURLToPath } from "node:url";
 
 const inputs = new Set<string>();
 const hashes = new Map<string, string | null>();
+const realpaths = new Map<string, string | null>();
 const unstableHashes = new Set<string>();
 
 function recordInput(file: string): void {
@@ -707,14 +728,19 @@ function recordInput(file: string): void {
   inputs.add(file);
   if (unstableHashes.has(file)) return;
   let observed: string | null;
+  let observedRealpath: string | null;
   try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
-  if (hashes.has(file) && hashes.get(file) !== observed) {
+  try { observedRealpath = fs.realpathSync.native(file); }
+  catch { observedRealpath = null; }
+  if ((hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
     hashes.delete(file);
+    realpaths.delete(file);
     unstableHashes.add(file);
     return;
   }
   hashes.set(file, observed);
+  realpaths.set(file, observedRealpath);
 }
 
 function recordFile(file: string): void {
@@ -862,6 +888,7 @@ declare const process: {
       value: serializedValue,
       hashes: Object.fromEntries(hashes),
       inputs: [...inputs].sort(),
+      realpaths: Object.fromEntries(realpaths),
     }));
   } catch (error) {
     process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));

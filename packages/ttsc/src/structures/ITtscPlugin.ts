@@ -49,6 +49,16 @@ export interface ITtscPlugin {
   hostInputHashes?: Record<string, string | null>;
 
   /**
+   * Evaluation-time physical paths for entries in {@link hostInputs}.
+   *
+   * Use the canonical path returned by `fs.realpathSync.native`, or `null` when
+   * the input was missing. Persistent adapters pair this with
+   * {@link hostInputHashes} so retargeting a symlink or junction cannot attach
+   * output evaluated from one target to equal bytes at another target.
+   */
+  hostInputRealpaths?: Record<string, string | null>;
+
+  /**
    * Go package directory, or a `go.mod` file, that ttsc lazily builds.
    *
    * Ttsc accepts source only. It does not accept a prebuilt binary path: the

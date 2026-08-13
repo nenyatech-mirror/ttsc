@@ -323,6 +323,7 @@ function loadLSPProjectPlugins(
       })
     : {
         hostInputHashes: {},
+        hostInputRealpaths: {},
         hostInputs: [...project.configPaths],
         nativePlugins: [],
         project,

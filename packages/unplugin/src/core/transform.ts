@@ -1287,6 +1287,10 @@ function captureUniversalHostInputValidation(
       cached.result.type === "exception"
         ? undefined
         : cached.result.hostInputHashes;
+    const generationRealpaths =
+      cached.result.type === "exception"
+        ? undefined
+        : cached.result.hostInputRealpaths;
     const expected = generationHashes?.[path.resolve(input)];
     // Every persistent universal input must carry an evaluation-time
     // fingerprint. If a plugin/native host cannot provide one, keep the fresh
@@ -1299,6 +1303,18 @@ function captureUniversalHostInputValidation(
       // fingerprint would be both unavailable and the wrong authority.
     } else if (expected !== hostInputStateHash(input)) {
       return undefined;
+    }
+    const absoluteInput = path.resolve(input);
+    if (generationRealpaths !== undefined) {
+      if (
+        !Object.prototype.hasOwnProperty.call(
+          generationRealpaths,
+          absoluteInput,
+        ) ||
+        generationRealpaths[absoluteInput] !== hostInputRealpath(input)
+      ) {
+        return undefined;
+      }
     }
     const identity = derivationIdentity(state, input);
     if (validation.identities.has(identity)) continue;
@@ -1395,6 +1411,15 @@ function hostInputStateHash(file: string): string | null {
     } catch {
       return null;
     }
+  }
+}
+
+/** Physical target selected by a lexical host-input path. */
+function hostInputRealpath(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
   }
 }
 

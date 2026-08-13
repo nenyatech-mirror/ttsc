@@ -478,6 +478,93 @@ async function assertPersistentUtilityConfigDependencyEditInvalidatesTransform()
   await assertNodePathPackageCandidateInvalidatesTransform();
 }
 
+/** Assert an evaluation-time directory-link retarget cannot bless stale output. */
+async function assertPersistentUtilityConfigLinkRetargetInvalidatesTransform() {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const root = createUtilityPluginProject({
+    plugin: "banner",
+    pluginEntry: { configFile: "./config/banner.config.cjs" },
+    source: 'export const value: string = "kept";\n',
+  });
+  const configDirectory = path.join(root, "config");
+  const selectionRoot = TestProject.tmpdir("ttsc-banner-link-selection-");
+  const oldTarget = path.join(selectionRoot, "old-selection");
+  const newTarget = path.join(selectionRoot, "new-selection");
+  const link = path.join(selectionRoot, "selection-link");
+  fs.mkdirSync(configDirectory, { recursive: true });
+  fs.mkdirSync(oldTarget, { recursive: true });
+  fs.mkdirSync(newTarget, { recursive: true });
+  const selectionSource = 'module.exports = require("./value.cjs");\n';
+  fs.writeFileSync(
+    path.join(oldTarget, "selection.cjs"),
+    selectionSource,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(newTarget, "selection.cjs"),
+    selectionSource,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(oldTarget, "value.cjs"),
+    'module.exports = { text: "OLD LINK TARGET" };\n',
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(newTarget, "value.cjs"),
+    'module.exports = { text: "NEW LINK TARGET" };\n',
+    "utf8",
+  );
+  fs.symlinkSync(
+    oldTarget,
+    link,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  fs.writeFileSync(
+    path.join(configDirectory, "banner.config.cjs"),
+    [
+      'const fs = require("node:fs");',
+      `const selected = require(${JSON.stringify(path.join(link, "selection.cjs"))});`,
+      "module.exports = () => {",
+      `  if (fs.realpathSync.native(${JSON.stringify(link)}) === ${JSON.stringify(fs.realpathSync.native(oldTarget))}) {`,
+      `    fs.rmSync(${JSON.stringify(link)}, { force: true, recursive: true });`,
+      `    fs.symlinkSync(${JSON.stringify(newTarget)}, ${JSON.stringify(link)}, ${JSON.stringify(process.platform === "win32" ? "junction" : "dir")});`,
+      "  }",
+      "  return selected;",
+      "};",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const file = TestUnpluginProject.mainFile(root);
+  const source = TestUnpluginProject.mainSource(root);
+  const cache = createTtscTransformCache();
+  const first = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(first);
+  assert.match(first.code, /OLD LINK TARGET/);
+  const firstGeneration = [...cache.values()][0];
+
+  const second = await transformTtsc(
+    file,
+    source,
+    resolveOptions(),
+    undefined,
+    cache,
+  );
+  assert.ok(second);
+  assert.notEqual([...cache.values()][0], firstGeneration);
+  assert.match(second.code, /NEW LINK TARGET/);
+  assert.doesNotMatch(second.code, /OLD LINK TARGET/);
+}
+
 /** Assert Node's inherited NODE_PATH ordering contributes missing candidates. */
 async function assertNodePathPackageCandidateInvalidatesTransform(): Promise<void> {
   const { createTtscTransformCache, resolveOptions, transformTtsc } =
@@ -645,4 +732,5 @@ export {
   assertAliasOverlayResolvesRelativeConfigFile,
   assertPersistentBannerConfigEditInvalidatesTransform,
   assertPersistentUtilityConfigDependencyEditInvalidatesTransform,
+  assertPersistentUtilityConfigLinkRetargetInvalidatesTransform,
 };

@@ -602,6 +602,16 @@ func (p *Program) PluginHostInputHashes() map[string]*string {
   return p.plugins.hostInputHashes()
 }
 
+// PluginHostInputRealpaths returns evaluation-time physical identities for the
+// subset of native host inputs whose symlink or junction target was observed
+// without conflict.
+func (p *Program) PluginHostInputRealpaths() map[string]*string {
+  if p == nil {
+    return nil
+  }
+  return p.plugins.hostInputRealpaths()
+}
+
 // Diagnostics returns project diagnostics that must block compilation or
 // runtime execution before any JavaScript is emitted or evaluated.
 func (p *Program) Diagnostics() []Diagnostic {

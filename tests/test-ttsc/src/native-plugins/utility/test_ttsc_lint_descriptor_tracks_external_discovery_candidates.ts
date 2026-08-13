@@ -9,8 +9,8 @@ import path from "node:path";
  * A monorepo package can inherit `lint.config.*` from an ancestor outside its
  * project walk. Creating a nearer config later must invalidate a persistent
  * bundler generation even though the previously selected ancestor file did not
- * change. A directory or directory link carrying a candidate filename is not
- * a config and must not stop the input walk before that selected ancestor.
+ * change. A directory or directory link carrying a candidate filename is not a
+ * config and must not stop the input walk before that selected ancestor.
  */
 export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
   () => {
