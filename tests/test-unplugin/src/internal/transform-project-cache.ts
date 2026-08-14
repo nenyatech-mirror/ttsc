@@ -25,6 +25,7 @@ interface ICacheProjectOptions {
   fileCount?: number;
   graphFanout?: number;
   partitionGraph?: boolean;
+  snapshotAbaRace?: boolean;
   unrelatedDirectoryCount?: number;
 }
 
@@ -473,10 +474,15 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
       '  try { return [file, crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")]; }',
       "  catch { return [file, null]; }",
       "}));",
+      "const hostInputRealpaths = Object.fromEntries(hostInputs.map((file) => {",
+      "  try { return [file, fs.realpathSync.native(file)]; }",
+      "  catch { return [file, null]; }",
+      "}));",
       "",
       "module.exports = (context) => ({",
       '  name: context.plugin.name ?? "cache-probe",',
       "  hostInputHashes,",
+      "  hostInputRealpaths,",
       "  hostInputs,",
       "  source: path.resolve(context.dirname, source),",
       "});",
@@ -877,6 +883,55 @@ async function assertCompileSnapshotRaceCannotAuthorizeStaleOutput(): Promise<vo
 }
 
 /**
+ * Asserts a project input changed and restored during native compilation cannot
+ * pair the transient output with the identical pre/post filesystem snapshots.
+ */
+async function assertCompileSnapshotAbaRaceCannotAuthorizeStaleOutput(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const project = createCacheProject({
+    fileCount: 2,
+    graphFanout: 2,
+    snapshotAbaRace: true,
+  });
+  const cache = createTtscTransformCache();
+  const options = resolveOptions();
+  const main = path.join(project.root, "src", "mod0.ts");
+  const lazy = path.join(project.root, "src", "mod1.ts");
+
+  assert.ok(
+    await transformTtsc(
+      main,
+      fs.readFileSync(main, "utf8"),
+      options,
+      undefined,
+      cache,
+    ),
+  );
+  const firstGeneration = [...cache.values()][0];
+  assert.equal(
+    fs.readFileSync(lazy, "utf8"),
+    'export const value1: string = "PROBE";\n',
+  );
+
+  const result = await transformTtsc(
+    lazy,
+    fs.readFileSync(lazy, "utf8"),
+    options,
+    undefined,
+    cache,
+  );
+  assert.ok(result);
+  assert.doesNotMatch(result.code, /DURING/);
+  assert.notEqual(
+    [...cache.values()][0],
+    firstGeneration,
+    "an ABA mutation during compilation must prevent persistent reuse",
+  );
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
+}
+
+/**
  * Asserts a module candidate created after descriptor resolution cannot bless
  * the earlier descriptor result with the later filesystem state.
  */
@@ -1101,6 +1156,14 @@ function createCacheProject(options: ICacheProjectOptions): {
     "plugin-runs.log",
   );
   const fileCount = options.fileCount ?? 6;
+  const snapshotRaceFile = path.join(root, "src", "mod1.ts");
+  const snapshotRaceMarker = path.join(
+    TestProject.tmpdir("ttsc-unplugin-cache-race-"),
+    "mutated",
+  );
+  const snapshotRaceOriginal = 'export const value1: string = "PROBE";\n';
+  const snapshotRaceDuring =
+    'export const value1: string = "PROBE-DURING";\n';
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   for (let index = 0; index < fileCount; index += 1) {
     fs.writeFileSync(
@@ -1143,6 +1206,14 @@ function createCacheProject(options: ICacheProjectOptions): {
               emitExternal: options.emitExternalKey === true,
               graphFanout: options.graphFanout ?? 0,
               partitionGraph: options.partitionGraph === true,
+              ...(options.snapshotAbaRace === true
+                ? {
+                    snapshotRaceDuring,
+                    snapshotRaceFile,
+                    snapshotRaceMarker,
+                    snapshotRaceOriginal,
+                  }
+                : {}),
             },
           ],
         },
@@ -1156,12 +1227,21 @@ function createCacheProject(options: ICacheProjectOptions): {
   fs.writeFileSync(
     path.join(root, "plugin.cjs"),
     [
+      'const fs = require("node:fs");',
       'const path = require("node:path");',
       "",
-      "module.exports = (context) => ({",
-      '  name: context.plugin.name ?? "cache-probe",',
-      '  source: path.resolve(context.dirname, "go-plugin"),',
-      "});",
+      "module.exports = (context) => {",
+      "  const raceFile = context.plugin.snapshotRaceFile;",
+      "  const raceMarker = context.plugin.snapshotRaceMarker;",
+      "  if (typeof raceFile === \"string\" && typeof raceMarker === \"string\" && !fs.existsSync(raceMarker)) {",
+      "    fs.writeFileSync(raceMarker, \"1\");",
+      "    fs.writeFileSync(raceFile, context.plugin.snapshotRaceDuring);",
+      "  }",
+      "  return {",
+      '    name: context.plugin.name ?? "cache-probe",',
+      '    source: path.resolve(context.dirname, "go-plugin"),',
+      "  };",
+      "};",
       "",
     ].join("\n"),
     "utf8",
@@ -1280,6 +1360,9 @@ function writeGoPlugin(root: string): void {
       "    data, err := os.ReadFile(filepath.Join(srcDir, name))",
       "    if err != nil { fmt.Fprintln(os.Stderr, err); return 2 }",
       '    ts["src/"+name] = strings.ReplaceAll(string(data), "PROBE", "PROBED")',
+      '    if raceFile := stringValue(cfg, "snapshotRaceFile"); raceFile != "" && filepath.Clean(filepath.Join(srcDir, name)) == filepath.Clean(raceFile) && strings.Contains(string(data), "PROBE-DURING") {',
+      '      if err := os.WriteFile(raceFile, []byte(stringValue(cfg, "snapshotRaceOriginal")), 0o644); err != nil { fmt.Fprintln(os.Stderr, err); return 2 }',
+      "    }",
       "  }",
       '  if boolValue(cfg, "emitExternal") {',
       '    ts["node_modules/dep/index.d.ts"] = "export {};\\n"',
@@ -1348,6 +1431,7 @@ export {
   assertCacheHitsDespiteOutOfWalkOutputKey,
   assertCacheTransformsMultiFileProjectOnce,
   assertCompileSnapshotRaceCannotAuthorizeStaleOutput,
+  assertCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
   assertDescriptorInputRaceCannotAuthorizeStaleGeneration,
   assertConcurrentTransformsCompileOnce,
   assertFirstModuleDeliveriesDoNotRehashProject,

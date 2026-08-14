@@ -1317,7 +1317,11 @@ function captureUniversalHostInputValidation(
           generationRealpaths,
           absoluteInput,
         ) ||
-        generationRealpaths[absoluteInput] !== hostInputRealpath(input)
+        !sameHostInputRealpath(
+          generationRealpaths[absoluteInput],
+          hostInputRealpath(input),
+          state.identityContext,
+        )
       ) {
         return undefined;
       }
@@ -1432,6 +1436,17 @@ function hostInputRealpath(file: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Compare two reported realpaths by filesystem identity, not Windows spelling. */
+function sameHostInputRealpath(
+  left: string | null | undefined,
+  right: string | null,
+  identities: FilesystemPathIdentityContext,
+): boolean {
+  if (left === undefined || (left === null) !== (right === null)) return false;
+  if (left === null || right === null) return true;
+  return pathIdentityKey(left, identities) === pathIdentityKey(right, identities);
 }
 
 /** Find one directory listing that proves an absent path is still absent. */
@@ -1559,24 +1574,38 @@ function collectProjectInputSnapshot(
   identities: FilesystemPathIdentityContext,
 ): {
   complete: boolean;
+  fileSignatures: Record<string, string>;
   hashes: Record<string, string>;
   projectDirectories: TtscProjectDirectorySnapshot[];
 } {
   const hashes: Record<string, string> = {};
+  const fileSignatures: Record<string, string> = {};
   const walked = walkProjectInputs(projectRoot);
   let complete = walked.complete;
   for (const file of walked.files) {
     try {
-      hashes[toProjectKey(projectRoot, file, identities)] = hashText(
-        fs.readFileSync(file),
-      );
+      const before = inputMetadataSignature(file);
+      const contents = fs.readFileSync(file);
+      const after = inputMetadataSignature(file);
+      const key = toProjectKey(projectRoot, file, identities);
+      hashes[key] = hashText(contents);
+      if (before === undefined || after === undefined || before !== after) {
+        complete = false;
+      } else {
+        fileSignatures[key] = after;
+      }
     } catch {
       // File watchers may observe a transform while another process is moving
       // or deleting files. The missing key invalidates older cache entries.
       complete = false;
     }
   }
-  return { complete, hashes, projectDirectories: walked.directories };
+  return {
+    complete,
+    fileSignatures,
+    hashes,
+    projectDirectories: walked.directories,
+  };
 }
 
 /**
@@ -2271,6 +2300,7 @@ async function transformProject(props: {
       before.complete &&
       inputSnapshot.complete &&
       sameHashes(before.hashes, inputSnapshot.hashes) &&
+      sameHashes(before.fileSignatures, inputSnapshot.fileSignatures) &&
       sameProjectDirectories(
         before.projectDirectories,
         inputSnapshot.projectDirectories,
