@@ -19,8 +19,8 @@ import {
  * `node_modules/.bin`, so prepare must provide the bundled ttsx launcher.
  *
  * 1. Create an @ttsc/lint project with a TypeScript lint config.
- * 2. Import its severity through an extensionless local TypeScript helper and
- *    an exports package whose inactive condition throws, exercising both local
+ * 2. Import its severity through an extensionless local TypeScript helper and an
+ *    exports package whose inactive condition throws, exercising both local
  *    candidate capture and the descriptor extractor's package-topology mirror.
  * 3. Run `ttsc prepare` with TTSC_TTSX_BINARY removed from the environment.
  * 4. Assert prepare succeeds and does not report a missing `ttsx` executable.
