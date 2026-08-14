@@ -195,9 +195,8 @@ function createProjectContext(
   // after this point and may retarget a caller-controlled symlink or junction;
   // every later runtime write and recursive cleanup must remain below the
   // physical parent selected here.
-  const cacheDir = createFilesystemPathIdentityContext().resolve(
-    cacheDirSpelling,
-  ).path;
+  const cacheDir =
+    createFilesystemPathIdentityContext().resolve(cacheDirSpelling).path;
   const processDir = path.join(cacheDir, "project", runtimeCacheKey);
   const virtualRoot = path.join(processDir, "fs");
   return {

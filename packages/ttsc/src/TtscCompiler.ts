@@ -7,8 +7,8 @@ import { resolveBinary } from "./compiler/internal/resolveBinary";
 import { createProcessDiagnostic } from "./compiler/internal/runBuild";
 import { transformProjectInMemory } from "./compiler/internal/transformProjectInMemory";
 import {
-  resolveSafeCacheCleanupTargets,
   type SafeCacheCleanupTarget,
+  resolveSafeCacheCleanupTargets,
 } from "./internal/resolveSafeCacheCleanupTargets";
 import { resolveCleanTargets } from "./plugin/internal/buildSourcePlugin";
 import { loadProjectPlugins } from "./plugin/internal/loadProjectPlugins";

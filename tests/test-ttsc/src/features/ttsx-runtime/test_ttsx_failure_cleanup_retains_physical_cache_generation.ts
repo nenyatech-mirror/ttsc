@@ -82,10 +82,7 @@ export const test_ttsx_failure_cleanup_retains_physical_cache_generation =
         ),
         "victim",
       );
-      assert.deepEqual(
-        fs.readdirSync(path.join(physicalCache, "project")),
-        [],
-      );
+      assert.deepEqual(fs.readdirSync(path.join(physicalCache, "project")), []);
     } finally {
       try {
         fs.unlinkSync(cacheAlias);
