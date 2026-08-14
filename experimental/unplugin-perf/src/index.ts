@@ -19,10 +19,14 @@ const requireFromTtsc = createRequire(
   path.join(root, "packages", "ttsc", "package.json"),
 );
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    fs.rmSync(tmpRoot, { force: true, recursive: true });
+  });
 
 async function main(): Promise<void> {
   fs.rmSync(tmpRoot, { force: true, recursive: true });
@@ -99,7 +103,8 @@ async function main(): Promise<void> {
     console.error(
       `\nFAIL: a scenario violated its invariant:\n  ${failures.join("\n  ")}`,
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   console.log(
     "\nOK: every build ran exactly one whole-project transform and watch-input" +
@@ -185,7 +190,7 @@ async function measure(
   const plugin = adapter.rollup({
     project: path.join(project, "tsconfig.json"),
   });
-  const runLog = path.join(project, ".plugin-runs");
+  const runLog = pluginRunLog(project);
 
   // Warm-up build: pays the one-time Go plugin compile + native program load so
   // the timed run reflects steady-state per-module cost, not toolchain startup.
@@ -242,7 +247,7 @@ async function measureGraphBuild(
   const plugin = adapter.rollup({
     project: path.join(project, "tsconfig.json"),
   });
-  const runLog = path.join(project, ".plugin-runs");
+  const runLog = pluginRunLog(project);
 
   await runBuild(plugin, project, runLog);
 
@@ -306,7 +311,7 @@ async function measureServeValidation(
   const plugin = adapter.rollup({
     project: path.join(project, "tsconfig.json"),
   });
-  const runLog = path.join(project, ".plugin-runs");
+  const runLog = pluginRunLog(project);
   const context = {
     addWatchFile: () => undefined,
     error: (message: unknown) => {
@@ -326,16 +331,23 @@ async function measureServeValidation(
   const counter = instrumentReadFileSync();
   const statCounter = instrumentStatSync();
   const started = process.hrtime.bigint();
-  for (const id of modules) {
-    await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+  try {
+    for (const id of modules) {
+      await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+    }
+  } finally {
+    counter.restore();
+    statCounter.restore();
   }
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-  counter.restore();
-  statCounter.restore();
+  const pluginRuns = fs.existsSync(runLog)
+    ? fs.readFileSync(runLog, "utf8").length
+    : 0;
 
   console.log(
     `  N=${String(options.count).padStart(3)}  ` +
       `externals=${String(options.graphFanout ?? 0).padStart(4)}  ` +
+      `pluginRuns=${String(pluginRuns).padStart(3)}  ` +
       `reads=${String(counter.calls).padStart(8)}  ` +
       `reads/file=${(counter.calls / options.count).toFixed(1).padStart(8)}  ` +
       `stats/file=${(statCounter.calls / options.count).toFixed(1).padStart(6)}  ` +
@@ -343,6 +355,9 @@ async function measureServeValidation(
   );
   const readsPerFile = counter.calls / options.count;
   const statsPerFile = statCounter.calls / options.count;
+  if (pluginRuns !== 1) {
+    return `scenario D N=${options.count} K=${options.graphFanout}: pluginRuns=${pluginRuns} (expected 1)`;
+  }
   if (readsPerFile > 16) {
     return `scenario D N=${options.count} K=${options.graphFanout}: reads/file=${readsPerFile.toFixed(1)} exceeds the per-file validation budget of 16`;
   }
@@ -414,6 +429,11 @@ function projectModules(project: string): string[] {
     .filter((name) => name.endsWith(".ts"))
     .sort()
     .map((name) => path.join(srcDir, name));
+}
+
+/** Keep the observer outside the project snapshot it is measuring. */
+function pluginRunLog(project: string): string {
+  return path.join(tmpRoot, `${path.basename(project)}.plugin-runs`);
 }
 
 /** Wrap `fs.readFileSync` to count calls and bytes for one timed build. */
@@ -571,6 +591,7 @@ function writeGoPlugin(project: string): void {
       "package main",
       "",
       "import (",
+      '  "crypto/sha256"',
       '  "encoding/json"',
       '  "flag"',
       '  "fmt"',
@@ -586,6 +607,8 @@ function writeGoPlugin(project: string): void {
       '  Globals    []string            `json:"globals"`',
       '  Configs    []string            `json:"configs"`',
       '  Candidates map[string][]string `json:"candidates,omitempty"`',
+      '  InputHashes map[string]*string `json:"inputHashes,omitempty"`',
+      '  InputRealpaths map[string]*string `json:"inputRealpaths,omitempty"`',
       "}",
       "",
       "type transformResult struct {",
@@ -678,12 +701,53 @@ function writeGoPlugin(project: string): void {
       "      Globals:    []string{},",
       '      Configs:    []string{"tsconfig.json"},',
       "      Candidates: candidates,",
+      "      InputHashes: map[string]*string{},",
+      "      InputRealpaths: map[string]*string{},",
       "    }",
+      "    addGraphInputProofs(result.Graph, root)",
       "  }",
       "",
       "  data, _ := json.Marshal(result)",
       "  fmt.Fprintln(os.Stdout, string(data))",
       "  return 0",
+      "}",
+      "",
+      "func addGraphInputProofs(graph *referenceGraph, root string) {",
+      "  inputs := map[string]struct{}{}",
+      "  for source, targets := range graph.Edges {",
+      "    inputs[source] = struct{}{}",
+      "    for _, target := range targets { inputs[target] = struct{}{} }",
+      "  }",
+      "  for _, input := range graph.Globals { inputs[input] = struct{}{} }",
+      "  for _, input := range graph.Configs { inputs[input] = struct{}{} }",
+      "  for source, candidates := range graph.Candidates {",
+      "    inputs[source] = struct{}{}",
+      "    for _, candidate := range candidates { inputs[candidate] = struct{}{} }",
+      "  }",
+      "  for input := range inputs { addGraphInputProof(graph, root, input) }",
+      "}",
+      "",
+      "func addGraphInputProof(graph *referenceGraph, root, input string) {",
+      "  file := filepath.FromSlash(input)",
+      "  if !filepath.IsAbs(file) { file = filepath.Join(root, file) }",
+      "  data, err := os.ReadFile(file)",
+      "  if err != nil {",
+      "    info, statErr := os.Stat(file)",
+      "    if statErr != nil || !info.IsDir() {",
+      "      graph.InputHashes[input] = nil",
+      "      graph.InputRealpaths[input] = nil",
+      "      return",
+      "    }",
+      '    data = []byte("ttsc:host-input:directory\\x00")',
+      "  }",
+      "  realpath, err := filepath.EvalSymlinks(file)",
+      "  if err != nil { return }",
+      "  absolute, err := filepath.Abs(realpath)",
+      "  if err != nil { return }",
+      "  digest := sha256.Sum256(data)",
+      '  hash := fmt.Sprintf("%x", digest[:])',
+      "  graph.InputHashes[input] = &hash",
+      "  graph.InputRealpaths[input] = &absolute",
       "}",
       "",
     ].join("\n"),
