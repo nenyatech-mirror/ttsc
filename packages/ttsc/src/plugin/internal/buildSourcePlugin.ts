@@ -193,6 +193,16 @@ export interface ITtscSourceBuildCachePaths {
   goBuildRootSource: "ttsc-cache" | "TTSC_GO_CACHE_DIR" | "GOCACHE";
 }
 
+/** Synchronous filesystem reads used to fingerprint external Go toolchains. */
+export interface SourceBuildFilesystemOperations {
+  readFile(location: string): Buffer;
+}
+
+const DEFAULT_SOURCE_BUILD_FILESYSTEM: SourceBuildFilesystemOperations =
+  Object.freeze({
+    readFile: (location: string) => fs.readFileSync(location),
+  });
+
 /**
  * Build one Go source plugin into a cached executable.
  *
@@ -210,6 +220,7 @@ export function buildSourcePlugin(opts: {
   cacheDir?: string;
   contributors?: readonly ITtscBuildContributor[];
   env?: NodeJS.ProcessEnv;
+  filesystem?: Partial<SourceBuildFilesystemOperations>;
   label?: string;
   overlayDirs?: readonly string[];
   quiet?: boolean;
@@ -228,6 +239,7 @@ export function buildSourcePlugin(opts: {
     dir,
     entry,
     env,
+    filesystem: opts.filesystem,
     goBinary,
     overlayDirs,
     ttscVersion: opts.ttscVersion,
@@ -2434,12 +2446,17 @@ export function computeCacheKey(inputs: {
   dir: string;
   entry: string;
   env?: NodeJS.ProcessEnv;
+  filesystem?: Partial<SourceBuildFilesystemOperations>;
   goBinary?: string;
   overlayDirs?: readonly string[];
   ttscVersion: string;
   tsgoVersion: string;
 }): string {
   const env = inputs.env ?? process.env;
+  const filesystem: SourceBuildFilesystemOperations = {
+    readFile:
+      inputs.filesystem?.readFile ?? DEFAULT_SOURCE_BUILD_FILESYSTEM.readFile,
+  };
   const goBinary =
     inputs.goBinary === undefined
       ? undefined
@@ -2452,7 +2469,7 @@ export function computeCacheKey(inputs: {
   if (goBinary !== undefined) {
     hash.update(`go=${resolveGoCompilerIdentity(goBinary, env, inputs.dir)}\n`);
   }
-  hashGoBuildEnvironment(hash, goBinary, inputs.dir, env);
+  hashGoBuildEnvironment(hash, goBinary, inputs.dir, env, filesystem);
   hashExternalGoBuildEnvironment(hash, env);
   hashSourceDirectory(hash, "plugin", inputs.dir);
   for (const [index, dir] of [...(inputs.overlayDirs ?? [])].sort().entries()) {
@@ -2870,8 +2887,9 @@ function hashGoBuildEnvironment(
   goBinary: string | undefined,
   cwd: string,
   env: NodeJS.ProcessEnv,
+  filesystem: SourceBuildFilesystemOperations,
 ): void {
-  const values = resolveGoBuildEnvironment(goBinary, cwd, env);
+  const values = resolveGoBuildEnvironment(goBinary, cwd, env, filesystem);
   for (const key of GO_BUILD_ENV_KEYS) {
     const value = values.get(key);
     if (value !== undefined && value !== "") {
@@ -2884,6 +2902,7 @@ function resolveGoBuildEnvironment(
   goBinary: string | undefined,
   cwd: string,
   env: NodeJS.ProcessEnv,
+  filesystem: SourceBuildFilesystemOperations,
 ): Map<string, string> {
   const values = new Map<string, string>();
   if (goBinary !== undefined) {
@@ -2903,7 +2922,10 @@ function resolveGoBuildEnvironment(
         for (const key of GO_BUILD_ENV_KEYS) {
           const raw = parsed[key];
           if (typeof raw === "string" && raw !== "") {
-            values.set(key, normalizeGoBuildEnvValue(key, raw, env));
+            values.set(
+              key,
+              normalizeGoBuildEnvValue(key, raw, env, filesystem),
+            );
           }
         }
       } catch {
@@ -2916,7 +2938,7 @@ function resolveGoBuildEnvironment(
     if (values.has(key)) continue;
     const value = env[key];
     if (value !== undefined && value !== "") {
-      values.set(key, normalizeGoBuildEnvValue(key, value, env));
+      values.set(key, normalizeGoBuildEnvValue(key, value, env, filesystem));
     }
   }
   return values;
@@ -2926,9 +2948,10 @@ function normalizeGoBuildEnvValue(
   key: string,
   value: string,
   env: NodeJS.ProcessEnv,
+  filesystem: SourceBuildFilesystemOperations,
 ): string {
   if (key === "GOROOT") {
-    return resolveGoRootCacheIdentity(value);
+    return resolveGoRootCacheIdentity(value, filesystem);
   }
   if (GO_BUILD_COMMAND_ENV_KEYS.has(key)) {
     return `${value}\0${resolveCommandCacheIdentity(value, env)}`;
@@ -2997,7 +3020,10 @@ interface GoRootIdentityCacheEntry {
 // changed or incomplete manifest falls through to the historical full read.
 const goRootIdentityCache = new Map<string, GoRootIdentityCacheEntry>();
 
-function resolveGoRootCacheIdentity(goRoot: string): string {
+function resolveGoRootCacheIdentity(
+  goRoot: string,
+  filesystem: SourceBuildFilesystemOperations,
+): string {
   const resolved = resolveRealPath(goRoot);
   if (!fs.existsSync(resolved)) {
     return `missing:${goRoot}`;
@@ -3013,7 +3039,7 @@ function resolveGoRootCacheIdentity(goRoot: string): string {
   for (const file of snapshot.files) {
     const relative = path.relative(resolved, file).replace(/\\/g, "/");
     hash.update(`f=${relative}\n`);
-    hash.update(fs.readFileSync(file));
+    hash.update(filesystem.readFile(file));
     hash.update("\n");
   }
   const identity = `sha256:${hash.digest("hex")}`;

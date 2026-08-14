@@ -39,28 +39,27 @@ export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
     fs.mkdirSync(path.join(goRoot, "bin"), { recursive: true });
     const go = createFakeGoBinary(path.join(goRoot, "bin"));
     const previous = process.env.FAKE_GO_ENV_GOROOT;
-    const originalRead = fs.readFileSync;
     let goRootReads = 0;
-    (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (
-      this: unknown,
-      ...args: Parameters<typeof fs.readFileSync>
-    ) {
-      const file = path.resolve(String(args[0]));
-      const relative = path.relative(goRoot, file);
-      if (
-        relative !== "" &&
-        relative !== ".." &&
-        !relative.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(relative)
-      ) {
-        goRootReads += 1;
-      }
-      return originalRead.apply(this, args as never);
-    } as typeof fs.readFileSync;
+    const filesystem = {
+      readFile: (location: string): Buffer => {
+        const file = path.resolve(location);
+        const relative = path.relative(goRoot, file);
+        if (
+          relative !== "" &&
+          relative !== ".." &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative)
+        ) {
+          goRootReads += 1;
+        }
+        return fs.readFileSync(location);
+      },
+    };
     const key = () =>
       computeCacheKey({
         dir: plugin,
         entry: ".",
+        filesystem,
         goBinary: go,
         ttscVersion: "1.0.0",
         tsgoVersion: "7.0.0-dev",
@@ -96,6 +95,7 @@ export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
             FAKE_GO_ENV_GOROOT: goRoot,
             TTSC_GO_BINARY: go,
           },
+          filesystem,
           overlayDirs: [],
           pluginName: "goroot-memo",
           quiet: true,
@@ -142,8 +142,6 @@ export const test_computecachekey_memoizes_unchanged_goroot_content_reads =
       assert.notEqual(sixth, fifth);
       assert.ok(goRootReads > 0, "a deleted file must re-read GOROOT");
     } finally {
-      (fs as { readFileSync: typeof fs.readFileSync }).readFileSync =
-        originalRead;
       if (previous === undefined) delete process.env.FAKE_GO_ENV_GOROOT;
       else process.env.FAKE_GO_ENV_GOROOT = previous;
     }

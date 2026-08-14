@@ -146,14 +146,56 @@ export type TtscTransformCache = Map<
   Promise<TtscCachedProjectTransform>
 >;
 
+/** Cache-owned synchronous filesystem reads used by transform validation. */
+export interface TtscTransformFilesystemOperations {
+  /** Test whether a validation or resolution candidate currently exists. */
+  exists(location: string): boolean;
+  /** Read link metadata without following a symbolic link. */
+  lstat(location: string): fs.BigIntStats;
+  /** Read bytes used by project, graph, and host-input fingerprints. */
+  readFile(location: string): Buffer;
+  /** Enumerate one project or missing-input proof directory. */
+  readdir(location: string): fs.Dirent[];
+  /** Resolve one lexical path to its current physical target. */
+  realpath(location: string): string;
+  /** Read ordinary metadata for file-kind and missing-path checks. */
+  stat(location: string): fs.Stats;
+  /** Read nanosecond metadata for stable file and directory signatures. */
+  statBigInt(location: string): fs.BigIntStats;
+}
+
+const DEFAULT_FILESYSTEM_OPERATIONS: TtscTransformFilesystemOperations =
+  Object.freeze({
+    exists: fs.existsSync,
+    lstat: (location: string) => fs.lstatSync(location, { bigint: true }),
+    readFile: (location: string) => fs.readFileSync(location),
+    readdir: (location: string) =>
+      fs.readdirSync(location, { withFileTypes: true }),
+    realpath: fs.realpathSync.native,
+    stat: fs.statSync,
+    statBigInt: (location: string) => fs.statSync(location, { bigint: true }),
+  });
+
+const TRANSFORM_CACHE_FILESYSTEM = new WeakMap<
+  TtscTransformCache,
+  TtscTransformFilesystemOperations
+>();
+const TRANSFORM_RESULT_FILESYSTEM = new WeakMap<
+  ITtscCompilerTransformation,
+  TtscTransformFilesystemOperations
+>();
+
 /**
  * Caches whose owner has declared a real per-build lifecycle by calling
  * {@link beginTtscTransformBuild} before transforms begin.
  */
 const BUILD_SCOPED_TRANSFORM_CACHES = new WeakSet<TtscTransformCache>();
 
-function createHostPathIdentityContext(): FilesystemPathIdentityContext {
+function createHostPathIdentityContext(
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): FilesystemPathIdentityContext {
   return createFilesystemPathIdentityContext({
+    realpath: filesystem.realpath,
     throwOnRealpathError: false,
   });
 }
@@ -166,9 +208,39 @@ export function normalizeHostInputName(
   return caseSensitive ? name : name.toLowerCase();
 }
 
-/** Create an empty persistent transform cache. */
-export function createTtscTransformCache(): TtscTransformCache {
-  return new Map();
+/** Create an empty persistent transform cache with isolated filesystem reads. */
+export function createTtscTransformCache(
+  operations: Partial<TtscTransformFilesystemOperations> = {},
+): TtscTransformCache {
+  const cache: TtscTransformCache = new Map();
+  TRANSFORM_CACHE_FILESYSTEM.set(cache, {
+    exists: operations.exists ?? DEFAULT_FILESYSTEM_OPERATIONS.exists,
+    lstat: operations.lstat ?? DEFAULT_FILESYSTEM_OPERATIONS.lstat,
+    readFile: operations.readFile ?? DEFAULT_FILESYSTEM_OPERATIONS.readFile,
+    readdir: operations.readdir ?? DEFAULT_FILESYSTEM_OPERATIONS.readdir,
+    realpath: operations.realpath ?? DEFAULT_FILESYSTEM_OPERATIONS.realpath,
+    stat: operations.stat ?? DEFAULT_FILESYSTEM_OPERATIONS.stat,
+    statBigInt:
+      operations.statBigInt ?? DEFAULT_FILESYSTEM_OPERATIONS.statBigInt,
+  });
+  return cache;
+}
+
+function transformFilesystem(
+  cache: TtscTransformCache | undefined,
+): TtscTransformFilesystemOperations {
+  return (
+    (cache === undefined ? undefined : TRANSFORM_CACHE_FILESYSTEM.get(cache)) ??
+    DEFAULT_FILESYSTEM_OPERATIONS
+  );
+}
+
+function resultFilesystem(
+  result: ITtscCompilerTransformation,
+): TtscTransformFilesystemOperations {
+  return (
+    TRANSFORM_RESULT_FILESYSTEM.get(result) ?? DEFAULT_FILESYSTEM_OPERATIONS
+  );
 }
 
 /**
@@ -267,6 +339,7 @@ export async function transformTtsc(
   cache?: TtscTransformCache,
   hooks?: TtscTransformHooks,
 ): Promise<TtscTransformResult | undefined> {
+  const filesystem = transformFilesystem(cache);
   const clean = stripQuery(id);
   if (clean.includes("\0")) {
     return undefined;
@@ -279,7 +352,7 @@ export async function transformTtsc(
     return undefined;
   }
 
-  const tsconfig = resolveTsconfig(file, options.project);
+  const tsconfig = resolveTsconfig(file, options.project, filesystem);
   const aliasPaths = createAliasPaths(aliases);
   const key = createTransformCacheKey({
     aliasPaths,
@@ -294,6 +367,7 @@ export async function transformTtsc(
       // A rejected in-flight generation must not stay cached: evict it (only if
       // it is still the current entry) so a later call re-runs the transform.
       const cached = await awaitOrEvict(cache, key, transformed);
+      TRANSFORM_RESULT_FILESYSTEM.set(cached.result, filesystem);
       // While this caller awaited the old Promise, another caller may have
       // invalidated it and installed a newer authoritative generation.
       if (cache?.get(key) !== transformed) {
@@ -351,6 +425,7 @@ export async function transformTtsc(
         compilerOptions: options.compilerOptions,
         currentFile: file,
         currentSource: source,
+        filesystem,
         plugins: options.plugins,
         trackProjectMembership: cache !== undefined,
         tsconfig,
@@ -578,7 +653,9 @@ function envelopeDerivation(props: {
     return existing;
   }
   const created: TtscEnvelopeDerivation = {
-    identityContext: createHostPathIdentityContext(),
+    identityContext: createHostPathIdentityContext(
+      resultFilesystem(props.result),
+    ),
     identities: new Map(),
     watchInputs: new Map(),
   };
@@ -1332,11 +1409,13 @@ function matchesUniversalHostInputs(
   cached: TtscCachedProjectTransform,
   validation: TtscHostInputValidation,
 ): boolean {
+  const filesystem = resultFilesystem(cached.result);
   for (const entry of validation.entries.values()) {
-    const signature = inputMetadataSignature(entry.path);
+    const signature = inputMetadataSignature(entry.path, filesystem);
     if (signature === entry.signature) continue;
     if (entry.strict === true) return false;
-    if (hostInputRealpath(entry.path) !== entry.realpath) return false;
+    if (hostInputRealpath(entry.path, filesystem) !== entry.realpath)
+      return false;
     if (!matchesRecordedInput(cached, entry.path)) {
       return false;
     }
@@ -1346,14 +1425,14 @@ function matchesUniversalHostInputs(
   for (const [directory, names] of validation.missing) {
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
+      entries = filesystem.readdir(directory);
     } catch (error) {
       // Only a provably absent/non-directory ancestor keeps every descendant
       // unreachable. Permission and transient I/O failures cannot prove that
       // a candidate is still missing, while replacing the proving directory
       // with an exact file can itself redirect module resolution.
       try {
-        if (!fs.statSync(directory).isDirectory()) return false;
+        if (!filesystem.stat(directory).isDirectory()) return false;
       } catch (statError) {
         if (!isMissingPathError(statError)) return false;
         continue;
@@ -1384,6 +1463,7 @@ function captureUniversalHostInputValidation(
   cached: TtscCachedProjectTransform,
   currentFile: string,
 ): TtscHostInputValidation | undefined {
+  const filesystem = resultFilesystem(cached.result);
   const state = envelopeDerivation(cached);
   const validation: TtscHostInputValidation = {
     entries: new Map(),
@@ -1391,6 +1471,7 @@ function captureUniversalHostInputValidation(
     missing: new Map(),
   };
   for (const input of selectPersistentHostInputs({
+    filesystem,
     projectRoot: cached.projectRoot,
     result: cached.result,
     temporaryTsconfig: cached.temporaryTsconfig,
@@ -1413,7 +1494,7 @@ function captureUniversalHostInputValidation(
       // The current module may be supplied from an unsaved editor buffer. Its
       // generation snapshot is overlaid below from `currentSource`, so a disk
       // fingerprint would be both unavailable and the wrong authority.
-    } else if (expected !== hostInputStateHash(input)) {
+    } else if (expected !== hostInputStateHash(input, filesystem)) {
       return undefined;
     }
     const absoluteInput = path.resolve(input);
@@ -1425,7 +1506,7 @@ function captureUniversalHostInputValidation(
         ) ||
         !sameHostInputRealpath(
           generationRealpaths[absoluteInput],
-          hostInputRealpath(input),
+          hostInputRealpath(input, filesystem),
           state.identityContext,
         )
       ) {
@@ -1434,9 +1515,9 @@ function captureUniversalHostInputValidation(
     }
     const identity = derivationIdentity(state, input);
     validation.identities.add(identity);
-    const before = inputMetadataSignature(input);
+    const before = inputMetadataSignature(input, filesystem);
     if (!matchesRecordedInput(cached, input)) return undefined;
-    const after = inputMetadataSignature(input);
+    const after = inputMetadataSignature(input, filesystem);
     if (before !== after) return undefined;
     if (after !== undefined) {
       // Do not key this manifest by physical identity. A symlink/junction
@@ -1444,20 +1525,20 @@ function captureUniversalHostInputValidation(
       // but both lexical paths must survive so retargeting the alias is visible.
       validation.entries.set(path.resolve(input), {
         path: input,
-        realpath: hostInputRealpath(input),
+        realpath: hostInputRealpath(input, filesystem),
         signature: after,
       });
       continue;
     }
-    const probe = missingPathProbe(input);
+    const probe = missingPathProbe(input, filesystem);
     if (probe.blocker !== undefined) {
       const blockerIdentity = derivationIdentity(state, probe.blocker);
-      const signature = inputMetadataSignature(probe.blocker);
+      const signature = inputMetadataSignature(probe.blocker, filesystem);
       if (signature === undefined) return undefined;
       validation.identities.add(blockerIdentity);
       validation.entries.set(path.resolve(probe.blocker), {
         path: probe.blocker,
-        realpath: hostInputRealpath(probe.blocker),
+        realpath: hostInputRealpath(probe.blocker, filesystem),
         signature,
         strict: true,
       });
@@ -1480,13 +1561,16 @@ function captureUniversalHostInputValidation(
 }
 
 /** Metadata identity whose stability lets a generation reuse a content hash. */
-function inputMetadataSignature(file: string): string | undefined {
+function inputMetadataSignature(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | undefined {
   try {
-    const link = fs.lstatSync(file, { bigint: true });
+    const link = filesystem.lstat(file);
     let target = link;
     if (link.isSymbolicLink()) {
       try {
-        target = fs.statSync(file, { bigint: true });
+        target = filesystem.statBigInt(file);
       } catch {
         // Keep a broken link in the existing-input manifest. Its own metadata
         // stays stable while the target is missing, and the first successful
@@ -1524,12 +1608,15 @@ function inputMetadataSignature(file: string): string | undefined {
 }
 
 /** Content/kind fingerprint matching the compiler host-input contract. */
-function hostInputStateHash(file: string): string | null {
+function hostInputStateHash(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | null {
   try {
-    return hashText(fs.readFileSync(file));
+    return hashText(filesystem.readFile(file));
   } catch {
     try {
-      return fs.statSync(file).isDirectory()
+      return filesystem.stat(file).isDirectory()
         ? hashText("ttsc:host-input:directory\0")
         : null;
     } catch {
@@ -1539,9 +1626,12 @@ function hostInputStateHash(file: string): string | null {
 }
 
 /** Fingerprint the text/kind state returned by TypeScript-Go's filesystem. */
-function graphInputStateHash(file: string): string | null {
+function graphInputStateHash(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | null {
   try {
-    const bytes = fs.readFileSync(file);
+    const bytes = filesystem.readFile(file);
     if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
       const even = bytes.subarray(
         2,
@@ -1566,7 +1656,7 @@ function graphInputStateHash(file: string): string | null {
     return hashText(content);
   } catch {
     try {
-      return fs.statSync(file).isDirectory()
+      return filesystem.stat(file).isDirectory()
         ? hashText("ttsc:host-input:directory\0")
         : null;
     } catch {
@@ -1576,9 +1666,12 @@ function graphInputStateHash(file: string): string | null {
 }
 
 /** Physical target selected by a lexical host-input path. */
-function hostInputRealpath(file: string): string | null {
+function hostInputRealpath(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | null {
   try {
-    return fs.realpathSync.native(file);
+    return filesystem.realpath(file);
   } catch {
     return null;
   }
@@ -1598,7 +1691,10 @@ function sameHostInputRealpath(
 }
 
 /** Find one directory listing that proves an absent path is still absent. */
-function missingPathProbe(file: string): {
+function missingPathProbe(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): {
   blocker?: string;
   directory: string;
   name: string;
@@ -1607,7 +1703,7 @@ function missingPathProbe(file: string): {
   for (;;) {
     const directory = path.dirname(child);
     try {
-      const stats = fs.statSync(directory);
+      const stats = filesystem.stat(directory);
       if (stats.isDirectory()) {
         return { directory, name: path.basename(child) };
       }
@@ -1636,6 +1732,7 @@ function matchesCompleteInputSnapshot(
   const current = collectProjectInputSnapshot(
     cached.projectRoot,
     envelopeDerivation(cached).identityContext,
+    resultFilesystem(cached.result),
   );
   if (!current.complete) {
     return false;
@@ -1666,13 +1763,14 @@ function matchesExternalInputRealpaths(
   const expected = cached.externalInputRealpaths;
   if (expected === undefined || Object.keys(expected).length === 0) return true;
   const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
   for (const input of cached.externalInputPaths ?? []) {
     const identity = derivationIdentity(state, input);
     if (!Object.prototype.hasOwnProperty.call(expected, identity)) continue;
     if (
       !sameHostInputRealpath(
         expected[identity],
-        hostInputRealpath(input),
+        hostInputRealpath(input, filesystem),
         state.identityContext,
       )
     ) {
@@ -1698,6 +1796,7 @@ function captureExternalInputSnapshot(
   realpaths: Record<string, string | null>;
 } {
   const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
   const graph = envelopeGraphIndexes(state, cached);
   const hashes: Record<string, string> = {};
   const realpaths: Record<string, string | null> = {};
@@ -1710,12 +1809,12 @@ function captureExternalInputSnapshot(
         complete = false;
         continue;
       }
-      const currentHash = graphInputStateHash(input);
+      const currentHash = graphInputStateHash(input, filesystem);
       if (
         currentHash !== proof.hash ||
         !sameHostInputRealpath(
           proof.realpath,
-          hostInputRealpath(input),
+          hostInputRealpath(input, filesystem),
           state.identityContext,
         )
       ) {
@@ -1725,7 +1824,7 @@ function captureExternalInputSnapshot(
       realpaths[identity] = proof.realpath;
       continue;
     }
-    hashes[identity] = hostInputStateHash(input) ?? "missing";
+    hashes[identity] = hostInputStateHash(input, filesystem) ?? "missing";
   }
   return { complete, hashes, realpaths };
 }
@@ -1746,6 +1845,7 @@ function matchesCompilerGraphInputProofs(
     return true;
   }
   const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
   const graph = envelopeGraphIndexes(state, cached);
   if (
     graph.inputProofConflicts.size !== 0 ||
@@ -1757,10 +1857,10 @@ function matchesCompilerGraphInputProofs(
     const proof = graph.inputProofs.get(identity);
     if (
       proof === undefined ||
-      graphInputStateHash(proof.path) !== proof.hash ||
+      graphInputStateHash(proof.path, filesystem) !== proof.hash ||
       !sameHostInputRealpath(
         proof.realpath,
-        hostInputRealpath(proof.path),
+        hostInputRealpath(proof.path, filesystem),
         state.identityContext,
       )
     ) {
@@ -1776,6 +1876,7 @@ function matchesRecordedInput(
   input: string,
 ): boolean {
   const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
   const projectKey = toProjectKey(
     cached.projectRoot,
     input,
@@ -1798,7 +1899,7 @@ function matchesRecordedInput(
     Object.prototype.hasOwnProperty.call(externalRealpaths, identity) &&
     !sameHostInputRealpath(
       externalRealpaths[identity],
-      hostInputRealpath(input),
+      hostInputRealpath(input, filesystem),
       state.identityContext,
     )
   ) {
@@ -1813,8 +1914,8 @@ function matchesRecordedInput(
   }
   try {
     const current = graphInput
-      ? graphInputStateHash(input)
-      : hostInputStateHash(input);
+      ? graphInputStateHash(input, filesystem)
+      : hostInputStateHash(input, filesystem);
     return recorded === (current ?? "missing");
   } catch {
     return recorded === "missing";
@@ -1840,14 +1941,17 @@ function markCachedSourceServed(
 export function collectProjectInputHashes(
   projectRoot: string,
   identities: FilesystemPathIdentityContext = createHostPathIdentityContext(),
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): Record<string, string> {
-  return collectProjectInputSnapshot(projectRoot, identities).hashes;
+  return collectProjectInputSnapshot(projectRoot, identities, filesystem)
+    .hashes;
 }
 
 /** Hash project files and snapshot the directory topology in one walk. */
 function collectProjectInputSnapshot(
   projectRoot: string,
   identities: FilesystemPathIdentityContext,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): {
   complete: boolean;
   fileSignatures: Record<string, string>;
@@ -1856,13 +1960,13 @@ function collectProjectInputSnapshot(
 } {
   const hashes: Record<string, string> = {};
   const fileSignatures: Record<string, string> = {};
-  const walked = walkProjectInputs(projectRoot);
+  const walked = walkProjectInputs(projectRoot, filesystem);
   let complete = walked.complete;
   for (const file of walked.files) {
     try {
-      const before = inputMetadataSignature(file);
-      const contents = fs.readFileSync(file);
-      const after = inputMetadataSignature(file);
+      const before = inputMetadataSignature(file, filesystem);
+      const contents = filesystem.readFile(file);
+      const after = inputMetadataSignature(file, filesystem);
       const key = toProjectKey(projectRoot, file, identities);
       hashes[key] = hashText(contents);
       if (before === undefined || after === undefined || before !== after) {
@@ -1892,7 +1996,10 @@ function collectProjectInputSnapshot(
  * unbounded call-stack depth on deep project trees. The result is sorted so
  * that hash comparisons are deterministic across OS-level directory orderings.
  */
-function walkProjectInputs(root: string): {
+function walkProjectInputs(
+  root: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): {
   complete: boolean;
   directories: TtscProjectDirectorySnapshot[];
   files: string[];
@@ -1903,19 +2010,19 @@ function walkProjectInputs(root: string): {
   const stack = [root];
   while (stack.length !== 0) {
     const current = stack.pop()!;
-    const before = projectDirectorySignature(current);
+    const before = projectDirectorySignature(current, filesystem);
     if (before === undefined) {
       complete = false;
       continue;
     }
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
+      entries = filesystem.readdir(current);
     } catch {
       complete = false;
       continue;
     }
-    const after = projectDirectorySignature(current);
+    const after = projectDirectorySignature(current, filesystem);
     if (after === undefined || before !== after) {
       complete = false;
     }
@@ -1947,9 +2054,12 @@ function walkProjectInputs(root: string): {
 }
 
 /** Return a cheap identity for one directory's immediate membership. */
-function projectDirectorySignature(directory: string): string | undefined {
+function projectDirectorySignature(
+  directory: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | undefined {
   try {
-    const stats = fs.statSync(directory, { bigint: true });
+    const stats = filesystem.statBigInt(directory);
     if (!stats.isDirectory()) {
       return undefined;
     }
@@ -1984,6 +2094,7 @@ function sameProjectDirectories(
 /** Watch every walked directory for membership changes after generation. */
 async function createProjectMutationTracker(
   directories: readonly TtscProjectDirectorySnapshot[],
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): Promise<TtscProjectMutationTracker> {
   const tracker: TtscProjectMutationTracker = {
     close: () => undefined,
@@ -1995,6 +2106,7 @@ async function createProjectMutationTracker(
       tracker,
       directories.map((directory) => ({ directory: directory.path })),
       false,
+      filesystem,
     );
     return tracker;
   }
@@ -2026,17 +2138,18 @@ async function createProjectMutationTracker(
 /** Watch exact universal inputs, or their nearest existing parent if missing. */
 async function createHostInputMutationTracker(
   inputs: readonly string[],
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): Promise<TtscProjectMutationTracker> {
-  const identities = createHostPathIdentityContext();
+  const identities = createHostPathIdentityContext(filesystem);
   const namesByDirectory = new Map<
     string,
     { directory: string; names: Set<string> }
   >();
   for (const input of inputs) {
     const absolute = path.resolve(input);
-    const probe = fs.existsSync(absolute)
+    const probe = filesystem.exists(absolute)
       ? { directory: path.dirname(absolute), name: path.basename(absolute) }
-      : missingPathProbe(absolute);
+      : missingPathProbe(absolute, filesystem);
     const directoryIdentity = identities.resolve(probe.directory);
     let location = namesByDirectory.get(directoryIdentity.key);
     if (location === undefined) {
@@ -2063,7 +2176,12 @@ async function createHostInputMutationTracker(
     membershipChanged: false,
   };
   if (process.platform === "win32") {
-    await registerWindowsProjectMutationTracker(tracker, locations, true);
+    await registerWindowsProjectMutationTracker(
+      tracker,
+      locations,
+      true,
+      filesystem,
+    );
     return tracker;
   }
   const watchers: fs.FSWatcher[] = [];
@@ -2130,12 +2248,13 @@ async function registerWindowsProjectMutationTracker(
   tracker: TtscProjectMutationTracker,
   locations: readonly WindowsMutationLocation[],
   allEvents: boolean,
+  filesystem: TtscTransformFilesystemOperations,
 ): Promise<void> {
   const broker = getWindowsProjectMutationBroker();
   const normalized = locations.map((location) => {
     let directory: string;
     try {
-      directory = fs.realpathSync.native(location.directory);
+      directory = filesystem.realpath(location.directory);
     } catch {
       directory = path.resolve(location.directory);
     }
@@ -2319,6 +2438,7 @@ export function isProjectWalkPath(
   root: string,
   file: string,
   _identities: FilesystemPathIdentityContext = createHostPathIdentityContext(),
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): boolean {
   // Walk membership is lexical. Resolving `file` to physical identity first
   // would turn `root/alias/value.ts` into `root/target/value.ts`, hide the
@@ -2341,9 +2461,9 @@ export function isProjectWalkPath(
   let current = resolvedRoot;
   for (let index = 0; index < segments.length; ++index) {
     current = path.join(current, segments[index]!);
-    let stats: fs.Stats;
+    let stats: fs.BigIntStats;
     try {
-      stats = fs.lstatSync(current);
+      stats = filesystem.lstat(current);
     } catch {
       return false;
     }
@@ -2370,15 +2490,16 @@ export function isProjectWalkPath(
  */
 export function collectExternalInputHashes(
   paths: readonly string[],
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): Record<string, string> {
   const hashes: Record<string, string> = {};
-  const identities = createHostPathIdentityContext();
+  const identities = createHostPathIdentityContext(filesystem);
   for (const file of paths) {
     const identity = pathIdentityKey(file, identities);
     if (identity in hashes) {
       continue;
     }
-    hashes[identity] = hostInputStateHash(file) ?? "missing";
+    hashes[identity] = hostInputStateHash(file, filesystem) ?? "missing";
   }
   return hashes;
 }
@@ -2390,14 +2511,15 @@ function collectCachedExternalInputHashes(
   const hashes: Record<string, string> = {};
   const state = envelopeDerivation(cached);
   const graphRealpaths = cached.externalInputRealpaths ?? {};
+  const filesystem = resultFilesystem(cached.result);
   for (const file of cached.externalInputPaths ??
     Object.keys(cached.externalInputHashes ?? {})) {
     const identity = derivationIdentity(state, file);
     if (identity in hashes) continue;
     hashes[identity] =
       (Object.prototype.hasOwnProperty.call(graphRealpaths, identity)
-        ? graphInputStateHash(file)
-        : hostInputStateHash(file)) ?? "missing";
+        ? graphInputStateHash(file, filesystem)
+        : hostInputStateHash(file, filesystem)) ?? "missing";
   }
   return hashes;
 }
@@ -2418,6 +2540,7 @@ function collectCachedExternalInputHashes(
  * conservative fallback.
  */
 function selectExternalInputPaths(props: {
+  filesystem?: TtscTransformFilesystemOperations;
   projectRoot: string;
   result: ITtscCompilerTransformation;
   temporaryTsconfig?: string;
@@ -2426,7 +2549,8 @@ function selectExternalInputPaths(props: {
     return [];
   }
   const members: string[] = [];
-  const identities = createHostPathIdentityContext();
+  const filesystem = props.filesystem ?? DEFAULT_FILESYSTEM_OPERATIONS;
+  const identities = createHostPathIdentityContext(filesystem);
   const resolutionCandidates = new Set<string>();
   const graph = props.result.graph;
   if (graph !== undefined) {
@@ -2487,12 +2611,12 @@ function selectExternalInputPaths(props: {
     const spelling = path.resolve(absolute);
     const identity = pathIdentityKey(absolute, identities);
     const missingCandidate =
-      resolutionCandidates.has(identity) && !fs.existsSync(absolute);
+      resolutionCandidates.has(identity) && !filesystem.exists(absolute);
     if (
       identity === excluded ||
       seen.has(spelling) ||
       (!missingCandidate &&
-        isProjectWalkPath(props.projectRoot, absolute, identities))
+        isProjectWalkPath(props.projectRoot, absolute, identities, filesystem))
     ) {
       continue;
     }
@@ -2546,12 +2670,16 @@ async function transformProject(props: {
   compilerOptions: Record<string, unknown>;
   currentFile: string;
   currentSource: string;
+  filesystem: TtscTransformFilesystemOperations;
   plugins?: ResolvedTtscUnpluginOptions["plugins"];
   trackProjectMembership: boolean;
   tsconfig: string;
 }): Promise<TtscCachedProjectTransform> {
   const projectRoot = path.dirname(props.tsconfig);
-  const scratchDirectory = createTransformScratchDirectory(projectRoot);
+  const scratchDirectory = createTransformScratchDirectory(
+    projectRoot,
+    props.filesystem,
+  );
   let tracker: TtscProjectMutationTracker | undefined;
   let retainTracker = false;
   let hostInputTracker: TtscProjectMutationTracker | undefined;
@@ -2559,10 +2687,17 @@ async function transformProject(props: {
     const configured = createTransformTsconfig(props, scratchDirectory);
     const temporaryTsconfig =
       configured.path === props.tsconfig ? undefined : configured.path;
-    const identities = createHostPathIdentityContext();
-    const before = collectProjectInputSnapshot(projectRoot, identities);
+    const identities = createHostPathIdentityContext(props.filesystem);
+    const before = collectProjectInputSnapshot(
+      projectRoot,
+      identities,
+      props.filesystem,
+    );
     tracker = props.trackProjectMembership
-      ? await createProjectMutationTracker(before.projectDirectories)
+      ? await createProjectMutationTracker(
+          before.projectDirectories,
+          props.filesystem,
+        )
       : undefined;
     const result = withTransformScratchEnvironment(scratchDirectory, () =>
       new TtscCompiler({
@@ -2580,20 +2715,30 @@ async function transformProject(props: {
         env: transformScratchEnvironment(scratchDirectory),
       }).transform(),
     );
+    TRANSFORM_RESULT_FILESYSTEM.set(result, props.filesystem);
     const persistentHostInputs = selectPersistentHostInputs({
+      filesystem: props.filesystem,
       projectRoot,
       result,
       temporaryTsconfig,
     });
     hostInputTracker = props.trackProjectMembership
-      ? await createHostInputMutationTracker(persistentHostInputs)
+      ? await createHostInputMutationTracker(
+          persistentHostInputs,
+          props.filesystem,
+        )
       : undefined;
     const externalInputPaths = selectExternalInputPaths({
+      filesystem: props.filesystem,
       projectRoot,
       result,
       temporaryTsconfig,
     });
-    const inputSnapshot = collectProjectInputSnapshot(projectRoot, identities);
+    const inputSnapshot = collectProjectInputSnapshot(
+      projectRoot,
+      identities,
+      props.filesystem,
+    );
     let stableProjectSnapshot =
       before.complete &&
       inputSnapshot.complete &&
@@ -2673,6 +2818,7 @@ async function transformProject(props: {
 
 /** Exclude the disposed overlay tsconfig from live host-input tracking. */
 function selectPersistentHostInputs(props: {
+  filesystem: TtscTransformFilesystemOperations;
   projectRoot: string;
   result: ITtscCompilerTransformation;
   temporaryTsconfig?: string;
@@ -2680,7 +2826,7 @@ function selectPersistentHostInputs(props: {
   if (props.result.type === "exception") return [];
   const inputs = selectListedFiles(props.projectRoot, props.result.hostInputs);
   if (props.temporaryTsconfig === undefined) return inputs;
-  const identities = createHostPathIdentityContext();
+  const identities = createHostPathIdentityContext(props.filesystem);
   const temporary = pathIdentityKey(props.temporaryTsconfig, identities);
   return inputs.filter(
     (input) => pathIdentityKey(input, identities) !== temporary,
@@ -2723,9 +2869,12 @@ function createTransformTsconfig(
 }
 
 /** Create compiler scratch storage outside the project snapshot and watchers. */
-function createTransformScratchDirectory(projectRoot: string): string {
+function createTransformScratchDirectory(
+  projectRoot: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string {
   const root = path.resolve(projectRoot);
-  const canonicalRoot = fs.realpathSync.native(root);
+  const canonicalRoot = filesystem.realpath(root);
   const platformTemp =
     process.platform === "win32" && process.env.LOCALAPPDATA
       ? path.join(process.env.LOCALAPPDATA, "Temp")
@@ -2742,7 +2891,7 @@ function createTransformScratchDirectory(projectRoot: string): string {
     if (pathIsWithin(candidate, root)) continue;
     let canonicalCandidate: string;
     try {
-      canonicalCandidate = fs.realpathSync.native(candidate);
+      canonicalCandidate = filesystem.realpath(candidate);
     } catch (error) {
       failure = error;
       continue;
@@ -2765,7 +2914,7 @@ function createTransformScratchDirectory(projectRoot: string): string {
     }
     let canonicalDirectory: string;
     try {
-      canonicalDirectory = fs.realpathSync.native(directory);
+      canonicalDirectory = filesystem.realpath(directory);
     } catch (error) {
       try {
         fs.rmdirSync(directory);
@@ -3178,7 +3327,11 @@ function formatUnknownError(error: unknown): string {
  * compiler will error if that file does not exist, which is the correct
  * behavior for a mis-configured project.
  */
-function resolveTsconfig(file: string, tsconfig?: string): string {
+function resolveTsconfig(
+  file: string,
+  tsconfig?: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string {
   if (tsconfig !== undefined) {
     return path.isAbsolute(tsconfig)
       ? tsconfig
@@ -3188,7 +3341,7 @@ function resolveTsconfig(file: string, tsconfig?: string): string {
   let current = path.dirname(file);
   while (true) {
     const candidate = path.join(current, "tsconfig.json");
-    if (fs.existsSync(candidate)) {
+    if (filesystem.exists(candidate)) {
       return candidate;
     }
     const parent = path.dirname(current);

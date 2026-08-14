@@ -69,6 +69,42 @@ async function runProjectBuild(options: ICacheProjectOptions): Promise<{
   return { pluginRuns, outputs };
 }
 
+/** Assert filesystem instrumentation belongs only to the cache that owns it. */
+async function assertFilesystemOperationsAreCacheLocal(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const root = TestUnpluginProject.createProject();
+  const file = TestUnpluginProject.mainFile(root);
+  const source = TestUnpluginProject.mainSource(root);
+  const options = resolveOptions();
+  const reads = { first: 0, second: 0 };
+  const first = createTtscTransformCache({
+    readFile: (location: string) => {
+      reads.first += 1;
+      return fs.readFileSync(location);
+    },
+  });
+  const second = createTtscTransformCache({
+    readFile: (location: string) => {
+      reads.second += 1;
+      return fs.readFileSync(location);
+    },
+  });
+
+  assert.ok(await transformTtsc(file, source, options, undefined, first));
+  reads.first = 0;
+  reads.second = 0;
+  assert.ok(await transformTtsc(file, source, options, undefined, second));
+  assert.equal(reads.first, 0);
+  assert.ok(reads.second > 0);
+
+  reads.first = 0;
+  reads.second = 0;
+  assert.ok(await transformTtsc(file, source, options, undefined, first));
+  assert.ok(reads.first > 0);
+  assert.equal(reads.second, 0);
+}
+
 /**
  * Asserts the shared project cache compiles a multi-file project once and
  * serves every other module from cache — the happy-path baseline.
@@ -367,7 +403,13 @@ async function assertSiblingDeliveriesDoNotReprobeGraph(): Promise<void> {
   const graphFanout = 24;
   const project = createCacheProject({ fileCount: 6, graphFanout });
   const modules = projectModules(project.root);
-  const cache = createTtscTransformCache();
+  const probes = { calls: 0 };
+  const cache = createTtscTransformCache({
+    realpath: (location: string) => {
+      probes.calls += 1;
+      return fs.realpathSync.native(location);
+    },
+  });
   beginTtscTransformBuild(cache);
   const options = resolveOptions();
 
@@ -391,13 +433,9 @@ async function assertSiblingDeliveriesDoNotReprobeGraph(): Promise<void> {
     );
   await deliver(modules[0]!);
 
-  const probes = countFsIdentityProbes();
-  try {
-    for (const file of modules.slice(1)) {
-      await deliver(file);
-    }
-  } finally {
-    probes.restore();
+  probes.calls = 0;
+  for (const file of modules.slice(1)) {
+    await deliver(file);
   }
 
   // Derivation parity: each module registers its own reach union, minus
@@ -493,7 +531,39 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
     "utf8",
   );
   const modules = projectModules(project.root);
-  const cache = createTtscTransformCache();
+  let reads = 0;
+  let lstats = 0;
+  let stats = 0;
+  let deniedDirectory: string | undefined;
+  const cache = createTtscTransformCache({
+    lstat: (location: string) => {
+      lstats += 1;
+      return fs.lstatSync(location, { bigint: true });
+    },
+    readFile: (location: string) => {
+      reads += 1;
+      return fs.readFileSync(location);
+    },
+    readdir: (location: string) => {
+      if (
+        deniedDirectory !== undefined &&
+        path.resolve(location) === deniedDirectory
+      ) {
+        const error = new Error("permission denied") as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      }
+      return fs.readdirSync(location, { withFileTypes: true });
+    },
+    stat: (location: string) => {
+      stats += 1;
+      return fs.statSync(location);
+    },
+    statBigInt: (location: string) => {
+      stats += 1;
+      return fs.statSync(location, { bigint: true });
+    },
+  });
   const options = resolveOptions({
     // Force a generated overlay so the per-module bounds also guard the exact
     // temporary-tsconfig exclusion that authorizes narrow validation.
@@ -533,43 +603,12 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
   assert.equal(capturedGeneration.projectSnapshotComplete, true);
   assert.match(publishedHashes[directoryProbe] ?? "", /^[0-9a-f]{64}$/);
 
-  const originalRead = fs.readFileSync;
-  const originalLstat = fs.lstatSync;
-  const originalStat = fs.statSync;
-  let reads = 0;
-  let lstats = 0;
-  let stats = 0;
-  (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.readFileSync>
-  ) {
-    reads += 1;
-    return originalRead.apply(this, args as never);
-  } as typeof fs.readFileSync;
-  (fs as { lstatSync: typeof fs.lstatSync }).lstatSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.lstatSync>
-  ) {
-    lstats += 1;
-    return originalLstat.apply(this, args as never);
-  } as typeof fs.lstatSync;
-  (fs as { statSync: typeof fs.statSync }).statSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.statSync>
-  ) {
-    stats += 1;
-    return originalStat.apply(this, args as never);
-  } as typeof fs.statSync;
-  try {
-    for (const file of modules) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      assert.ok(await deliver(file));
-    }
-  } finally {
-    (fs as { readFileSync: typeof fs.readFileSync }).readFileSync =
-      originalRead;
-    (fs as { lstatSync: typeof fs.lstatSync }).lstatSync = originalLstat;
-    (fs as { statSync: typeof fs.statSync }).statSync = originalStat;
+  reads = 0;
+  lstats = 0;
+  stats = 0;
+  for (const file of modules) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(await deliver(file));
   }
   assert.ok(
     reads / modules.length <= 12,
@@ -586,27 +625,9 @@ async function assertPersistentValidationUsesPerFileInputs(): Promise<void> {
 
   const main = modules[0]!;
   let originalGeneration = [...cache.values()][0];
-  const originalReaddir = fs.readdirSync;
-  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.readdirSync>
-  ) {
-    if (
-      path.resolve(String(args[0])) ===
-      path.resolve(path.dirname(directoryProbe))
-    ) {
-      const error = new Error("permission denied") as NodeJS.ErrnoException;
-      error.code = "EACCES";
-      throw error;
-    }
-    return originalReaddir.apply(this, args as never);
-  } as typeof fs.readdirSync;
-  try {
-    assert.ok(await deliver(main));
-  } finally {
-    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
-      originalReaddir;
-  }
+  deniedDirectory = path.resolve(path.dirname(directoryProbe));
+  assert.ok(await deliver(main));
+  deniedDirectory = undefined;
   const permissionRetryGeneration = [...cache.values()][0];
   assert.notEqual(
     permissionRetryGeneration,
@@ -728,73 +749,60 @@ async function assertIncompleteProjectSnapshotFallsBackAndRecovers(): Promise<vo
     "declare const hiddenDuringSnapshot: string;\n",
     "utf8",
   );
-  const cache = createTtscTransformCache();
+  let failureMode: "once" | "repeated" | undefined = "once";
+  let failed = false;
+  let repeatedFailures = 0;
+  const cache = createTtscTransformCache({
+    readdir: (location: string) => {
+      if (
+        path.resolve(location) === transientDirectory &&
+        failureMode === "once" &&
+        !failed &&
+        fs.existsSync(project.runLog)
+      ) {
+        failed = true;
+        throw new Error("transient project snapshot failure");
+      }
+      if (
+        path.resolve(location) === transientDirectory &&
+        failureMode === "repeated"
+      ) {
+        repeatedFailures += 1;
+        throw new Error("repeated project snapshot failure");
+      }
+      return fs.readdirSync(location, { withFileTypes: true });
+    },
+  });
   const options = resolveOptions();
   const main = path.join(project.root, "src", "mod0.ts");
 
-  const originalReaddir = fs.readdirSync;
-  let failed = false;
-  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.readdirSync>
-  ) {
-    if (
-      !failed &&
-      fs.existsSync(project.runLog) &&
-      path.resolve(String(args[0])) === transientDirectory
-    ) {
-      failed = true;
-      throw new Error("transient project snapshot failure");
-    }
-    return originalReaddir.apply(this, args as never);
-  } as typeof fs.readdirSync;
-  try {
-    assert.ok(
-      await transformTtsc(
-        main,
-        fs.readFileSync(main, "utf8"),
-        options,
-        undefined,
-        cache,
-      ),
-    );
-  } finally {
-    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
-      originalReaddir;
-  }
+  assert.ok(
+    await transformTtsc(
+      main,
+      fs.readFileSync(main, "utf8"),
+      options,
+      undefined,
+      cache,
+    ),
+  );
   assert.equal(failed, true, "the generation walk must exercise the failure");
   const incompleteGeneration = [...cache.values()][0];
 
-  let repeatedFailures = 0;
-  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.readdirSync>
-  ) {
-    if (path.resolve(String(args[0])) === transientDirectory) {
-      repeatedFailures += 1;
-      throw new Error("repeated project snapshot failure");
-    }
-    return originalReaddir.apply(this, args as never);
-  } as typeof fs.readdirSync;
+  failureMode = "repeated";
   fs.writeFileSync(
     path.join(transientDirectory, "hidden.ts"),
     "declare const changedWhileHidden: string;\n",
     "utf8",
   );
-  try {
-    assert.ok(
-      await transformTtsc(
-        main,
-        fs.readFileSync(main, "utf8"),
-        options,
-        undefined,
-        cache,
-      ),
-    );
-  } finally {
-    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
-      originalReaddir;
-  }
+  assert.ok(
+    await transformTtsc(
+      main,
+      fs.readFileSync(main, "utf8"),
+      options,
+      undefined,
+      cache,
+    ),
+  );
   assert.ok(repeatedFailures >= 2);
   assert.notEqual(
     [...cache.values()][0],
@@ -803,6 +811,7 @@ async function assertIncompleteProjectSnapshotFallsBackAndRecovers(): Promise<vo
   );
   const repeatedIncompleteGeneration = [...cache.values()][0];
 
+  failureMode = undefined;
   assert.ok(
     await transformTtsc(
       main,
@@ -828,44 +837,36 @@ async function assertCompileSnapshotRaceCannotAuthorizeStaleOutput(): Promise<vo
   const { createTtscTransformCache, resolveOptions, transformTtsc } =
     await TestUnpluginRuntime.loadUnpluginApi();
   const project = createCacheProject({ fileCount: 2, graphFanout: 2 });
-  const cache = createTtscTransformCache();
   const options = resolveOptions();
   const main = path.join(project.root, "src", "mod0.ts");
   const lazy = path.join(project.root, "src", "mod1.ts");
-  const originalReaddir = fs.readdirSync;
   let raced = false;
-  (fs as { readdirSync: typeof fs.readdirSync }).readdirSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.readdirSync>
-  ) {
-    if (
-      !raced &&
-      fs.existsSync(project.runLog) &&
-      path.resolve(String(args[0])) === path.dirname(lazy)
-    ) {
-      raced = true;
-      fs.writeFileSync(
-        lazy,
-        'export const value1: string = "PROBE-AFTER";\n',
-        "utf8",
-      );
-    }
-    return originalReaddir.apply(this, args as never);
-  } as typeof fs.readdirSync;
-  try {
-    assert.ok(
-      await transformTtsc(
-        main,
-        fs.readFileSync(main, "utf8"),
-        options,
-        undefined,
-        cache,
-      ),
-    );
-  } finally {
-    (fs as { readdirSync: typeof fs.readdirSync }).readdirSync =
-      originalReaddir;
-  }
+  const cache = createTtscTransformCache({
+    readdir: (location: string) => {
+      if (
+        !raced &&
+        fs.existsSync(project.runLog) &&
+        path.resolve(location) === path.dirname(lazy)
+      ) {
+        raced = true;
+        fs.writeFileSync(
+          lazy,
+          'export const value1: string = "PROBE-AFTER";\n',
+          "utf8",
+        );
+      }
+      return fs.readdirSync(location, { withFileTypes: true });
+    },
+  });
+  assert.ok(
+    await transformTtsc(
+      main,
+      fs.readFileSync(main, "utf8"),
+      options,
+      undefined,
+      cache,
+    ),
+  );
   assert.equal(raced, true);
 
   const result = await transformTtsc(
@@ -1073,28 +1074,6 @@ async function assertDescriptorInputRaceCannotAuthorizeStaleGeneration(): Promis
     "a candidate created during descriptor evaluation must replace the torn generation",
   );
   assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
-}
-
-/**
- * Wrap the shared identity resolver's physical lookup with a pass-through
- * counter.
- */
-function countFsIdentityProbes(): { calls: number; restore: () => void } {
-  const counter = { calls: 0, restore: () => undefined };
-  const originalRealpath = fs.realpathSync.native;
-  (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
-    function (
-      this: unknown,
-      ...args: Parameters<typeof fs.realpathSync.native>
-    ) {
-      counter.calls += 1;
-      return originalRealpath.apply(this, args as never);
-    } as typeof fs.realpathSync.native;
-  counter.restore = () => {
-    (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
-      originalRealpath;
-  };
-  return counter;
 }
 
 /**
@@ -1602,6 +1581,7 @@ export {
   assertCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
   assertIndependentGraphLeafCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
   assertExternalCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
+  assertFilesystemOperationsAreCacheLocal,
   assertDescriptorInputRaceCannotAuthorizeStaleGeneration,
   assertConcurrentTransformsCompileOnce,
   assertFirstModuleDeliveriesDoNotRehashProject,
