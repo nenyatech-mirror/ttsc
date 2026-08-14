@@ -723,6 +723,23 @@ const configUrlSpellings = [
     pathToFileURL(realConfigLocation()).href,
   ]),
 ];
+const moduleProbeExtensions = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".node",
+] as const;
+const jsToTsProbeExtensions = new Map<string, readonly string[]>([
+  [".js", [".ts", ".tsx"]],
+  [".jsx", [".tsx"]],
+  [".mjs", [".mts"]],
+  [".cjs", [".cts"]],
+]);
 for (const spelling of configUrlSpellings) {
   graphNodes.set(spelling, configLocation);
 }
@@ -1061,24 +1078,6 @@ function recordOptionalFileDependency(
   recordDependency("optional-file", location, optionalFileDigest(location), owners);
   return false;
 }
-
-const moduleProbeExtensions = [
-  ".ts",
-  ".tsx",
-  ".mts",
-  ".cts",
-  ".js",
-  ".mjs",
-  ".cjs",
-  ".json",
-  ".node",
-] as const;
-const jsToTsProbeExtensions = new Map<string, readonly string[]>([
-  [".js", [".ts", ".tsx"]],
-  [".jsx", [".tsx"]],
-  [".mjs", [".mts"]],
-  [".cjs", [".cts"]],
-]);
 
 function moduleResolutionCandidates(base: string): string[] {
   const extension = path.extname(base).toLowerCase();

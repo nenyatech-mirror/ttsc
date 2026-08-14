@@ -273,7 +273,13 @@ function transformProjectWithPlugins(
     ),
     {
       cwd: project.root,
-      env: nativePluginEnv(options, tsgoBinary, loaded.nativePlugins, plugin),
+      env: nativePluginEnv(
+        options,
+        project.root,
+        tsgoBinary,
+        loaded.nativePlugins,
+        plugin,
+      ),
     },
   );
   if (res.error) {
@@ -485,7 +491,13 @@ function runNativeChecks(
       ),
       {
         cwd: project.root,
-        env: nativePluginEnv(options, tsgoBinary, nativePlugins, plugin),
+        env: nativePluginEnv(
+          options,
+          project.root,
+          tsgoBinary,
+          nativePlugins,
+          plugin,
+        ),
       },
     );
     if (res.error) {
@@ -577,6 +589,7 @@ function serializeNativePlugins(
  */
 function nativePluginEnv(
   options: ITtscCompilerContext,
+  projectRoot: string,
   tsgoBinary: string,
   nativePlugins?: readonly ITtscLoadedNativePlugin[],
   plugin?: ITtscLoadedNativePlugin,
@@ -593,7 +606,7 @@ function nativePluginEnv(
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
     ...options.env,
   };
-  const node = resolveNodeBinary(env, options.cwd ?? process.cwd());
+  const node = resolveNodeBinary(env, projectRoot);
   if (node === undefined) delete env.TTSC_NODE_BINARY;
   else env.TTSC_NODE_BINARY = node;
   // The anchor is per-invocation state owned by this host: when this run

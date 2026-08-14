@@ -82,7 +82,7 @@ export function startResidentTransform(
     ],
     binary: host.binary,
     cwd: project.root,
-    env: residentEnv(context, tsgoBinary, loaded.nativePlugins),
+    env: residentEnv(context, project.root, tsgoBinary, loaded.nativePlugins),
   });
   return { process: resident, projectRoot: project.root };
 }
@@ -98,6 +98,7 @@ export function startResidentTransform(
  */
 function residentEnv(
   context: ITtscCompilerContext,
+  projectRoot: string,
   tsgoBinary: string,
   nativePlugins: readonly ITtscLoadedNativePlugin[],
 ): NodeJS.ProcessEnv {
@@ -113,7 +114,7 @@ function residentEnv(
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
     ...context.env,
   };
-  const node = resolveNodeBinary(env, context.cwd ?? process.cwd());
+  const node = resolveNodeBinary(env, projectRoot);
   if (node === undefined) delete env.TTSC_NODE_BINARY;
   else env.TTSC_NODE_BINARY = node;
   // The anchor is per-invocation state owned by this host: when this run
