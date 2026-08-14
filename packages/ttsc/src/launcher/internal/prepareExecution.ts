@@ -183,15 +183,22 @@ function createProjectContext(
   const tsconfig = project.path;
   const root = project.root;
   const explicitCacheDir = resolveCacheDir(cwd, options.cacheDir);
-  const cacheDir =
+  const cacheDirSpelling =
     explicitCacheDir ??
     path.join(root, "node_modules", ".cache", "ttsc", "ttsx");
   const runtimeCacheKey = resolveRuntimeCacheKey(options.runtimeCacheKey);
-  const processDir = path.join(cacheDir, "project", runtimeCacheKey);
-  const virtualRoot = path.join(processDir, "fs");
   // Resolved once: it now costs a realpath (and, for a missing directory on
   // Windows, a case-sensitivity probe) rather than a string join.
   const runtimeRootDir = resolveRuntimeSourceRoot(project);
+  fs.mkdirSync(cacheDirSpelling, { recursive: true });
+  // Pin the cache parent before deriving a generation path. Descriptors run
+  // after this point and may retarget a caller-controlled symlink or junction;
+  // every later runtime write and recursive cleanup must remain below the
+  // physical parent selected here.
+  const cacheDir =
+    createFilesystemPathIdentityContext().resolve(cacheDirSpelling).path;
+  const processDir = path.join(cacheDir, "project", runtimeCacheKey);
+  const virtualRoot = path.join(processDir, "fs");
   return {
     project,
     tsconfig,
@@ -199,7 +206,7 @@ function createProjectContext(
     cacheDir,
     runtimeCacheKey,
     processDir,
-    pluginCacheDir: explicitCacheDir,
+    pluginCacheDir: explicitCacheDir === undefined ? undefined : cacheDir,
     virtualRoot,
     emitDir: project.compilerOptions.outDir
       ? virtualPath(virtualRoot, project.compilerOptions.outDir)
