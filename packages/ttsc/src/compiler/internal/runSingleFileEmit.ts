@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 import type { TtscSingleFileEmitOptions } from "../../structures/internal/TtscSingleFileEmitOptions";
 import { readProjectConfig } from "./project/readProjectConfig";
 import { resolveEmittedJavaScript } from "./resolveEmittedJavaScript";
@@ -32,7 +32,7 @@ export function runSingleFileEmit(options: TtscSingleFileEmitOptions): string {
   });
   const tsconfig = project.path;
   const projectRoot = project.root;
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-single-file-"));
+  const outDir = createCanonicalTempDirectory("ttsc-single-file-");
   try {
     const result = runBuild({
       ...options,

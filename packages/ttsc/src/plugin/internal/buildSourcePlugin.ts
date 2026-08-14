@@ -15,6 +15,7 @@ import { Worker } from "node:worker_threads";
 
 import { captureProcessOutput } from "../../compiler/internal/captureProcessOutput";
 import { findNearestGoMod } from "../../compiler/internal/paths";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 
 const GO_MOD_SEARCH_MAX_DEPTH = 3;
 const TTSC_GO_MODULE_PATH = "github.com/samchon/ttsc/packages/ttsc";
@@ -324,9 +325,7 @@ function compileSourcePlugin(opts: {
     );
   }
 
-  const scratchDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `ttsc-plugin-${opts.key}-`),
-  );
+  const scratchDir = createCanonicalTempDirectory(`ttsc-plugin-${opts.key}-`);
   try {
     materializeScratchDir(opts.dir, scratchDir);
     const goModReader = createGoModReader(

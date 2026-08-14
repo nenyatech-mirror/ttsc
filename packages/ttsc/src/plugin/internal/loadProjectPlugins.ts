@@ -2,13 +2,13 @@ import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { findNearestGoMod } from "../../compiler/internal/paths";
 import { readJsonFile } from "../../compiler/internal/project/readConfigJson";
 import { readProjectConfig } from "../../compiler/internal/project/readProjectConfig";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 import {
   javascriptRuntimeCapabilities,
   resolveNodeBinary,
@@ -3024,13 +3024,7 @@ function readTsgoVersion(projectRoot: string): string {
  * parent alias.
  */
 function createEvaluationTempDir(): string {
-  const directory = fs.mkdtempSync(
-    path.join(os.tmpdir(), "ttsc-plugin-descriptor-"),
-  );
-  // Keep the physical spelling selected immediately after creation. Removing
-  // the alias spelling later could follow a retargeted TEMP/TMPDIR junction or
-  // symlink into an unrelated directory with the same generated basename.
-  return fs.realpathSync.native(directory);
+  return createCanonicalTempDirectory("ttsc-plugin-descriptor-");
 }
 
 /**

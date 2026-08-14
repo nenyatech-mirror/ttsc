@@ -9,6 +9,7 @@ import { readProjectConfig } from "../../compiler/internal/project/readProjectCo
 import { resolveBinary } from "../../compiler/internal/resolveBinary";
 import { resolveTsgo } from "../../compiler/internal/resolveTsgo";
 import { outputText, spawnNative } from "../../compiler/internal/spawnNative";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 import {
   type ProjectInputPathIdentityContext,
   createProjectInputPathIdentityContext,
@@ -174,7 +175,7 @@ export function materializeLSPPluginManifest(manifest: unknown): {
   dispose(): void;
   path: string;
 } {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-lsp-"));
+  const directory = createCanonicalTempDirectory("ttsc-lsp-");
   const location = path.join(directory, "plugins.json");
   try {
     fs.writeFileSync(location, JSON.stringify(manifest), {

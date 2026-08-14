@@ -16,6 +16,7 @@ import { resolveEmittedJavaScript } from "../../compiler/internal/resolveEmitted
 import { resolveTsgo } from "../../compiler/internal/resolveTsgo";
 import { runBuild } from "../../compiler/internal/runBuild";
 import { outputText, spawnNative } from "../../compiler/internal/spawnNative";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 import {
   type FilesystemPathIdentityContext,
   createFilesystemPathIdentityContext,
@@ -1207,7 +1208,7 @@ function emitOrphanAsCommonJs(filename: string): string | null {
       return hit;
     }
   }
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsx-orphan-"));
+  const outDir = createCanonicalTempDirectory("ttsx-orphan-");
   try {
     const res = spawnNative(
       tsgo,
@@ -1270,7 +1271,7 @@ function emitCommonJsForNameScan(filename: string): string | null {
     commonJsNameScanSources.set(real, null);
     return null;
   }
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsx-export-scan-"));
+  const outDir = createCanonicalTempDirectory("ttsx-export-scan-");
   try {
     const res = spawnNative(
       tsgo,

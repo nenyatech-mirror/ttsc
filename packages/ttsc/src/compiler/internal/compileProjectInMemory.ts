@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 import { hasProjectPluginEntries } from "../../plugin/internal/loadProjectPlugins";
 import type { ITtscCompilerContext } from "../../structures/ITtscCompilerContext";
 import type { ITtscCompilerDiagnostic } from "../../structures/ITtscCompilerDiagnostic";
@@ -111,7 +111,7 @@ function compileProjectWithPlugins(
   output: Record<string, string>;
   result: TtscBuildResult;
 } {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-api-output-"));
+  const tempRoot = createCanonicalTempDirectory("ttsc-api-output-");
   const tempOutDir = path.join(tempRoot, "out");
   try {
     const result = runBuild({

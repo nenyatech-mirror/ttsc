@@ -2046,8 +2046,9 @@ function evaluateTtsxConfigPlugins(
   configPath: string,
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): ConfigPluginEvaluation {
-  const tempDir = realpathIfPossible(
-    fs.mkdtempSync(path.join(loaderTempBase(configPath), "ttsc-lint-cfg-")),
+  const tempDir = createCanonicalTempDirectory(
+    "ttsc-lint-cfg-",
+    loaderTempBase(configPath),
   );
   try {
     linkNearestNodeModules(tempDir, path.dirname(configPath));
@@ -2237,6 +2238,29 @@ function evaluateTtsxConfigPlugins(
 // ────────────────────────────────────────────────────────────────────────────
 // Config cache (shared with the Go sidecar — packages/lint/linthost/config.go)
 // ────────────────────────────────────────────────────────────────────────────
+
+/** Create evaluator storage beneath a frozen physical parent. */
+function createCanonicalTempDirectory(prefix: string, parent: string): string {
+  const physicalParent = fs.realpathSync.native(parent);
+  if (!fs.lstatSync(physicalParent).isDirectory()) {
+    throw new Error(
+      `@ttsc/lint: temporary directory parent is not a directory: ${physicalParent}`,
+    );
+  }
+  const directory = fs.mkdtempSync(path.join(physicalParent, prefix));
+  if (!fs.lstatSync(directory).isDirectory()) {
+    throw new Error(
+      `@ttsc/lint: temporary directory postflight is not a directory: ${directory}`,
+    );
+  }
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== physicalParent) {
+    throw new Error(
+      `@ttsc/lint: temporary directory escaped its physical parent: ${physicalDirectory}`,
+    );
+  }
+  return physicalDirectory;
+}
 
 /**
  * Namespaces the on-disk config cache. Kept in lockstep with the Go sidecar's

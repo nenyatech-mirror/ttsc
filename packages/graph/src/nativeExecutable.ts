@@ -48,7 +48,7 @@ export interface CapturedProcessOutput {
  * property of the runtime rather than a budget chosen here.
  */
 export function captureProcessOutput(): CapturedProcessOutput {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ttscgraph-spawn-"));
+  const directory = createCanonicalTempDirectory("ttscgraph-spawn-");
   const stdoutPath = path.join(directory, "stdout");
   const stderrPath = path.join(directory, "stderr");
   const stdoutFd = fs.openSync(stdoutPath, "w+");
@@ -80,6 +80,29 @@ export function captureProcessOutput(): CapturedProcessOutput {
     stderrFd,
     stdoutFd,
   };
+}
+
+/** Create capture storage beneath the frozen physical system-temp parent. */
+function createCanonicalTempDirectory(prefix: string): string {
+  const physicalParent = fs.realpathSync.native(os.tmpdir());
+  if (!fs.lstatSync(physicalParent).isDirectory()) {
+    throw new Error(
+      `@ttsc/graph: temporary directory parent is not a directory: ${physicalParent}`,
+    );
+  }
+  const directory = fs.mkdtempSync(path.join(physicalParent, prefix));
+  if (!fs.lstatSync(directory).isDirectory()) {
+    throw new Error(
+      `@ttsc/graph: temporary directory postflight is not a directory: ${directory}`,
+    );
+  }
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== physicalParent) {
+    throw new Error(
+      `@ttsc/graph: temporary directory escaped its physical parent: ${physicalDirectory}`,
+    );
+  }
+  return physicalDirectory;
 }
 
 /** Close a descriptor, ignoring one that is already closed. */
