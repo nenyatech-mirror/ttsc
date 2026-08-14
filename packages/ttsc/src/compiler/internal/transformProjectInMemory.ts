@@ -791,7 +791,7 @@ function parseGraphEdges(value: unknown): Record<string, string[]> | undefined {
   }
   const output: Record<string, string[]> = {};
   for (const [key, entries] of Object.entries(value)) {
-    if (!Array.isArray(entries)) {
+    if (key.length === 0 || !Array.isArray(entries)) {
       continue;
     }
     output[key] = entries.filter(
