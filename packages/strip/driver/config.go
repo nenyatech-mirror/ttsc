@@ -332,15 +332,11 @@ function inputMetadataSignature(file) {
     try {
       const link = fs.lstatSync(current, { bigint: true });
       let target = link;
-      let targetState = "target";
       if (link.isSymbolicLink()) {
         try { target = fs.statSync(current, { bigint: true }); }
-        catch (error) {
-          if (!missingPathError(error)) return undefined;
-          targetState = "missing-target";
-        }
+        catch { return undefined; }
       }
-      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs, targetState].join(":");
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs].join(":");
     } catch (error) {
       if (!missingPathError(error)) return undefined;
       const parent = path.dirname(current);
@@ -642,15 +638,11 @@ function inputMetadataSignature(file: string): string | undefined {
     try {
       const link = fs.lstatSync(current, { bigint: true });
       let target = link;
-      let targetState = "target";
       if (link.isSymbolicLink()) {
         try { target = fs.statSync(current, { bigint: true }); }
-        catch (error) {
-          if (!missingPathError(error)) return undefined;
-          targetState = "missing-target";
-        }
+        catch { return undefined; }
       }
-      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs, targetState].join(":");
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs].join(":");
     } catch (error) {
       if (!missingPathError(error)) return undefined;
       const parent = path.dirname(current);

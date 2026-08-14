@@ -644,13 +644,13 @@ function pluginDescriptorInputMetadataSignature(
     try {
       const link = fs.lstatSync(current, { bigint: true });
       let target = link;
-      let targetState = "target";
       if (link.isSymbolicLink()) {
         try {
           target = fs.statSync(current, { bigint: true });
-        } catch (error) {
-          if (!isMissingPathError(error)) return undefined;
-          targetState = "missing-target";
+        } catch {
+          // A broken link's own metadata cannot expose its target appearing
+          // and disappearing during evaluation. Decline cache proof instead.
+          return undefined;
         }
       }
       return [
@@ -667,7 +667,6 @@ function pluginDescriptorInputMetadataSignature(
         target.size,
         target.mtimeNs,
         target.ctimeNs,
-        targetState,
       ].join(":");
     } catch (error) {
       if (!isMissingPathError(error)) return undefined;

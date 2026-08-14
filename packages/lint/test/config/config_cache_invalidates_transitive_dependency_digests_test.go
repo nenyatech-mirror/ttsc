@@ -28,7 +28,9 @@ import (
 //     to its original state on deletion.
 //  6. Evaluate a real executable config in a directory with those names twice
 //     and prove the JavaScript fingerprint is accepted by the Go cache reader.
-//  7. Accept the evaluator's empty conflict sentinel as an unstable soft miss,
+//  7. Change one imported module A-B-A inside a loader hook and prove its
+//     transient output cannot receive a reusable fingerprint for restored A.
+//  8. Accept the evaluator's empty conflict sentinel as an unstable soft miss,
 //     while rejecting every malformed dependency-envelope class.
 func TestConfigCacheInvalidatesTransitiveDependencyDigests(t *testing.T) {
   t.Setenv("TTSC_LINT_DISABLE_CONFIG_CACHE", "")
@@ -331,6 +333,59 @@ module.exports = { rules: {} };`)
       "JavaScript and Go directory fingerprints disagreed: evaluations=%s, want 1",
       loaderCalls,
     )
+  }
+
+  abaRoot := filepath.Join(root, "loader-aba")
+  if err := os.MkdirAll(abaRoot, 0o755); err != nil {
+    t.Fatal(err)
+  }
+  abaDependency := filepath.Join(abaRoot, "selection.cjs")
+  abaConfig := filepath.Join(abaRoot, "lint.config.cjs")
+  beforeModule := `module.exports = { rules: { "before/rule": "off" } };` + "\n"
+  duringModule := `module.exports = { rules: { "during/rule": "off" } };` + "\n"
+  write(abaDependency, beforeModule)
+  write(abaConfig, `const fs = require("node:fs");
+const { registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
+const dependency = `+strconv.Quote(abaDependency)+`;
+const before = `+strconv.Quote(beforeModule)+`;
+const during = `+strconv.Quote(duringModule)+`;
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url !== pathToFileURL(dependency).href) return nextLoad(url, context);
+    fs.writeFileSync(dependency, during, "utf8");
+    try { return nextLoad(url, context); }
+    finally { fs.writeFileSync(dependency, before, "utf8"); }
+  },
+});
+module.exports = () => require(dependency);`)
+  abaEvaluation, err := loadScriptConfigEvaluationWithin(abaConfig, abaRoot)
+  if err != nil {
+    t.Fatalf("A-B-A loader evaluation: %v", err)
+  }
+  rules, ok := abaEvaluation.value.(map[string]any)["rules"].(map[string]any)
+  if !ok || rules["during/rule"] != "off" {
+    t.Fatalf("A-B-A loader did not return transient module output: %#v", abaEvaluation.value)
+  }
+  if body, readErr := os.ReadFile(abaDependency); readErr != nil || string(body) != beforeModule {
+    t.Fatalf("A-B-A dependency was not restored: body=%q err=%v", body, readErr)
+  }
+  var abaFingerprint *configDependencyFingerprint
+  for index := range abaEvaluation.dependencyDigests {
+    dependency := &abaEvaluation.dependencyDigests[index]
+    if dependency.Kind == configDependencyFile && dependency.Path == abaDependency {
+      abaFingerprint = dependency
+      break
+    }
+  }
+  if abaFingerprint == nil {
+    t.Fatalf("A-B-A dependency was not reported: %#v", abaEvaluation.dependencyDigests)
+  }
+  if abaFingerprint.IdentityStable || abaFingerprint.Digest != "" {
+    t.Fatalf("A-B-A dependency retained reusable proof: %#v", *abaFingerprint)
+  }
+  if configDependencyDigestsAreCurrent([]configDependencyFingerprint{*abaFingerprint}) {
+    t.Fatal("A-B-A dependency fingerprint authorized stale cache reuse")
   }
 
   helperBody, err := os.ReadFile(helper)
