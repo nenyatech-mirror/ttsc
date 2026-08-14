@@ -59,13 +59,13 @@ export const test_transform_apis_resolve_relative_node_binary_from_project_root 
     const transformed = new TtscCompiler(context).transform();
     assert.equal(transformed.type, "success");
     const compilerOutput = transformed.typescript["src/main.ts"];
-    assert.equal(typeof compilerOutput, "string");
+    assert.ok(compilerOutput, "one-shot transform returned no src/main.ts");
     TestUtilityPlugins.assertSingleBanner(compilerOutput, runtime);
 
     const service = new TtscService(context);
     try {
       const residentOutput = await service.transformFile("src/main.ts");
-      assert.equal(typeof residentOutput, "string");
+      assert.ok(residentOutput, "resident transform returned no src/main.ts");
       TestUtilityPlugins.assertSingleBanner(residentOutput, runtime);
     } finally {
       service.dispose();
