@@ -511,7 +511,7 @@
       "coverage": {
         "arm": "plain",
         "measured": true,
-        "score": 0.49075808848248204,
+        "score": 0.5156672634960949,
         "wholeness": {
           "test": 1,
           "journey": 1,
@@ -519,51 +519,51 @@
           "dto": 0.711864406779661,
           "screen": 1,
           "hook": 0.05466970387243736,
-          "api": 0.5102914287465398,
-          "model": 0.605804848083251
+          "api": 0.5114125049797236,
+          "model": 0.6063653861998429
         },
         "obligations": [
           {
             "name": "model",
             "edge": "requirementToModel",
-            "rate": 0.9702970297029703,
-            "wholeness": 0.605804848083251,
-            "value": 0.5878106446748376
+            "rate": 0.9801980198019802,
+            "wholeness": 0.6063653861998429,
+            "value": 0.594358150829549
           },
           {
             "name": "operation",
             "edge": "requirementToOperation",
-            "rate": 0.9693877551020408,
-            "wholeness": 0.5102914287465398,
-            "value": 0.4946702625604212
+            "rate": 0.9897959183673469,
+            "wholeness": 0.5114125049797236,
+            "value": 0.5061940100309509
           },
           {
             "name": "dto",
             "edge": "requirementToDto",
-            "rate": 0.96875,
+            "rate": 0.9895833333333334,
             "wholeness": 0.711864406779661,
-            "value": 0.6896186440677966
+            "value": 0.704449152542373
           },
           {
             "name": "test",
             "edge": "requirementToTest",
-            "rate": 0.8928571428571429,
+            "rate": 0.9801587301587301,
             "wholeness": 1,
-            "value": 0.8928571428571429
+            "value": 0.9801587301587301
           },
           {
             "name": "screen",
             "edge": "requirementToScreen",
-            "rate": 0.19387755102040816,
+            "rate": 0.20408163265306123,
             "wholeness": 1,
-            "value": 0.19387755102040816
+            "value": 0.20408163265306123
           },
           {
             "name": "journey",
             "edge": "requirementToJourney",
-            "rate": 0.08571428571428572,
+            "rate": 0.10476190476190476,
             "wholeness": 1,
-            "value": 0.08571428571428572
+            "value": 0.10476190476190476
           }
         ],
         "edges": [
@@ -588,8 +588,8 @@
           {
             "name": "accessorToTest",
             "eligible": 446,
-            "reached": 432,
-            "rate": 0.968609865470852
+            "reached": 433,
+            "rate": 0.9708520179372198
           },
           {
             "name": "accessorToHook",
@@ -612,38 +612,38 @@
           {
             "name": "requirementToModel",
             "eligible": 101,
-            "reached": 98,
-            "rate": 0.9702970297029703
+            "reached": 99,
+            "rate": 0.9801980198019802
           },
           {
             "name": "requirementToOperation",
             "eligible": 98,
-            "reached": 95,
-            "rate": 0.9693877551020408
+            "reached": 97,
+            "rate": 0.9897959183673469
           },
           {
             "name": "requirementToDto",
             "eligible": 192,
-            "reached": 186,
-            "rate": 0.96875
+            "reached": 190,
+            "rate": 0.9895833333333334
           },
           {
             "name": "requirementToTest",
             "eligible": 252,
-            "reached": 225,
-            "rate": 0.8928571428571429
+            "reached": 247,
+            "rate": 0.9801587301587301
           },
           {
             "name": "requirementToScreen",
             "eligible": 98,
-            "reached": 19,
-            "rate": 0.19387755102040816
+            "reached": 20,
+            "rate": 0.20408163265306123
           },
           {
             "name": "requirementToJourney",
             "eligible": 105,
-            "reached": 9,
-            "rate": 0.08571428571428572
+            "reached": 11,
+            "rate": 0.10476190476190476
           }
         ]
       },
@@ -677,8 +677,8 @@
     "origin": "samchon/ttsc",
     "symbol": "COVERAGE_EDGES in benchmarks/evidence/src/EvidenceBenchmarkCoverage.ts",
     "method": "Thirteen reference-graph edges read from each completed Plain workspace of round two, composed so serial hops multiply and branches average. See ttsc#1088 for the derivation.",
-    "precision": "Each requirement-rooted edge was counted twice, broad and narrow, and the lower rate kept; no requirement identifier appears in a Plain workspace, so its eligibility is a judgement and the two passes differed by up to a quarter on some denominators. Read a score as a whole percent. The per-subject inputs, their eligibility rules, their unreached members, and the judgements that could move a figure are retained beside this file as coverage-input-<subject>.round-two.json.",
+    "precision": "Each requirement-rooted edge was counted twice, broad and narrow, and the lower rate kept; no requirement identifier appears in a Plain workspace, so its eligibility is a judgement. Read a score as a whole percent. The per-subject inputs, their eligibility rules, their unreached members, and the judgements that could move a figure are retained beside this file as coverage-input-<subject>.round-two.json.",
     "evidenceArm": "Complete by construction and never counted.",
-    "erp": "Counted twice on two frozen snapshots of the erp workspace taken while its cell was still running, the second after a further 1418M tokens and 20h 46m of work. The eligible sets are held at the first count, whose requirement corpus and screen plan are byte-identical in both snapshots, and only reach was re-derived. Its six requirement-rooted edges are counted over the 253 families the requirements document declares, not its 1487 anchors. The figure moves again when the cell completes."
+    "judgement": "The erp cell was counted three times, twice while it ran and once on the finished workspace, and its figure read 50.0, 49.1, and 51.6 percent. Four of its six requirement-rooted edges moved between the last two counts while reading byte-identical evidence, so the spread between judges exceeds what the cell changed in that interval. Its coverage-input file names every such disagreement. The other three subjects were counted once each, so their figures carry the same judgement risk without a second reading to expose it."
   }
 }
