@@ -75,6 +75,132 @@ style: |
   }
   .note { font-size: 24px; color: #5b6674; }
 
+  /* Cumulative narrative references */
+  .narrative-graph { position: relative; height: 410px; margin-top: -12px; }
+  .narrative-group {
+    position: absolute;
+    left: 0;
+    top: 10px;
+    width: 32%;
+    height: 270px;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    box-sizing: border-box;
+    padding: 12px;
+    border: 3px solid #f08a24;
+    border-radius: 14px;
+  }
+  .narrative-node {
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: 84px;
+    background: #f3f6fb;
+    border: 3px solid #4a76b8;
+    border-radius: 10px;
+    color: #14284b;
+    font-size: 32px;
+    font-weight: 700;
+  }
+  .narrative-group .narrative-node { flex: none; width: 100%; border-color: #f08a24; }
+  .narrative-node.scenarios,
+  .narrative-node.storylines,
+  .narrative-node.manuscripts { position: absolute; width: 25%; }
+  .narrative-node.scenarios { left: 41%; top: 25px; }
+  .narrative-node.storylines { left: 41%; top: 181px; }
+  .narrative-node.manuscripts { left: 72%; top: 316px; }
+  .narrative-edge {
+    position: absolute;
+    z-index: 1;
+    box-sizing: border-box;
+    color: #4a76b8;
+  }
+  .narrative-edge.to-foundations {
+    left: 32%;
+    width: 9%;
+    border-top: 3px solid currentColor;
+  }
+  .narrative-edge.to-foundations::after,
+  .narrative-edge.manuscripts-scenarios::after,
+  .narrative-edge.manuscripts-storylines::after {
+    content: "";
+    position: absolute;
+    top: -8px;
+    left: -1px;
+    border-top: 7px solid transparent;
+    border-right: 12px solid currentColor;
+    border-bottom: 7px solid transparent;
+  }
+  .narrative-edge.scenarios-foundations { top: 67px; }
+  .narrative-edge.storylines-foundations { top: 223px; }
+  .narrative-edge.storylines-scenarios {
+    left: 53.5%;
+    top: 109px;
+    height: 72px;
+    border-left: 3px solid currentColor;
+  }
+  .narrative-edge.storylines-scenarios::after,
+  .narrative-edge.manuscripts-foundations::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: -8px;
+    border-right: 7px solid transparent;
+    border-bottom: 12px solid currentColor;
+    border-left: 7px solid transparent;
+  }
+  .narrative-edge.settings-principles {
+    position: relative;
+    left: auto;
+    top: auto;
+    flex: none;
+    align-self: center;
+    width: 0;
+    height: 72px;
+    color: #f08a24;
+    border-left: 3px solid currentColor;
+  }
+  .narrative-edge.settings-principles::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: -8px;
+    border-right: 7px solid transparent;
+    border-bottom: 12px solid currentColor;
+    border-left: 7px solid transparent;
+  }
+  .narrative-edge.manuscripts-scenarios {
+    left: 66%;
+    top: 67px;
+    width: 18.5%;
+    border-top: 3px solid currentColor;
+  }
+  .narrative-edge.manuscripts-storylines {
+    left: 66%;
+    top: 223px;
+    width: 18.5%;
+    border-top: 3px solid currentColor;
+  }
+  .narrative-edge.manuscripts-up {
+    left: 84.5%;
+    top: 67px;
+    height: 249px;
+    border-left: 3px solid currentColor;
+  }
+  .narrative-edge.manuscripts-foundations {
+    left: 16%;
+    top: 280px;
+    width: 56%;
+    height: 78px;
+    border-bottom: 3px solid currentColor;
+    border-left: 3px solid currentColor;
+  }
+
   /* Cards */
   .cards { display: flex; gap: 22px; margin-top: 20px; }
   .card {
@@ -102,7 +228,7 @@ style: |
   .track i.w855 { width: 85.5%; }
   .track i.w803 { width: 80.3%; }
   .track i.w631 { width: 63.1%; }
-  .track i.w500 { width: 50%; }
+  .track i.w516 { width: 51.6%; }
   .track i.w100 { width: 100%; }
 
   /* Development and review split bars */
@@ -118,7 +244,7 @@ style: |
   .d97 { width: 9.7%; }
   .d54 { width: 5.4%; }
   .d47 { width: 4.7%; }
-  .d205 { width: 20.5%; }
+  .d105 { width: 10.5%; }
   .d720 { width: 72%; }
   .d808 { width: 80.8%; }
   .d586 { width: 58.6%; }
@@ -133,14 +259,14 @@ style: |
   .row .bars i.p { background: #4a76b8; }
   .row .bars i.e { background: #f08a24; }
   .row .val { width: 230px; text-align: right; font-size: 25px; color: #5b6674; }
-  .b310 { width: 31%; }
-  .b33 { width: 3.3%; }
-  .b422 { width: 42.2%; }
-  .b88 { width: 8.8%; }
-  .b542 { width: 54.2%; }
-  .b97 { width: 9.7%; }
+  .b159 { width: 15.9%; }
+  .b17 { width: 1.7%; }
+  .b216 { width: 21.6%; }
+  .b45 { width: 4.5%; }
+  .b278 { width: 27.8%; }
+  .b50 { width: 5%; }
   .b1000 { width: 100%; }
-  .b147 { width: 14.7%; }
+  .b75 { width: 7.5%; }
   .kp { color: #4a76b8; font-weight: 700; }
   .ke { color: #b35c00; font-weight: 700; }
 ---
@@ -180,7 +306,7 @@ One meeting note. One idea note.
 That alone produces a full-stack, full-spec product.
 </span>
 
-<span class="note">The ultimate form of Goal Mode: provide only the goal, and the graph catches the rest.<br/>Requirement coverage from 50% to 100%, 6.8× fewer tokens, and 4.4× less time.</span>
+<span class="note">The ultimate form of Goal Mode: provide only the goal, and the graph catches the rest.<br/>Requirement coverage from 51.6% to 100%, 13.3× fewer tokens, and 7.5× less time.</span>
 
 ---
 
@@ -369,6 +495,77 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 
 <!-- _class: divider -->
 
+# What if the product is a story?
+
+<span class="note">Settings become build constraints</span>
+
+---
+
+# A fluent scene can still be false
+
+- **Memory**: uses facts the character never learned
+- **Invention**: breaks history, geography, or motive
+- **Revision**: keeps scenes invalidated by an earlier edit
+
+> Long-form failure is global, not local.
+
+---
+
+# Every layer cites all prior sources
+
+<div class="narrative-graph">
+<div class="narrative-group">
+<div class="narrative-node principles">Principles</div>
+<div class="narrative-edge settings-principles"></div>
+<div class="narrative-node settings">Settings</div>
+</div>
+<div class="narrative-node scenarios">Scenarios</div>
+<div class="narrative-node storylines">Storylines</div>
+<div class="narrative-node manuscripts">Manuscripts</div>
+<div class="narrative-edge to-foundations scenarios-foundations"></div>
+<div class="narrative-edge to-foundations storylines-foundations"></div>
+<div class="narrative-edge storylines-scenarios"></div>
+<div class="narrative-edge manuscripts-foundations"></div>
+<div class="narrative-edge manuscripts-up"></div>
+<div class="narrative-edge manuscripts-storylines"></div>
+<div class="narrative-edge manuscripts-scenarios"></div>
+</div>
+
+---
+
+# Each edge blocks a different drift
+
+- Every narrative layer → principles: literary purpose
+- Every narrative unit → settings: facts, rules, knowledge
+- Scene plan and manuscript → storyline: causes and consequences
+- Manuscript → scene plan: exact execution
+- Target changes → affected reviews expire
+
+---
+
+# Why it works
+
+- Limited context → exact obligations for this scene
+- Plausible invention → explicit lineage and review
+- Revision drift → stale fingerprints
+- Forgotten promise → 100% reverse coverage
+
+**Creative freedom inside hard continuity.**
+
+---
+
+# One graph, any narrative
+
+- **Settings**: history, world rules, character
+- **Causality**: clues, motives, consequences
+- **Continuity**: knowledge, arcs, revisions
+- Historical fiction, fantasy, science fiction, mystery, drama
+- **Napoleon**: one example with 25 principles, 350 settings commitments, and 742 scenes
+
+---
+
+<!-- _class: divider -->
+
 # So how much does it change?
 
 <span class="note">Same requirements · Same engine · Same model, with only the plugin changed</span>
@@ -382,7 +579,7 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 | todo | 85.5% <span class="track"><i class="w855"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
 | reddit | 80.3% <span class="track"><i class="w803"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
 | shopping | 63.1% <span class="track"><i class="w631"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
-| erp | 50.0% <span class="track"><i class="w500"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
+| erp | 51.6% <span class="track"><i class="w516"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
 
 The larger the project, the more it misses.<br/>**It does not even know that it missed something.**
 
@@ -391,10 +588,10 @@ The larger the project, the more it misses.<br/>**It does not even know that it 
 # Yet it becomes cheaper
 
 <div class="rows">
-<div class="row"><span class="lbl">todo</span><span class="bars"><i class="p b310"></i><i class="e b33"></i></span><span class="val">866M → 92M</span></div>
-<div class="row"><span class="lbl">reddit</span><span class="bars"><i class="p b422"></i><i class="e b88"></i></span><span class="val">1,179M → 245M</span></div>
-<div class="row"><span class="lbl">shopping</span><span class="bars"><i class="p b542"></i><i class="e b97"></i></span><span class="val">1,516M → 271M</span></div>
-<div class="row"><span class="lbl">erp</span><span class="bars"><i class="p b1000"></i><i class="e b147"></i></span><span class="val">2,795M → 411M</span></div>
+<div class="row"><span class="lbl">todo</span><span class="bars"><i class="p b159"></i><i class="e b17"></i></span><span class="val">866M → 92M</span></div>
+<div class="row"><span class="lbl">reddit</span><span class="bars"><i class="p b216"></i><i class="e b45"></i></span><span class="val">1,179M → 245M</span></div>
+<div class="row"><span class="lbl">shopping</span><span class="bars"><i class="p b278"></i><i class="e b50"></i></span><span class="val">1,516M → 271M</span></div>
+<div class="row"><span class="lbl">erp</span><span class="bars"><i class="p b1000"></i><i class="e b75"></i></span><span class="val">5,449M → 411M</span></div>
 </div>
 
 Token consumption for <span class="kp">Plain</span> and <span class="ke">Evidence</span>.<br/>The gap widens as the project grows.
@@ -406,9 +603,9 @@ Token consumption for <span class="kp">Plain</span> and <span class="ke">Evidenc
 # Cost and time decreased as well: erp
 
 <div class="cards">
-<div class="card"><b>6.8×</b>fewer tokens<br/><span class="note">2,795M → 411M</span></div>
-<div class="card"><b>7.0×</b>lower cost<br/><span class="note">$34.65 → $4.96</span></div>
-<div class="card warm"><b>4.4×</b>less time<br/><span class="note">60h → 14h</span></div>
+<div class="card"><b>13.3×</b>fewer tokens<br/><span class="note">5,449M → 411M</span></div>
+<div class="card"><b>13.9×</b>lower cost<br/><span class="note">$68.72 → $4.96</span></div>
+<div class="card warm"><b>7.5×</b>less time<br/><span class="note">102h → 14h</span></div>
 </div>
 
 <br/>
@@ -455,7 +652,7 @@ Review Loop until Dry
 | todo | <span class="split"><i class="d97"></i><i class="rev"></i></span> Review 90% | <span class="split on"><i class="d720"></i><i class="rev"></i></span> Review 28% |
 | reddit | <span class="split"><i class="d54"></i><i class="rev"></i></span> Review 95% | <span class="split on"><i class="d808"></i><i class="rev"></i></span> Review 19% |
 | shopping | <span class="split"><i class="d47"></i><i class="rev"></i></span> Review 95% | <span class="split on"><i class="d586"></i><i class="rev"></i></span> Review 41% |
-| erp | <span class="split"><i class="d205"></i><i class="rev"></i></span> Review 80% | <span class="split on"><i class="d846"></i><i class="rev"></i></span> Review 15% |
+| erp | <span class="split"><i class="d105"></i><i class="rev"></i></span> Review 90% | <span class="split on"><i class="d846"></i><i class="rev"></i></span> Review 15% |
 
 Plain **starts quickly, but its review never ends.**<br/>Evidence is the opposite.
 
@@ -481,6 +678,7 @@ Plain **starts quickly, but its review never ends.**<br/>Evidence is the opposit
 
 - Humans review **only one document layer**
 - The **compiler protects everything below it**
+- A specification can be **software requirements, historical canon, or the laws of a fictional world**
 - 100% is not the goal, but **what remains after every error is closed**
 
 ---
@@ -491,5 +689,6 @@ Plain **starts quickly, but its review never ends.**<br/>Evidence is the opposit
 # Q & A
 
 - [https://github.com/samchon/ttsc](https://github.com/samchon/ttsc)
+- [https://github.com/wrtnlabs/novels](https://github.com/wrtnlabs/novels)
 - [https://ttsc.dev/docs/evidence](https://ttsc.dev/docs/evidence)
 - [https://ttsc.dev/docs/benchmark/evidence](https://ttsc.dev/docs/benchmark/evidence)
