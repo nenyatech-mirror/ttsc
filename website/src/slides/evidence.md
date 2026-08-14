@@ -201,6 +201,148 @@ style: |
     border-left: 3px solid currentColor;
   }
 
+  /* Application evidence circuits */
+  section.architecture-slide h1 { margin-bottom: 0; }
+  .architecture-caption {
+    margin: 12px 0 0;
+    color: #5b6674;
+    font-size: 24px;
+    line-height: 1.3;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .backend-graph + .architecture-caption,
+  .frontend-graph + .architecture-caption { font-size: 32px; }
+  .architecture-node {
+    position: absolute;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: 72px;
+    background: #f3f6fb;
+    border: 3px solid #4a76b8;
+    border-radius: 10px;
+    color: #14284b;
+    font-size: 27px;
+    font-weight: 700;
+  }
+  .architecture-edge {
+    position: absolute;
+    z-index: 1;
+    box-sizing: border-box;
+    color: #4a76b8;
+  }
+  .architecture-edge.horizontal { border-top: 3px solid currentColor; }
+  .architecture-edge.vertical { border-left: 3px solid currentColor; }
+  .architecture-edge.arrow-left::after {
+    content: "";
+    position: absolute;
+    top: -8px;
+    left: -1px;
+    border-top: 7px solid transparent;
+    border-right: 12px solid currentColor;
+    border-bottom: 7px solid transparent;
+  }
+  .architecture-edge.arrow-up::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: -8px;
+    border-right: 7px solid transparent;
+    border-bottom: 12px solid currentColor;
+    border-left: 7px solid transparent;
+  }
+  .architecture-edge.arrow-down::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: -8px;
+    border-top: 12px solid currentColor;
+    border-right: 7px solid transparent;
+    border-left: 7px solid transparent;
+  }
+
+  .document-graph { position: relative; height: 305px; margin-top: 60px; }
+  .backend-graph,
+  .frontend-graph { position: relative; height: 365px; margin-top: 45px; }
+  .architecture-foundations {
+    position: absolute;
+    left: 0;
+    top: 20px;
+    width: 31%;
+    height: 264px;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-sizing: border-box;
+    padding: 12px;
+    border: 3px solid #f08a24;
+    border-radius: 14px;
+  }
+  .architecture-foundations .architecture-node {
+    position: relative;
+    flex: none;
+    width: 100%;
+    background: #fff8e8;
+    border-color: #f08a24;
+  }
+  .architecture-foundations .specifications-requirements {
+    position: relative;
+    left: auto;
+    top: auto;
+    flex: none;
+    align-self: center;
+    width: 0;
+    height: 90px;
+    color: #f08a24;
+    border-left: 3px solid currentColor;
+  }
+  .document-foundations { left: 30%; }
+  .document-node.meeting { left: 0; top: 35px; width: 22%; }
+  .document-node.implementation { left: 70%; top: 35px; width: 22%; }
+  .document-node.test { left: 70%; top: 197px; width: 22%; }
+  .document-edge.requirements-meeting { left: 22%; top: 71px; width: 9.3%; }
+  .document-edge.implementation-foundations { left: 61%; top: 71px; width: 9%; }
+  .document-edge.test-implementation { left: 81%; top: 107px; height: 90px; }
+  .document-edge.test-foundations { left: 61%; top: 233px; width: 9%; }
+  .backend-graph .architecture-foundations,
+  .frontend-graph .architecture-foundations { top: 55px; }
+  .backend-node.database { left: 40%; top: 70px; width: 22%; }
+  .backend-node.operation { left: 40%; top: 232px; width: 22%; }
+  .backend-node.schema { left: 70%; top: 70px; width: 22%; }
+  .backend-node.test { left: 70%; top: 232px; width: 22%; }
+  .backend-edge.database-foundations { left: 31%; top: 106px; width: 9%; }
+  .backend-edge.operation-foundations { left: 31%; top: 268px; width: 9%; }
+  .backend-edge.operation-database { left: 51%; top: 142px; height: 90px; }
+  .backend-edge.schema-database { left: 62%; top: 106px; width: 8%; }
+  .backend-edge.test-operation { left: 62%; top: 268px; width: 8%; }
+  .architecture-edge.outer-top-source { left: 81%; top: 15px; height: 55px; }
+  .architecture-edge.outer-top-horizontal { left: 15.5%; top: 15px; width: 65.5%; }
+  .architecture-edge.outer-top-target { left: 15.5%; top: 15px; height: 40px; }
+  .architecture-edge.outer-bottom-source { left: 81%; top: 304px; height: 55px; }
+  .architecture-edge.outer-bottom-horizontal { left: 15.5%; top: 359px; width: 65.5%; }
+  .architecture-edge.outer-bottom-target { left: 15.5%; top: 319px; height: 40px; }
+
+  .frontend-node.backend {
+    left: 40%;
+    top: 70px;
+    width: 22%;
+    background: #14284b;
+    border: 4px solid #14284b;
+    box-shadow: inset 0 0 0 4px #8ab4ff;
+    color: #ffffff;
+  }
+  .frontend-node.hooks { left: 40%; top: 232px; width: 22%; }
+  .frontend-node.journeys { left: 70%; top: 70px; width: 22%; }
+  .frontend-node.screens { left: 70%; top: 232px; width: 22%; }
+  .frontend-edge.backend-foundations { left: 31%; top: 106px; width: 9%; }
+  .frontend-edge.hooks-backend { left: 51%; top: 142px; height: 90px; }
+  .frontend-edge.screens-hooks { left: 62%; top: 268px; width: 8%; }
+  .frontend-edge.journeys-screens { left: 81%; top: 142px; height: 90px; }
+
   /* Cards */
   .cards { display: flex; gap: 22px; margin-top: 20px; }
   .card {
@@ -318,20 +460,26 @@ That alone produces a full-stack, full-spec product.
 
 ---
 
+<!-- _class: architecture-slide -->
+
 # First, divide the documents into layers
 
-```
-Meeting notes · Idea notes
-      ↓
-requirements      What is needed
-      ↓
-specifications    What to build
-      ↓
-Implementation · Tests
-```
+<div class="document-graph">
+<div class="architecture-node document-node meeting">Meeting notes</div>
+<div class="architecture-foundations document-foundations">
+<div class="architecture-node">Requirements</div>
+<div class="architecture-edge vertical arrow-up specifications-requirements"></div>
+<div class="architecture-node">Specifications</div>
+</div>
+<div class="architecture-node document-node implementation">Implementation</div>
+<div class="architecture-node document-node test">Test</div>
+<div class="architecture-edge horizontal arrow-left document-edge requirements-meeting"></div>
+<div class="architecture-edge horizontal arrow-left document-edge implementation-foundations"></div>
+<div class="architecture-edge vertical arrow-up document-edge test-implementation"></div>
+<div class="architecture-edge horizontal arrow-left document-edge test-foundations"></div>
+</div>
 
-- A lower layer can exist **only on the evidence of the layer above it**
-- Humans need to touch **only one layer**
+<p class="architecture-caption">One evidence circuit connects meeting notes, documents, implementation, and tests.</p>
 
 ---
 
@@ -339,7 +487,7 @@ Implementation · Tests
 
 - Humans **review `docs/requirements` directly**
 - Specifications, implementation, and tests are **fully delegated**
-- Film production automation solution: **about 450K LoC**, working as-is on its first run
+- ERP: **100+ tables, 150K+ LoC**, working as-is on its first run
 
 > The four benchmark subjects use this method as well.
 
@@ -370,21 +518,64 @@ Implementation · Tests
 
 ---
 
-# The backend and frontend work like this
+<!-- _class: architecture-slide -->
 
-```
-requirements ─▶ specifications
-     │                │
-     └───────┬────────┘
-             ├─▶ DB schema
-             ├─▶ API operations ─▶ Generated SDK ─▶ Tests
-             └─▶ Hooks ─▶ Screens ─▶ Journeys
-```
+# The backend works like this
 
-- Specifications stand on requirements as evidence,<br/>and **both layers together** impose obligations downward
-- **Both tests and hooks** discharge the generated SDK's obligations
+<div class="backend-graph">
+<div class="architecture-foundations">
+<div class="architecture-node">Requirements</div>
+<div class="architecture-edge vertical arrow-up specifications-requirements"></div>
+<div class="architecture-node">Specifications</div>
+</div>
+<div class="architecture-node backend-node database">DB schema</div>
+<div class="architecture-node backend-node operation">API operation</div>
+<div class="architecture-node backend-node schema">API schema</div>
+<div class="architecture-node backend-node test">Test</div>
+<div class="architecture-edge horizontal arrow-left backend-edge database-foundations"></div>
+<div class="architecture-edge horizontal arrow-left backend-edge operation-foundations"></div>
+<div class="architecture-edge vertical arrow-up backend-edge operation-database"></div>
+<div class="architecture-edge horizontal arrow-left backend-edge schema-database"></div>
+<div class="architecture-edge horizontal arrow-left backend-edge test-operation"></div>
+<div class="architecture-edge vertical outer-top-source"></div>
+<div class="architecture-edge horizontal outer-top-horizontal"></div>
+<div class="architecture-edge vertical arrow-down outer-top-target"></div>
+<div class="architecture-edge vertical outer-bottom-source"></div>
+<div class="architecture-edge horizontal outer-bottom-horizontal"></div>
+<div class="architecture-edge vertical arrow-up outer-bottom-target"></div>
+</div>
 
-**"The backend is done, but there is no screen" becomes a compile error.**
+<p class="architecture-caption">Backend artifacts trace back to Requirements and Specifications.</p>
+
+---
+
+<!-- _class: architecture-slide -->
+
+# The frontend works like this
+
+<div class="frontend-graph">
+<div class="architecture-foundations">
+<div class="architecture-node">Requirements</div>
+<div class="architecture-edge vertical arrow-up specifications-requirements"></div>
+<div class="architecture-node">Specifications</div>
+</div>
+<div class="architecture-node frontend-node backend">Backend</div>
+<div class="architecture-node frontend-node hooks">Hooks</div>
+<div class="architecture-node frontend-node screens">Screens</div>
+<div class="architecture-node frontend-node journeys">Journeys</div>
+<div class="architecture-edge horizontal arrow-left frontend-edge backend-foundations"></div>
+<div class="architecture-edge vertical arrow-up frontend-edge hooks-backend"></div>
+<div class="architecture-edge horizontal arrow-left frontend-edge screens-hooks"></div>
+<div class="architecture-edge vertical arrow-down frontend-edge journeys-screens"></div>
+<div class="architecture-edge vertical outer-top-source"></div>
+<div class="architecture-edge horizontal outer-top-horizontal"></div>
+<div class="architecture-edge vertical arrow-down outer-top-target"></div>
+<div class="architecture-edge vertical outer-bottom-source"></div>
+<div class="architecture-edge horizontal outer-bottom-horizontal"></div>
+<div class="architecture-edge vertical arrow-up outer-bottom-target"></div>
+</div>
+
+<p class="architecture-caption">Frontend delivery traces back to the documents and Backend.</p>
 
 ---
 
