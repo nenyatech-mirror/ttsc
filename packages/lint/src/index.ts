@@ -2827,14 +2827,6 @@ function loaderTempBase(configPath: string): string {
   return path.dirname(configPath);
 }
 
-function realpathIfPossible(location: string): string {
-  try {
-    return fs.realpathSync(location);
-  } catch {
-    return location;
-  }
-}
-
 function nodeConfigLoaderEnv(configPath: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   const parts: string[] = [];
