@@ -25,6 +25,7 @@ interface ICacheProjectOptions {
   externalSnapshotAbaRace?: boolean;
   fileCount?: number;
   graphFanout?: number;
+  independentGraphLeaf?: string;
   partitionGraph?: boolean;
   snapshotAbaRace?: boolean;
   unrelatedDirectoryCount?: number;
@@ -932,6 +933,53 @@ async function assertCompileSnapshotAbaRaceCannotAuthorizeStaleOutput(): Promise
   assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
 }
 
+/** Independent graph leaves must retain the same compiler-proof invariant. */
+async function assertIndependentGraphLeafCompileSnapshotAbaRaceCannotAuthorizeStaleOutput(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const project = createCacheProject({
+    fileCount: 2,
+    graphFanout: 1,
+    independentGraphLeaf: "src/mod1.ts",
+    snapshotAbaRace: true,
+  });
+  const cache = createTtscTransformCache();
+  const options = resolveOptions();
+  const main = path.join(project.root, "src", "mod0.ts");
+  const lazy = path.join(project.root, "src", "mod1.ts");
+
+  assert.ok(
+    await transformTtsc(
+      main,
+      fs.readFileSync(main, "utf8"),
+      options,
+      undefined,
+      cache,
+    ),
+  );
+  const firstGeneration = [...cache.values()][0];
+  assert.equal(
+    fs.readFileSync(lazy, "utf8"),
+    'export const value1: string = "PROBE";\n',
+  );
+
+  const result = await transformTtsc(
+    lazy,
+    fs.readFileSync(lazy, "utf8"),
+    options,
+    undefined,
+    cache,
+  );
+  assert.ok(result);
+  assert.doesNotMatch(result.code, /DURING/);
+  assert.notEqual(
+    [...cache.values()][0],
+    firstGeneration,
+    "an independent leaf's compiler proof must reject ABA output",
+  );
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
+}
+
 /** External graph input A-B-A churn obeys the same generation invariant. */
 async function assertExternalCompileSnapshotAbaRaceCannotAuthorizeStaleOutput(): Promise<void> {
   const {
@@ -1259,6 +1307,7 @@ function createCacheProject(options: ICacheProjectOptions): {
               runLog,
               emitExternal: options.emitExternalKey === true,
               graphFanout: options.graphFanout ?? 0,
+              independentGraphLeaf: options.independentGraphLeaf,
               partitionGraph: options.partitionGraph === true,
               ...(options.snapshotAbaRace === true
                 ? {
@@ -1469,7 +1518,10 @@ function writeGoPlugin(root: string): void {
       "    edges := map[string][]string{}",
       "    for i, name := range names {",
       "      targets := []string{}",
-      '      if boolValue(cfg, "partitionGraph") {',
+      '      independentGraphLeaf := stringValue(cfg, "independentGraphLeaf")',
+      '      if independentGraphLeaf != "" {',
+      '        if "src/"+name != independentGraphLeaf { targets = append(targets, externals...) }',
+      '      } else if boolValue(cfg, "partitionGraph") {',
       "        targets = append(targets, externals[i%len(externals)])",
       "      } else {",
       "        for _, other := range names {",
@@ -1548,6 +1600,7 @@ export {
   assertCacheTransformsMultiFileProjectOnce,
   assertCompileSnapshotRaceCannotAuthorizeStaleOutput,
   assertCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
+  assertIndependentGraphLeafCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
   assertExternalCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
   assertDescriptorInputRaceCannotAuthorizeStaleGeneration,
   assertConcurrentTransformsCompileOnce,

@@ -8,8 +8,9 @@ import {
 
 /**
  * Verifies TtscCompiler.transform tolerates malformed `graph` and `volatile`
- * envelope fields: invalid members are dropped, well-formed members survive,
- * and the transform itself never fails.
+ * envelope fields: invalid members are dropped, well-formed adjacency keys
+ * survive even when their invalid targets are filtered, and the transform
+ * itself never fails.
  *
  * The graph and volatile fields are advisory invalidation metadata with the
  * same tolerance contract as `dependencies` (samchon/ttsc#716): a buggy plugin
@@ -36,7 +37,10 @@ export const test_ttsccompiler_transform_drops_malformed_graph_members_and_volat
     assert.equal(result.type, "success");
     assert.deepEqual(result.graph, {
       configs: ["tsconfig.json"],
-      edges: { "src/main.ts": ["src/good.d.ts"] },
+      edges: {
+        "src/main.ts": ["src/good.d.ts"],
+        "src/worse.ts": [],
+      },
       globals: [],
       inputHashes: {
         "src/good.d.ts": "a".repeat(64),

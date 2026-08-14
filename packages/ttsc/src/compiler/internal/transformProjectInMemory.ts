@@ -778,9 +778,34 @@ function parseDependencyLists(
 }
 
 /**
+ * Normalize graph adjacency while retaining every well-formed node key.
+ *
+ * A leaf is intentionally encoded as an empty target array. Its key still
+ * declares graph membership and lets persistent hosts bind the compiler-time
+ * input proof for that source. Only a non-array entry is malformed; invalid
+ * array members are filtered without erasing the node itself.
+ */
+function parseGraphEdges(value: unknown): Record<string, string[]> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string[]> = {};
+  for (const [key, entries] of Object.entries(value)) {
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    output[key] = entries.filter(
+      (entry): entry is string => typeof entry === "string",
+    );
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
+}
+
+/**
  * Normalize the optional `graph` envelope section with the same tolerance as
  * `dependencies`: non-object sections are dropped, edge entries that are not
- * string arrays are dropped, and non-string list members are filtered. A
+ * arrays are dropped, and non-string list members are filtered. Empty arrays
+ * remain as graph nodes because leaf membership binds compiler input proof. A
  * section carrying nothing usable collapses to `undefined`.
  *
  * `candidates` is the one optional member, so an empty one is left off the
@@ -804,7 +829,7 @@ function parseReferenceGraph(
     inputRealpaths?: unknown;
   };
   const candidates = parseDependencyLists(section.candidates) ?? {};
-  const edges = parseDependencyLists(section.edges) ?? {};
+  const edges = parseGraphEdges(section.edges) ?? {};
   const globals = parseFileList(section.globals) ?? [];
   const configs = parseFileList(section.configs) ?? [];
   const inputHashes = parseGraphInputHashes(section.inputHashes);
