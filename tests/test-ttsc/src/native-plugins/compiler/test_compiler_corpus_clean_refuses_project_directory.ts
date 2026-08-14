@@ -14,6 +14,10 @@ import {
  * The witness project is test-owned so even the pre-fix behavior cannot reach
  * user or runner data. Both commands must fail before removing the source,
  * plugin-cache, or legacy-cache sentinels.
+ *
+ * 1. Reject an explicit cache root that equals the project.
+ * 2. Reject an environment-selected Go cache with the same unsafe identity.
+ * 3. Assert neither attempt removed any project or cache sentinel.
  */
 export const test_compiler_corpus_clean_refuses_project_directory =
   (): void => {

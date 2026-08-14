@@ -13,11 +13,11 @@ import { resolveSafeCacheCleanupTargets } from "../../../../../packages/ttsc/lib
  * itself rather than its destination, and physical pinning must preserve that
  * established behavior instead of leaving a dangling link behind.
  *
- * 1. Resolve a cache below an alias, retarget the alias, and remove the pinned
+ * 1. Retarget an alias after resolving a nested directory and preserve the new
  *    target.
- * 2. Assert the original cache is removed while the new target survives.
- * 3. Resolve and remove a terminal cache link, then assert its destination
- *    survives.
+ * 2. Retarget the same alias while resolving a terminal cache link.
+ * 3. Assert both deletion paths stay under the original physical parent and
+ *    terminal-link destinations survive.
  */
 export const test_resolvesafecachecleanuptargets_pins_alias_ancestors_and_preserves_terminal_links =
   (): void => {
@@ -59,26 +59,66 @@ export const test_resolvesafecachecleanuptargets_pins_alias_ancestors_and_preser
       "victim",
     );
 
-    const terminalTarget = path.join(root, "terminal-target");
-    const terminalLink = path.join(root, "terminal-link");
-    fs.mkdirSync(terminalTarget);
-    fs.writeFileSync(path.join(terminalTarget, "keep.txt"), "target", "utf8");
+    fs.rmSync(alias, { force: true, recursive: true });
     fs.symlinkSync(
-      terminalTarget,
-      terminalLink,
+      original,
+      alias,
       process.platform === "win32" ? "junction" : "dir",
     );
-    const [terminal] = resolveSafeCacheCleanupTargets(project, [terminalLink]);
+    const originalTerminalTarget = path.join(root, "original-terminal-target");
+    const victimTerminalTarget = path.join(root, "victim-terminal-target");
+    const originalTerminalLink = path.join(original, "terminal-link");
+    const victimTerminalLink = path.join(victim, "terminal-link");
+    for (const directory of [originalTerminalTarget, victimTerminalTarget]) {
+      fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "keep.txt"), "target", "utf8");
+    }
+    fs.symlinkSync(
+      originalTerminalTarget,
+      originalTerminalLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    fs.symlinkSync(
+      victimTerminalTarget,
+      victimTerminalLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    let retargeted = false;
+    const [terminal] = resolveSafeCacheCleanupTargets(
+      project,
+      [path.join(alias, "terminal-link")],
+      {
+        lstat: (location) => {
+          if (!retargeted && path.basename(location) === "terminal-link") {
+            fs.rmSync(alias, { force: true, recursive: true });
+            fs.symlinkSync(
+              victim,
+              alias,
+              process.platform === "win32" ? "junction" : "dir",
+            );
+            retargeted = true;
+          }
+          return fs.lstatSync(location);
+        },
+        realpath: fs.realpathSync.native,
+      },
+    );
     assert.ok(terminal);
+    assert.equal(retargeted, true);
     assert.equal(terminal.exists, true);
     assert.equal(
       terminal.path,
-      path.join(fs.realpathSync.native(root), path.basename(terminalLink)),
+      path.join(fs.realpathSync.native(original), "terminal-link"),
     );
     fs.rmSync(terminal.path, { force: true, recursive: true });
-    assert.equal(fs.existsSync(terminalLink), false);
+    assert.equal(fs.existsSync(originalTerminalLink), false);
+    assert.equal(fs.lstatSync(victimTerminalLink).isSymbolicLink(), true);
     assert.equal(
-      fs.readFileSync(path.join(terminalTarget, "keep.txt"), "utf8"),
+      fs.readFileSync(path.join(originalTerminalTarget, "keep.txt"), "utf8"),
+      "target",
+    );
+    assert.equal(
+      fs.readFileSync(path.join(victimTerminalTarget, "keep.txt"), "utf8"),
       "target",
     );
   };

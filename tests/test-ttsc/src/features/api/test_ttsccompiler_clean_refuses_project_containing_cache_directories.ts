@@ -16,6 +16,10 @@ import {
  * physical alias, or filesystem root must be rejected with every sentinel
  * intact. A real regression is contained to a test-owned temporary parent; the
  * alias and filesystem-root cases call the pure guard only.
+ *
+ * 1. Reject explicit project and ancestor cache roots without removing data.
+ * 2. Reject a physical alias and an environment-selected project ancestor.
+ * 3. Reject a filesystem root and assert every earlier sentinel still exists.
  */
 export const test_ttsccompiler_clean_refuses_project_containing_cache_directories =
   () => {

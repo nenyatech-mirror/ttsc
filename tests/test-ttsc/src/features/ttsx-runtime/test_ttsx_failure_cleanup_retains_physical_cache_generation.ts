@@ -73,11 +73,14 @@ export const test_ttsx_failure_cleanup_retains_physical_cache_generation =
 
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /plugin "retarget" source does not exist/);
-      const generations = fs.readdirSync(path.join(victimCache, "project"));
-      assert.equal(generations.length, 1);
+      const [generation, ...extraGenerations] = fs.readdirSync(
+        path.join(victimCache, "project"),
+      );
+      assert.ok(generation);
+      assert.deepEqual(extraGenerations, []);
       assert.equal(
         fs.readFileSync(
-          path.join(victimCache, "project", generations[0], "keep.txt"),
+          path.join(victimCache, "project", generation, "keep.txt"),
           "utf8",
         ),
         "victim",
