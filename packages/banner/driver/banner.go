@@ -442,6 +442,7 @@ const { fileURLToPath, pathToFileURL } = require("node:url");
 const inputs = new Set();
 const hashes = new Map();
 const realpaths = new Map();
+const signatures = new Map();
 const unstableHashes = new Set();
 
 function existingFile(file) {
@@ -449,22 +450,55 @@ function existingFile(file) {
   catch { return false; }
 }
 
+function missingPathError(error) {
+  return error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function inputMetadataSignature(file) {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      let targetState = "target";
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch (error) {
+          if (!missingPathError(error)) return undefined;
+          targetState = "missing-target";
+        }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs, targetState].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
 function recordInput(file) {
   file = path.resolve(file);
   inputs.add(file);
   if (unstableHashes.has(file)) return;
+  const beforeSignature = inputMetadataSignature(file);
   let observed;
   let observedRealpath;
   try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
   try { observedRealpath = fs.realpathSync.native(file); }
   catch { observedRealpath = null; }
-  if ((hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
+  const afterSignature = inputMetadataSignature(file);
+  if (beforeSignature === undefined || afterSignature === undefined || beforeSignature !== afterSignature || (signatures.has(file) && signatures.get(file) !== afterSignature) || (hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
     hashes.delete(file);
     realpaths.delete(file);
+    signatures.delete(file);
     unstableHashes.add(file);
     return;
   }
+  signatures.set(file, afterSignature);
   hashes.set(file, observed);
   realpaths.set(file, observedRealpath);
 }
@@ -788,6 +822,7 @@ import { fileURLToPath } from "node:url";
 const inputs = new Set<string>();
 const hashes = new Map<string, string | null>();
 const realpaths = new Map<string, string | null>();
+const signatures = new Map<string, string>();
 const unstableHashes = new Set<string>();
 
 function existingFile(file: string): boolean {
@@ -795,22 +830,56 @@ function existingFile(file: string): boolean {
   catch { return false; }
 }
 
+function missingPathError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function inputMetadataSignature(file: string): string | undefined {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      let targetState = "target";
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch (error) {
+          if (!missingPathError(error)) return undefined;
+          targetState = "missing-target";
+        }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs, targetState].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
 function recordInput(file: string): void {
   file = path.resolve(file);
   inputs.add(file);
   if (unstableHashes.has(file)) return;
+  const beforeSignature = inputMetadataSignature(file);
   let observed: string | null;
   let observedRealpath: string | null;
   try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
   catch { observed = null; }
   try { observedRealpath = fs.realpathSync.native(file); }
   catch { observedRealpath = null; }
-  if ((hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
+  const afterSignature = inputMetadataSignature(file);
+  if (beforeSignature === undefined || afterSignature === undefined || beforeSignature !== afterSignature || (signatures.has(file) && signatures.get(file) !== afterSignature) || (hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
     hashes.delete(file);
     realpaths.delete(file);
+    signatures.delete(file);
     unstableHashes.add(file);
     return;
   }
+  signatures.set(file, afterSignature);
   hashes.set(file, observed);
   realpaths.set(file, observedRealpath);
 }

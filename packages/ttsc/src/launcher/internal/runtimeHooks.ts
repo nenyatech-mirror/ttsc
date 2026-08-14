@@ -421,7 +421,6 @@ function recordPluginDescriptorResolutionCandidates(
     if (recorded.has(resolved)) return;
     recorded.add(resolved);
     recordPluginDescriptorInput({
-      hash: pluginDescriptorInputHash(resolved),
       parent,
       resolved,
     });
@@ -562,7 +561,6 @@ function recordPluginDescriptorResolution(
   if (resolved === undefined) return;
   const parent = runtimeFilePath(parentURL);
   recordPluginDescriptorInput({
-    hash: pluginDescriptorInputHash(resolved),
     ...(parent === undefined ? {} : { parent }),
     resolved,
     specifier,
@@ -574,7 +572,6 @@ function recordPluginDescriptorResolution(
   ) {
     const manifest = path.join(directory, "package.json");
     recordPluginDescriptorInput({
-      hash: pluginDescriptorInputHash(manifest),
       ...(parent === undefined ? {} : { parent }),
       resolved: manifest,
     });
@@ -589,6 +586,7 @@ function recordPluginDescriptorInput(record: {
   parent?: string;
   realpath?: string | null;
   resolved: string;
+  signature?: string;
   specifier?: string;
   unstable?: boolean;
 }): void {
@@ -596,9 +594,30 @@ function recordPluginDescriptorInput(record: {
   const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
   if (out === undefined || out.length === 0) return;
   try {
+    const beforeSignature = pluginDescriptorInputMetadataSignature(
+      record.resolved,
+    );
+    const observedHash = pluginDescriptorInputHash(record.resolved);
+    const observedRealpath = pluginDescriptorInputRealpath(record.resolved);
+    const afterSignature = pluginDescriptorInputMetadataSignature(
+      record.resolved,
+    );
+    const unstable =
+      record.unstable === true ||
+      beforeSignature === undefined ||
+      afterSignature === undefined ||
+      beforeSignature !== afterSignature ||
+      (record.hash !== undefined && record.hash !== observedHash) ||
+      (record.realpath !== undefined && record.realpath !== observedRealpath) ||
+      (record.signature !== undefined && record.signature !== afterSignature);
     fs.appendFileSync(
       out,
-      `${JSON.stringify({ realpath: pluginDescriptorInputRealpath(record.resolved), ...record })}\n`,
+      `${JSON.stringify({
+        ...record,
+        hash: observedHash,
+        realpath: observedRealpath,
+        ...(unstable ? { unstable: true } : { signature: afterSignature }),
+      })}\n`,
       "utf8",
     );
   } catch {
@@ -612,6 +631,50 @@ function pluginDescriptorInputRealpath(file: string): string | null {
     return fs.realpathSync.native(file);
   } catch {
     return null;
+  }
+}
+
+/** Metadata identity that exposes content-preserving A-B-A replacement. */
+function pluginDescriptorInputMetadataSignature(
+  file: string,
+): string | undefined {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      let targetState = "target";
+      if (link.isSymbolicLink()) {
+        try {
+          target = fs.statSync(current, { bigint: true });
+        } catch (error) {
+          if (!isMissingPathError(error)) return undefined;
+          targetState = "missing-target";
+        }
+      }
+      return [
+        path.relative(current, requested),
+        link.dev,
+        link.ino,
+        link.mode,
+        link.size,
+        link.mtimeNs,
+        link.ctimeNs,
+        target.dev,
+        target.ino,
+        target.mode,
+        target.size,
+        target.mtimeNs,
+        target.ctimeNs,
+        targetState,
+      ].join(":");
+    } catch (error) {
+      if (!isMissingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
   }
 }
 
@@ -869,6 +932,7 @@ function readPluginDescriptorProjectConfig(
     for (const input of inputs) observed.add(input);
     const before = pluginDescriptorInputHashes(inputs);
     const beforeRealpaths = pluginDescriptorInputRealpaths(inputs);
+    const beforeSignatures = pluginDescriptorInputMetadataSignatures(inputs);
     let candidate: ReturnType<typeof readProjectConfig>;
     try {
       candidate = read();
@@ -880,16 +944,22 @@ function readPluginDescriptorProjectConfig(
     for (const input of candidateInputs) observed.add(input);
     const after = pluginDescriptorInputHashes(candidateInputs);
     const afterRealpaths = pluginDescriptorInputRealpaths(candidateInputs);
+    const afterSignatures =
+      pluginDescriptorInputMetadataSignatures(candidateInputs);
     if (
       equalPluginDescriptorInputLists(inputs, candidateInputs) &&
       equalPluginDescriptorInputHashes(before, after) &&
-      equalPluginDescriptorInputHashes(beforeRealpaths, afterRealpaths)
+      equalPluginDescriptorInputHashes(beforeRealpaths, afterRealpaths) &&
+      beforeSignatures !== undefined &&
+      afterSignatures !== undefined &&
+      equalPluginDescriptorInputHashes(beforeSignatures, afterSignatures)
     ) {
       for (const input of candidateInputs) {
         recordPluginDescriptorInput({
           hash: after[input]!,
           realpath: afterRealpaths[input]!,
           resolved: input,
+          signature: afterSignatures[input]!,
         });
       }
       return candidate;
@@ -930,6 +1000,18 @@ function pluginDescriptorInputRealpaths(
   );
 }
 
+function pluginDescriptorInputMetadataSignatures(
+  inputs: readonly string[],
+): Record<string, string> | undefined {
+  const output: Record<string, string> = {};
+  for (const input of inputs) {
+    const signature = pluginDescriptorInputMetadataSignature(input);
+    if (signature === undefined) return undefined;
+    output[path.resolve(input)] = signature;
+  }
+  return output;
+}
+
 function equalPluginDescriptorInputLists(
   first: readonly string[],
   second: readonly string[],
@@ -957,7 +1039,6 @@ function recordPluginDescriptorProjectInputs(
   for (const input of inputs) {
     const resolved = path.resolve(input);
     recordPluginDescriptorInput({
-      hash: pluginDescriptorInputHash(resolved),
       resolved,
       ...(unstable ? { unstable: true } : {}),
     });
@@ -2670,7 +2751,6 @@ function recordPluginDescriptorTsconfigCandidates(
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);
     recordPluginDescriptorInput({
-      hash: pluginDescriptorInputHash(resolved),
       resolved,
     });
   }

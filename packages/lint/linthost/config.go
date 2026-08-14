@@ -1369,10 +1369,10 @@ func loadConfigFileEvaluationWithin(
 // configCacheVersion namespaces the on-disk config cache. Bump it whenever
 // the shape of a cached config object changes so that entries written by an
 // older @ttsc/lint binary are treated as a miss rather than silently reused.
-// v7 pairs each dependency digest with its evaluation-time physical identity.
-// A v6 cache can otherwise survive a symlink or junction retarget when the new
-// target has equal bytes.
-const configCacheVersion = "v7"
+// v8 also rejects content-restoring A-B-A replacement during evaluation. A v7
+// cache can otherwise pair output from the transient state with the restored
+// state's equal digest and physical path.
+const configCacheVersion = "v8"
 
 // configEvalCache memoizes evaluated .ts/.js lint config objects for the
 // lifetime of one process; the on-disk cache (configCacheDir) extends the
@@ -2151,15 +2151,63 @@ function isObject(value) {
   return value !== null && typeof value === "object";
 }
 
+function missingPathError(error) {
+  return error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function dependencyMetadataSignature(location) {
+  const requested = path.resolve(location);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      let targetState = "target";
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch (error) {
+          if (!missingPathError(error)) return undefined;
+          targetState = "missing-target";
+        }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs, targetState].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function currentDependencyDigest(kind, location) {
+  try {
+    if (kind === "directory") return directoryDigest(location);
+    if (kind === "entry") return entryDigest(location);
+    if (kind === "optional-file") return optionalFileDigest(location);
+    return createHash("sha256").update(fs.readFileSync(location)).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
 function recordDependency(kind, location, digest, owners) {
   const key = kind + "\0" + location;
   const previous = dependencies.get(key);
   const mergedOwners = previous ? previous.owners : new Set();
   for (const owner of owners) mergedOwners.add(owner);
+  const beforeSignature = dependencyMetadataSignature(location);
+  const observedDigest = currentDependencyDigest(kind, location);
   const realpath = dependencyRealpath(location);
+  const afterSignature = dependencyMetadataSignature(location);
   const identityStable =
     (!previous || previous.identityStable) &&
-    (!previous || previous.realpath === realpath);
+    beforeSignature !== undefined &&
+    afterSignature !== undefined &&
+    beforeSignature === afterSignature &&
+    digest === observedDigest &&
+    (!previous || previous.realpath === realpath) &&
+    (!previous || previous.signature === afterSignature);
   dependencies.set(key, {
     digest: !identityStable || (previous && previous.digest !== digest) ? "" : digest,
     identityStable,
@@ -2167,6 +2215,7 @@ function recordDependency(kind, location, digest, owners) {
     owners: mergedOwners,
     path: location,
     realpath,
+    signature: afterSignature,
   });
 }
 
@@ -2935,10 +2984,22 @@ function realPath(location) {
 }
 
 function finalizeDependencies() {
+  for (const dependency of [...dependencies.values()]) {
+    recordDependency(
+      dependency.kind,
+      dependency.path,
+      currentDependencyDigest(dependency.kind, dependency.path),
+      dependency.owners,
+    );
+  }
   const watched = graphWatchReachability();
-  return [...dependencies.values()].map(({ owners, ...dependency }) => ({
-    ...dependency,
-    scope: [...owners].some((owner) => watched.has(owner))
+  return [...dependencies.values()].map((dependency) => ({
+    digest: dependency.digest,
+    identityStable: dependency.identityStable,
+    kind: dependency.kind,
+    path: dependency.path,
+    realpath: dependency.realpath,
+    scope: [...dependency.owners].some((owner) => watched.has(owner))
       ? "watch"
       : "cache",
   }));
@@ -3187,6 +3248,7 @@ const dependencies = new Map<string, {
   path: string;
   owners: Set<string>;
   realpath: string | null;
+  signature: string | undefined;
 }>();
 const graphNodes = new Map<string, string>();
 const graphEdges: Array<{
@@ -3359,6 +3421,52 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
+function missingPathError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function dependencyMetadataSignature(
+  location: string,
+): string | undefined {
+  const requested = path.resolve(location);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      let targetState = "target";
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch (error) {
+          if (!missingPathError(error)) return undefined;
+          targetState = "missing-target";
+        }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs, targetState].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function currentDependencyDigest(
+  kind: "directory" | "entry" | "file" | "optional-file",
+  location: string,
+): string {
+  try {
+    if (kind === "directory") return directoryDigest(location);
+    if (kind === "entry") return entryDigest(location);
+    if (kind === "optional-file") return optionalFileDigest(location);
+    return createHash("sha256").update(fs.readFileSync(location)).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
 function recordDependency(
   kind: "directory" | "entry" | "file" | "optional-file",
   location: string,
@@ -3369,10 +3477,18 @@ function recordDependency(
   const previous = dependencies.get(key);
   const mergedOwners = previous?.owners ?? new Set<string>();
   for (const owner of owners) mergedOwners.add(owner);
+  const beforeSignature = dependencyMetadataSignature(location);
+  const observedDigest = currentDependencyDigest(kind, location);
   const realpath = dependencyRealpath(location);
+  const afterSignature = dependencyMetadataSignature(location);
   const identityStable =
     previous?.identityStable !== false &&
-    (previous === undefined || previous.realpath === realpath);
+    beforeSignature !== undefined &&
+    afterSignature !== undefined &&
+    beforeSignature === afterSignature &&
+    digest === observedDigest &&
+    (previous === undefined || previous.realpath === realpath) &&
+    (previous === undefined || previous.signature === afterSignature);
   dependencies.set(key, {
     digest:
       !identityStable ||
@@ -3384,6 +3500,7 @@ function recordDependency(
     owners: mergedOwners,
     path: location,
     realpath,
+    signature: afterSignature,
   });
 }
 
@@ -4202,6 +4319,14 @@ function finalizeDependencies(): Array<{
   realpath: string | null;
   scope: "cache" | "watch";
 }> {
+  for (const dependency of [...dependencies.values()]) {
+    recordDependency(
+      dependency.kind,
+      dependency.path,
+      currentDependencyDigest(dependency.kind, dependency.path),
+      dependency.owners,
+    );
+  }
   const watched = graphWatchReachability();
   // Opt-in diagnostics for a graph that comes back empty. The only channel this
   // loader may use is stderr, because the result travels through a private file
@@ -4219,9 +4344,13 @@ function finalizeDependencies(): Array<{
         "\n",
     );
   }
-  return [...dependencies.values()].map(({ owners, ...dependency }) => ({
-    ...dependency,
-    scope: [...owners].some((owner) => watched.has(owner))
+  return [...dependencies.values()].map((dependency) => ({
+    digest: dependency.digest,
+    identityStable: dependency.identityStable,
+    kind: dependency.kind,
+    path: dependency.path,
+    realpath: dependency.realpath,
+    scope: [...dependency.owners].some((owner) => watched.has(owner))
       ? "watch"
       : "cache",
   }));

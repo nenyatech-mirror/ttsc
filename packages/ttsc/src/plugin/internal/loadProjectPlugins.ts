@@ -480,6 +480,7 @@ function readProjectHostInputSnapshot(options: {
   for (let attempt = 0; attempt < 3; attempt++) {
     const before = hashHostInputPaths(hostInputs);
     const beforeRealpaths = realpathHostInputPaths(hostInputs);
+    const beforeSignatures = hostInputMetadataSignatures(hostInputs);
     const candidateProject = readProjectConfig(projectOptions);
     const candidateInputs = collectProjectHostInputs(
       candidateProject,
@@ -488,10 +489,14 @@ function readProjectHostInputSnapshot(options: {
     for (const input of candidateInputs) observedInputs.add(input);
     const after = hashHostInputPaths(candidateInputs);
     const afterRealpaths = realpathHostInputPaths(candidateInputs);
+    const afterSignatures = hostInputMetadataSignatures(candidateInputs);
     if (
       equalHostInputLists(hostInputs, candidateInputs) &&
       equalHostInputHashes(before, after) &&
-      equalHostInputHashes(beforeRealpaths, afterRealpaths)
+      equalHostInputHashes(beforeRealpaths, afterRealpaths) &&
+      beforeSignatures !== undefined &&
+      afterSignatures !== undefined &&
+      equalHostInputHashes(beforeSignatures, afterSignatures)
     ) {
       return {
         hostInputHashes: after,
@@ -614,6 +619,69 @@ export function realpathHostInputPaths(
   return Object.fromEntries(
     files.map((file) => [path.resolve(file), realpathHostInput(file)]),
   );
+}
+
+/**
+ * Metadata identity that survives content-preserving reads but exposes A-B-A
+ * replacement. Missing paths are tied to the nearest existing ancestor whose
+ * directory metadata changes when the missing branch appears or disappears.
+ */
+function hostInputMetadataSignature(file: string): string | undefined {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      let targetState = "target";
+      if (link.isSymbolicLink()) {
+        try {
+          target = fs.statSync(current, { bigint: true });
+        } catch (error) {
+          if (!isMissingPathError(error)) return undefined;
+          targetState = "missing-target";
+        }
+      }
+      return [
+        path.relative(current, requested),
+        link.dev,
+        link.ino,
+        link.mode,
+        link.size,
+        link.mtimeNs,
+        link.ctimeNs,
+        target.dev,
+        target.ino,
+        target.mode,
+        target.size,
+        target.mtimeNs,
+        target.ctimeNs,
+        targetState,
+      ].join(":");
+    } catch (error) {
+      if (!isMissingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function hostInputMetadataSignatures(
+  files: readonly string[],
+): Record<string, string> | undefined {
+  const output: Record<string, string> = {};
+  for (const file of files) {
+    const signature = hostInputMetadataSignature(file);
+    if (signature === undefined) return undefined;
+    output[path.resolve(file)] = signature;
+  }
+  return output;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /** Return config ancestry and the manifest controlling package discovery. */
@@ -1712,18 +1780,43 @@ export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   `  const inputs = new Set();`,
   `  const inputHashes = new Map();`,
   `  const inputRealpaths = new Map();`,
+  `  const inputSignatures = new Map();`,
   `  const unstableInputHashes = new Set();`,
+  `  function missingPathError(error) { return error && (error.code === "ENOENT" || error.code === "ENOTDIR"); }`,
+  `  function inputMetadataSignature(file) {`,
+  `    const requested = path.resolve(file);`,
+  `    let current = requested;`,
+  `    for (;;) {`,
+  `      try {`,
+  `        const link = fs.lstatSync(current, { bigint: true });`,
+  `        let target = link;`,
+  `        let targetState = "target";`,
+  `        if (link.isSymbolicLink()) {`,
+  `          try { target = fs.statSync(current, { bigint: true }); }`,
+  `          catch (error) { if (!missingPathError(error)) return undefined; targetState = "missing-target"; }`,
+  `        }`,
+  `        return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs, targetState].join(":");`,
+  `      } catch (error) {`,
+  `        if (!missingPathError(error)) return undefined;`,
+  `        const parent = path.dirname(current);`,
+  `        if (parent === current) return undefined;`,
+  `        current = parent;`,
+  `      }`,
+  `    }`,
+  `  }`,
   `  function recordInput(file) {`,
   `    file = path.resolve(file);`,
   `    inputs.add(file);`,
   `    if (unstableInputHashes.has(file)) return;`,
+  `    const beforeSignature = inputMetadataSignature(file);`,
   `    let observedRealpath;`,
   `    try { observedRealpath = fs.realpathSync.native(file); } catch { observedRealpath = null; }`,
-  `    if (inputRealpaths.has(file) && inputRealpaths.get(file) !== observedRealpath) { inputHashes.delete(file); inputRealpaths.delete(file); unstableInputHashes.add(file); return; }`,
-  `    inputRealpaths.set(file, observedRealpath);`,
   `    let observed;`,
   `    try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); } catch { observed = null; }`,
-  `    if (inputHashes.has(file) && inputHashes.get(file) !== observed) { inputHashes.delete(file); unstableInputHashes.add(file); return; }`,
+  `    const afterSignature = inputMetadataSignature(file);`,
+  `    if (beforeSignature === undefined || afterSignature === undefined || beforeSignature !== afterSignature || (inputSignatures.has(file) && inputSignatures.get(file) !== afterSignature) || (inputRealpaths.has(file) && inputRealpaths.get(file) !== observedRealpath) || (inputHashes.has(file) && inputHashes.get(file) !== observed)) { inputHashes.delete(file); inputRealpaths.delete(file); inputSignatures.delete(file); unstableInputHashes.add(file); return; }`,
+  `    inputSignatures.set(file, afterSignature);`,
+  `    inputRealpaths.set(file, observedRealpath);`,
   `    inputHashes.set(file, observed);`,
   `  }`,
   `  function asFile(resolved) {`,
@@ -2163,6 +2256,7 @@ interface TtsxDescriptorResolutionRecord {
   parent?: string;
   realpath?: string | null;
   resolved?: string;
+  signature?: string;
   specifier?: string;
   unstable?: boolean;
 }
@@ -2183,6 +2277,7 @@ function readTtsxDescriptorInputs(
   const inputs = new Set<string>([path.resolve(request)]);
   const hashes = new Map<string, string | null>();
   const realpaths = new Map<string, string | null>();
+  const signatures = new Map<string, string>();
   const unstableInputs = new Set<string>();
   let text: string;
   try {
@@ -2209,9 +2304,22 @@ function readTtsxDescriptorInputs(
       if (record.unstable === true) {
         hashes.delete(resolved);
         realpaths.delete(resolved);
+        signatures.delete(resolved);
         unstableInputs.add(resolved);
         continue;
       }
+      if (
+        typeof record.signature !== "string" ||
+        (signatures.has(resolved) &&
+          signatures.get(resolved) !== record.signature)
+      ) {
+        hashes.delete(resolved);
+        realpaths.delete(resolved);
+        signatures.delete(resolved);
+        unstableInputs.add(resolved);
+        continue;
+      }
+      signatures.set(resolved, record.signature);
       if (
         (typeof record.realpath === "string" &&
           path.isAbsolute(record.realpath)) ||
@@ -2222,6 +2330,7 @@ function readTtsxDescriptorInputs(
         if (realpaths.has(resolved) && realpaths.get(resolved) !== observed) {
           hashes.delete(resolved);
           realpaths.delete(resolved);
+          signatures.delete(resolved);
           unstableInputs.add(resolved);
           continue;
         }
@@ -2236,6 +2345,7 @@ function readTtsxDescriptorInputs(
         ) {
           hashes.delete(resolved);
           realpaths.delete(resolved);
+          signatures.delete(resolved);
           unstableInputs.add(resolved);
         } else {
           hashes.set(resolved, record.hash);
@@ -2256,9 +2366,15 @@ function readTtsxDescriptorInputs(
     }
   }
   for (const [resolved, observed] of realpaths) {
-    if (realpathHostInput(resolved) === observed) continue;
+    if (
+      realpathHostInput(resolved) === observed &&
+      signatures.get(resolved) === hostInputMetadataSignature(resolved)
+    ) {
+      continue;
+    }
     hashes.delete(resolved);
     realpaths.delete(resolved);
+    signatures.delete(resolved);
     unstableInputs.add(resolved);
   }
   return {
