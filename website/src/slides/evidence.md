@@ -4,7 +4,7 @@ theme: default
 paginate: true
 size: 16:9
 title: "Evidence Graph"
-description: "Enforce 100% specification coverage as compile errors so coding agents cannot skip an obligation."
+description: "Enforce 100% specification coverage through compile errors so coding agents cannot skip obligations."
 url: "https://ttsc.dev/slides/evidence/"
 image: "https://ttsc.dev/og-evidence.png"
 style: |
@@ -87,14 +87,14 @@ style: |
   .opening-summary ul ul li { margin-bottom: 4px; }
   .benchmark-graphs { display: flex; flex-direction: column; gap: 18px; }
   .opening-measure { padding: 16px; background: #f3f6fb; border-radius: 12px; }
-  .opening-measure-title { margin-bottom: 12px; font-size: 28px; font-weight: 700; }
+  .opening-measure-title { margin-bottom: 12px; font-size: 30px; font-weight: 700; }
   .opening-bar-row {
     display: grid;
-    grid-template-columns: 96px 1fr 92px;
+    grid-template-columns: 108px 1fr 92px;
     gap: 8px;
     align-items: center;
     margin-top: 10px;
-    font-size: 24px;
+    font-size: 26px;
   }
   .opening-bar-row span { white-space: nowrap; }
   .opening-bar-row strong { text-align: right; white-space: nowrap; }
@@ -105,8 +105,8 @@ style: |
   .opening-bar i.coverage-evidence { width: 100%; }
   .opening-bar i.token-plain { width: 100%; }
   .opening-bar i.token-evidence { width: 7.5%; }
-  .benchmark-context { color: #5b6674; font-size: 26px; text-align: center; }
-  .note { font-size: 26px; color: #5b6674; }
+  .benchmark-context { color: #5b6674; font-size: 28px; text-align: center; }
+  .note { font-size: 28px; color: #5b6674; }
 
   /* Cumulative narrative references */
   .narrative-graph { position: relative; height: 410px; margin-top: -12px; }
@@ -258,7 +258,7 @@ style: |
     border: 3px solid #4a76b8;
     border-radius: 10px;
     color: #14284b;
-    font-size: 27px;
+    font-size: 30px;
     font-weight: 700;
   }
   .architecture-edge {
@@ -384,11 +384,11 @@ style: |
     border-top: 7px solid #4a76b8;
     border-radius: 10px;
     padding: 22px 24px;
-    font-size: 27px;
+    font-size: 30px;
     line-height: 1.5;
   }
   .card b { display: block; font-size: 40px; color: #14284b; margin-bottom: 8px; }
-  .card .note { font-size: 24px; }
+  .card .note { font-size: 28px; }
   .card.warm { border-top-color: #f08a24; }
   .card.warm b { color: #b35c00; }
   .problem-measures { display: flex; flex-direction: column; gap: 12px; width: 94%; margin: 12px auto 0; }
@@ -447,12 +447,12 @@ style: |
   /* Token bars by subject */
   .rows { margin-top: 26px; }
   .row { display: flex; align-items: center; margin-bottom: 20px; }
-  .row .lbl { width: 150px; font-size: 28px; }
+  .row .lbl { width: 150px; font-size: 30px; }
   .row .bars { flex: 1; }
   .row .bars i { display: block; height: 18px; border-radius: 9px; margin: 4px 0; }
   .row .bars i.p { background: #4a76b8; }
   .row .bars i.e { background: #f08a24; }
-  .row .val { width: 230px; text-align: right; font-size: 25px; color: #5b6674; }
+  .row .val { width: 230px; text-align: right; font-size: 28px; color: #5b6674; }
   .b159 { width: 15.9%; }
   .b17 { width: 1.7%; }
   .b216 { width: 21.6%; }
@@ -526,7 +526,7 @@ style: |
 
 ---
 
-# 90% on review. 51.6% coverage.
+# ERP Plain: 90% review · 51.6% coverage
 
 <div class="problem-measures">
 <div>
@@ -548,13 +548,13 @@ style: |
 
 # Evidence Graph
 
-<span class="note">We attached a compiler to specifications, too</span>
+<span class="note">Missing specification coverage becomes a compile error</span>
 
 ---
 
 <!-- _class: architecture-slide -->
 
-# First, divide the documents into layers
+# First, divide the artifacts into layers
 
 <div class="document-graph">
 <div class="architecture-node document-node meeting">Meeting notes</div>
@@ -571,7 +571,7 @@ style: |
 <div class="architecture-edge horizontal arrow-left document-edge test-foundations"></div>
 </div>
 
-<p class="architecture-caption">One evidence circuit connects meeting notes, documents, implementation, and tests.</p>
+<p class="architecture-caption">Each arrow points to the evidence it cites.</p>
 
 ---
 
@@ -587,7 +587,7 @@ style: |
 export function CouponStackingNotice(props: IProps): JSX.Element;
 ```
 
-**`@evidence <target> <reason>`**: what it is responsible for, and why.
+**`@evidence <target> <reason>`**: what this code implements, and why.
 
 ---
 
@@ -601,64 +601,7 @@ error TS16411: [evidence/graph]
 ```
 
 - One error per requirement → **the error list is the task list**
-- It appears alongside type errors. There is no additional check to attach
-
----
-
-# The configuration is one sentence
-
-```ts
-type: "typescript",
-files: ["src/components/**/*.tsx"],  // The side that discharges the obligation
-symbol: "function",
-reference: {
-  type: "markdown",
-  files: ["docs/**/*.md"],           // The targets whose obligations must be discharged
-  symbol: ["h2", "h3"],
-},
-```
-
-**Components implement documents. Therefore, every H2 and H3 must be cited.**
-
----
-
-# Four kinds of citation targets
-
-| Kind       | Unit                         |
-| ---------- | ---------------------------- |
-| Markdown   | file, H1-H4 section          |
-| Prisma     | model, column, relation      |
-| TypeScript | type, function, property     |
-| Swagger    | each operation under `paths` |
-
-<span class="note">Documents, schemas, code, and API specifications are connected by one grammar.</span>
-
----
-
-# Who determines 100%?
-
-<div class="cards">
-<div class="card"><b>Denominator</b>The configuration declares it</div>
-<div class="card"><b>Numerator</b>The developer records it with tags</div>
-<div class="card warm"><b>Decision</b>The compiler makes it every time</div>
-</div>
-
-<br/>
-
-Entrust any one of the three to diligence, and 100% is merely **self-reported**.
-
----
-
-# It prevents a false 100%
-
-| Option | What it prevents |
-| --- | --- |
-| `noEvidenceExclude` | Escaping with "not applicable" |
-| `uniqueEvidence` | Multiple places passing responsibility to one another |
-| `singleEvidencePerSymbol` | Piling every citation onto one place |
-| `requireReview` | Letting the specification change after it was cited |
-
-<span class="note">An exclusion requires a reason, and a review carries a fingerprint of the document content.</span>
+- It runs alongside type errors in the same build
 
 ---
 
@@ -666,7 +609,7 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 
 # Spec Driven Development
 
-<span class="note">Write and review the requirements.<br/>AI builds everything with 100% coverage.</span>
+<span class="note">Requirements are the handoff.<br/>AI builds everything below them with 100% coverage.</span>
 
 ---
 
@@ -674,19 +617,18 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 
 - Humans **review `docs/requirements` directly**
 - Specifications, implementation, and tests are **fully delegated**
-- ERP: **100+ tables, 150K+ LoC**, working as-is on its first run
 
 > The four benchmark subjects use this method as well.
 
 ---
 
-# Method B: Hand over only the raw material
+# Method B: Delegate the requirements, too
 
 - Hand over meeting notes and idea notes **as-is, without organizing them**
 - **Delegate everything**, starting with writing the requirements
 - If anything decided in the meeting is omitted, **the build breaks immediately**
 
-> In either method, the graph protects the lower layers.<br/>Humans review only the one layer they chose.
+> Humans provide one source layer.<br/>The graph protects everything below it.
 
 ---
 
@@ -702,6 +644,57 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 - If anything decided in the meeting **is missing from the requirements, the build breaks**
 - Idea notes, interview records, and existing internal documents occupy the same layer
 - Citations are HTML comments, so **the rendered document stays clean**
+
+---
+
+# One rule declares the relationship
+
+```ts
+type: "typescript",
+files: ["src/components/**/*.tsx"], // sources
+symbol: "function",
+reference: {
+  type: "markdown",
+  files: ["docs/**/*.md"], // targets
+  symbol: ["h2", "h3"],
+},
+```
+
+**Components implement documents. Therefore, every H2 and H3 must be cited.**
+
+---
+
+# One grammar covers four artifact types
+
+| Kind       | Unit                         |
+| ---------- | ---------------------------- |
+| Markdown   | file, H1-H4 section          |
+| Prisma     | model, column, relation      |
+| TypeScript | type, function, property     |
+| Swagger    | each operation under `paths` |
+
+---
+
+# The compiler determines 100%
+
+<div class="cards">
+<div class="card"><b>Denominator</b>The configuration declares it</div>
+<div class="card"><b>Numerator</b>Tags record it</div>
+<div class="card warm"><b>Decision</b>The compiler makes it every time</div>
+</div>
+
+---
+
+# It closes mechanical loopholes
+
+| Option | What it prevents |
+| --- | --- |
+| `noEvidenceExclude` | Escaping with "not applicable" |
+| `uniqueEvidence` | Multiple places passing responsibility to one another |
+| `singleEvidencePerSymbol` | Piling every citation onto one place |
+| `requireReview` | Letting the specification change after it was cited |
+
+<span class="note">An exclusion requires a reason, and a review carries a fingerprint of the document content.</span>
 
 ---
 
@@ -774,7 +767,7 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 
 ---
 
-# Coverage
+# Coverage: 51.6–85.5% → 100%
 
 | Subject | Plain | Evidence |
 | --- | --- | --- |
@@ -783,11 +776,11 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 | shopping | 63.1% <span class="track"><i class="w631"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
 | erp | 51.6% <span class="track"><i class="w516"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
 
-The larger the project, the more it misses.<br/>**It does not even know that it missed something.**
+Plain coverage falls with scope. **Evidence remains at 100%.**
 
 ---
 
-# Yet it becomes cheaper
+# Token usage: 4.8–13.3× lower
 
 <div class="rows">
 <div class="row"><span class="lbl">todo</span><span class="bars"><i class="p b159"></i><i class="e b17"></i></span><span class="val">866M → 92M</span></div>
@@ -796,13 +789,13 @@ The larger the project, the more it misses.<br/>**It does not even know that it 
 <div class="row"><span class="lbl">erp</span><span class="bars"><i class="p b1000"></i><i class="e b75"></i></span><span class="val">5,449M → 411M</span></div>
 </div>
 
-Token consumption for <span class="kp">Plain</span> and <span class="ke">Evidence</span>.<br/>The gap widens as the project grows.
+<span class="kp">Plain</span> in blue. <span class="ke">Evidence</span> in orange.
 
 <span class="note">Original charts by phase: [https://ttsc.dev/docs/benchmark/evidence](https://ttsc.dev/docs/benchmark/evidence)</span>
 
 ---
 
-# Cost and time decreased as well: ERP
+# ERP: 100% coverage · $4.96 · 14h
 
 <div class="cards">
 <div class="card"><b>13.3×</b>fewer tokens<br/><span class="note">5,449M → 411M</span></div>
@@ -810,13 +803,9 @@ Token consumption for <span class="kp">Plain</span> and <span class="ke">Evidenc
 <div class="card warm"><b>7.5×</b>less time<br/><span class="note">102h → 14h</span></div>
 </div>
 
-<br/>
-
-This was not a cost paid for quality.<br/>**It built more and finished for less.**
-
 ---
 
-# But the review consumes all the money
+# Review: 90–95% → 15–41% of tokens
 
 | Subject | Plain | Evidence |
 | --- | --- | --- |
@@ -829,7 +818,7 @@ This was not a cost paid for quality.<br/>**It built more and finished for less.
 
 ---
 
-# What if it lies?
+# 100% coverage can include false citations
 
 ```ts
 /**
@@ -846,7 +835,7 @@ This was not a cost paid for quality.<br/>**It built more and finished for less.
 
 ---
 
-# In return, the review becomes narrower
+# Human review checks citation truth
 
 |  | Plain | Evidence |
 | --- | --- | --- |
@@ -862,10 +851,10 @@ This was not a cost paid for quality.<br/>**It built more and finished for less.
 
 # Summary
 
-- Humans review **only one document layer**
-- The **compiler protects everything below it**
-- A specification can be **software requirements, historical canon, or the laws of a fictional world**
-- 100% is not the goal, but **what remains after every error is closed**
+- Missing specification coverage becomes **a compile error**
+- Requirements are **the handoff**
+- Coverage rises from **51.6–85.5% to 100%**
+- Human review checks **citation truth**
 
 ---
 
@@ -873,7 +862,7 @@ This was not a cost paid for quality.<br/>**It built more and finished for less.
 
 # Appendix: Stories
 
-<span class="note">Settings become build constraints</span>
+<span class="note">Principles and settings become build constraints</span>
 
 ---
 
@@ -915,7 +904,6 @@ This was not a cost paid for quality.<br/>**It built more and finished for less.
 - Storylines, Scenarios, Manuscripts → Settings: facts, rules, knowledge
 - Scenarios, Manuscripts → Storylines: causes and consequences
 - Manuscripts → Scenarios: exact execution
-- Target changes → affected reviews expire
 
 ---
 
@@ -923,7 +911,7 @@ This was not a cost paid for quality.<br/>**It built more and finished for less.
 
 - Limited context → exact obligations for this scene
 - Plausible invention → explicit lineage and review
-- Revision drift → stale fingerprints
+- Revision drift → affected reviews expire
 - Forgotten promise → 100% reverse coverage
 
 **Creative freedom inside hard continuity.**
