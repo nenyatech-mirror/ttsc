@@ -782,8 +782,8 @@ function parseDependencyLists(
  *
  * A leaf is intentionally encoded as an empty target array. Its key still
  * declares graph membership and lets persistent hosts bind the compiler-time
- * input proof for that source. Only a non-array entry is malformed; invalid
- * array members are filtered without erasing the node itself.
+ * input proof for that source. A node needs a non-empty source key and an array
+ * value; invalid array members are filtered without erasing a valid node.
  */
 function parseGraphEdges(value: unknown): Record<string, string[]> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -803,10 +803,11 @@ function parseGraphEdges(value: unknown): Record<string, string[]> | undefined {
 
 /**
  * Normalize the optional `graph` envelope section with the same tolerance as
- * `dependencies`: non-object sections are dropped, edge entries that are not
- * arrays are dropped, and non-string list members are filtered. Empty arrays
- * remain as graph nodes because leaf membership binds compiler input proof. A
- * section carrying nothing usable collapses to `undefined`.
+ * `dependencies`: non-object sections are dropped, empty source keys and edge
+ * entries that are not arrays are dropped, and non-string list members are
+ * filtered. Empty arrays remain as graph nodes because leaf membership binds
+ * compiler input proof. A section carrying nothing usable collapses to
+ * `undefined`.
  *
  * `candidates` is the one optional member, so an empty one is left off the
  * result instead of being materialized as `{}`. The host omits the key when it
