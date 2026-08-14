@@ -128,6 +128,9 @@ function resolveTtscserverEnv(argv: readonly string[]): TtscserverEnvironment {
   }
   const context = resolveLspExecutionContext(argv);
   const env = lspSidecarEnvironment({
+    cwd:
+      context.projectContext?.logicalProjectRoot ??
+      path.resolve(optionValue(argv, "--cwd") ?? process.cwd()),
     pluginConfigOrigin: context.projectContext?.pluginConfigOrigin,
     tsgoBinary: context.tsgoBinary,
   });
@@ -195,6 +198,7 @@ export function materializeLSPPluginManifest(manifest: unknown): {
 }
 
 function lspSidecarEnvironment(options: {
+  cwd: string;
   pluginConfigOrigin: string | undefined;
   tsgoBinary: string;
 }): NodeJS.ProcessEnv {
@@ -205,7 +209,7 @@ function lspSidecarEnvironment(options: {
       process.env.TTSC_TTSX_BINARY ??
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
   };
-  const node = resolveNodeBinary(env);
+  const node = resolveNodeBinary(env, options.cwd);
   if (node === undefined) delete env.TTSC_NODE_BINARY;
   else env.TTSC_NODE_BINARY = node;
   if (options.pluginConfigOrigin === undefined) {
@@ -364,6 +368,7 @@ function captureInitialLSPProjectInputs(options: {
       );
     }
     const env = lspSidecarEnvironment({
+      cwd: options.project.root,
       pluginConfigOrigin: options.pluginConfigOrigin,
       tsgoBinary: options.tsgoBinary,
     });

@@ -259,7 +259,7 @@ export function buildSourcePlugin(opts: {
   fs.mkdirSync(cacheDir, { recursive: true });
   const label = opts.label ?? "source plugin";
   const quiet = opts.quiet === true;
-  return buildUnderPluginLock(
+  const built = buildUnderPluginLock(
     cacheDir,
     binaryPath,
     { label, pluginName: opts.pluginName, quiet },
@@ -283,6 +283,13 @@ export function buildSourcePlugin(opts: {
         source,
       }),
   );
+  if (managePluginCache) {
+    // The pre-build daily pass cannot account for the binary this cold build
+    // just published. Enforce the size policy after publication, once this
+    // process has released its per-key build lock.
+    prunePluginCacheRoot(pluginRoot, { force: true });
+  }
+  return built;
 }
 
 /** Run the actual `go build` and publish the binary; assumes the lock is held. */
@@ -3133,21 +3140,52 @@ function touchCacheEntry(cacheDir: string): void {
   }
 }
 
-function prunePluginCacheRoot(root: string): void {
+/** Test/internal controls for deterministic plugin-binary cache maintenance. */
+export interface IPluginCachePruneOptions {
+  /** Ignore the once-daily marker. */
+  force?: boolean;
+  /** Size that triggers LRU pruning. */
+  maxBytes?: number;
+  /** Injected clock for deterministic tests. */
+  now?: number;
+  /** Recent-entry protection window. */
+  protectedAgeMs?: number;
+  /** Size to prune toward once the ceiling is crossed. */
+  targetBytes?: number;
+}
+
+export function prunePluginCacheRoot(
+  root: string,
+  options: IPluginCachePruneOptions = {},
+): void {
   try {
     const cacheRoot = canonicalPluginCacheRoot(root);
     const marker = path.join(cacheRoot, CACHE_GC_MARKER_FILE);
-    const now = Date.now();
+    const now = options.now ?? Date.now();
     const lastRun = readTimestamp(marker);
     if (
+      options.force !== true &&
       lastRun !== null &&
       lastRun <= now &&
       now - lastRun < PLUGIN_CACHE_GC_INTERVAL_MS
     ) {
       return;
     }
-    replaceCacheMetadataFile(marker, `${now}\n`);
-    prunePluginCacheEntries(cacheRoot, now);
+    const remainingBytes = prunePluginCacheEntries(cacheRoot, {
+      maxBytes: options.maxBytes ?? PLUGIN_CACHE_MAX_BYTES,
+      now,
+      protectedAgeMs:
+        options.protectedAgeMs ?? PLUGIN_CACHE_PROTECTED_AGE_MS,
+      targetBytes: options.targetBytes ?? PLUGIN_CACHE_TARGET_BYTES,
+    });
+    const maxBytes = options.maxBytes ?? PLUGIN_CACHE_MAX_BYTES;
+    const protectedAgeMs =
+      options.protectedAgeMs ?? PLUGIN_CACHE_PROTECTED_AGE_MS;
+    const markerTimestamp =
+      remainingBytes > maxBytes
+        ? now - PLUGIN_CACHE_GC_INTERVAL_MS + protectedAgeMs
+        : now;
+    replaceCacheMetadataFile(marker, `${markerTimestamp}\n`);
   } catch {
     // Plugin-cache GC is opportunistic; builds still proceed when it fails.
   }
@@ -3185,30 +3223,78 @@ function canonicalPluginCacheEntry(root: string, key: string): string {
   return physicalDirectory;
 }
 
-function prunePluginCacheEntries(root: string, now: number): void {
-  const entries = collectPluginCacheEntries(root, now);
+function prunePluginCacheEntries(
+  root: string,
+  options: {
+    maxBytes: number;
+    now: number;
+    protectedAgeMs: number;
+    targetBytes: number;
+  },
+): number {
+  const entries = collectPluginCacheEntries(root, options.now);
   for (const entry of entries) {
-    if (now - entry.lastUsedAt <= PLUGIN_CACHE_ENTRY_MAX_AGE_MS) {
+    if (
+      options.now - entry.lastUsedAt <= PLUGIN_CACHE_ENTRY_MAX_AGE_MS ||
+      pluginCacheEntryHasActiveBuild(entry)
+    ) {
       continue;
     }
     removeCacheEntry(entry);
   }
 
-  const remaining = collectPluginCacheEntries(root, now);
+  const remaining = collectPluginCacheEntries(root, options.now);
   let total = remaining.reduce((sum, entry) => sum + entry.size, 0);
-  if (total <= PLUGIN_CACHE_MAX_BYTES) {
-    return;
+  if (total <= options.maxBytes) {
+    return total;
   }
-  for (const entry of remaining.sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
-    if (total <= PLUGIN_CACHE_TARGET_BYTES) {
-      return;
-    }
-    if (now - entry.lastUsedAt <= PLUGIN_CACHE_PROTECTED_AGE_MS) {
+  const protectedEntries = new Set<string>();
+  let protectedBytes = 0;
+  for (const entry of [...remaining].sort(
+    (a, b) => b.lastUsedAt - a.lastUsedAt,
+  )) {
+    if (pluginCacheEntryHasActiveBuild(entry)) {
+      protectedEntries.add(entry.dir);
       continue;
     }
-    removeCacheEntry(entry);
-    total -= entry.size;
+    if (options.now - entry.lastUsedAt > options.protectedAgeMs) continue;
+    if (protectedBytes >= options.targetBytes) continue;
+    if (protectedBytes + entry.size > options.targetBytes) continue;
+    protectedEntries.add(entry.dir);
+    protectedBytes += entry.size;
   }
+  for (const entry of remaining.sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
+    if (total <= options.targetBytes) {
+      return total;
+    }
+    if (protectedEntries.has(entry.dir)) continue;
+    if (removeCacheEntry(entry)) total -= entry.size;
+  }
+  return total;
+}
+
+/** Conservatively protect an entry while any build generation owns its key. */
+function pluginCacheEntryHasActiveBuild(entry: PluginCacheEntry): boolean {
+  const lockDir = `${entry.dir}.lock`;
+  const candidates = [
+    lockDir,
+    path.join(
+      pluginBuildLockProtocolDir(lockDir),
+      PLUGIN_BUILD_LOCK_CURRENT_DIR,
+    ),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const stats = fs.lstatSync(candidate);
+      if (stats.isDirectory() && !stats.isSymbolicLink()) return true;
+      // An unexpected link or file is ambiguous coordination state. GC must
+      // defer instead of deleting a cache entry another process may own.
+      return true;
+    } catch (error) {
+      if (!isMissingPathError(error)) return true;
+    }
+  }
+  return false;
 }
 
 /** Test/internal controls for deterministic Go object-cache maintenance. */
@@ -3849,10 +3935,12 @@ function directorySize(dir: string): number {
   return total;
 }
 
-function removeCacheEntry(entry: PluginCacheEntry): void {
+function removeCacheEntry(entry: PluginCacheEntry): boolean {
   try {
     fs.rmSync(entry.dir, { recursive: true, force: true });
+    return !fs.existsSync(entry.dir);
   } catch {
     // Windows may reject removal while a plugin binary is still running.
+    return false;
   }
 }

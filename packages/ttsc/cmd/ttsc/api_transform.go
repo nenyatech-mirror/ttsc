@@ -75,6 +75,9 @@ func runAPITransform(args []string) int {
   }
   typescript := map[string]string{}
   var graph *driver.TransformGraph
+  var hostInputs []string
+  var hostInputHashes map[string]*string
+  var hostInputRealpaths map[string]*string
   if prog != nil {
     defer prog.Close()
     // Compute the reference graph before SourceFiles() runs linked plugin
@@ -86,14 +89,17 @@ func runAPITransform(args []string) int {
       typescript[apiOutputKey(cwd, file.FileName())] = file.Text()
     }
     diags = append(diags, prog.Diagnostics()...)
+    hostInputs = prog.PluginHostInputs()
+    hostInputHashes = prog.PluginHostInputHashes()
+    hostInputRealpaths = prog.PluginHostInputRealpaths()
   }
 
   result := apiTransformResult{
     Diagnostics:        make([]apiCompileDiagnostic, 0, len(diags)),
     Graph:              graph,
-    HostInputs:         prog.PluginHostInputs(),
-    HostInputHashes:    prog.PluginHostInputHashes(),
-    HostInputRealpaths: prog.PluginHostInputRealpaths(),
+    HostInputs:         hostInputs,
+    HostInputHashes:    hostInputHashes,
+    HostInputRealpaths: hostInputRealpaths,
     TypeScript:         typescript,
   }
   for _, diag := range diags {

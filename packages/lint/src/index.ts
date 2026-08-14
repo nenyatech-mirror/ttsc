@@ -1032,7 +1032,7 @@ function optionalFileDigest(location: string): string {
     }
     if (entry.isDirectory()) {
       return createHash("sha256")
-        .update("ttsc:host-input:directory\0")
+        .update("ttsc:host-input:directory\\0")
         .digest("hex");
     }
   } catch {
@@ -1792,6 +1792,19 @@ function finalizeDependencies(): Array<{
   realpath: string | null;
   scope: "cache" | "watch";
 }> {
+  // The evaluator may have observed a dependency, run arbitrary config code,
+  // and then serialize after that path changed again. Re-read every recorded
+  // dependency under its original ownership set so an A -> B -> A transition
+  // is marked identity-unstable instead of pairing transient output with the
+  // restored fingerprint.
+  for (const dependency of [...dependencies.values()]) {
+    recordDependency(
+      dependency.kind,
+      dependency.path,
+      currentDependencyDigest(dependency.kind, dependency.path),
+      [...dependency.owners],
+    );
+  }
   const watched = graphWatchReachability();
   return [...dependencies.values()].map(({ owners, ...dependency }) => ({
     ...dependency,
@@ -1799,6 +1812,21 @@ function finalizeDependencies(): Array<{
       ? "watch"
       : "cache",
   }));
+}
+
+function currentDependencyDigest(
+  kind: "directory" | "file" | "optional-file",
+  location: string,
+): string {
+  if (kind === "directory") return directoryDigest(location);
+  if (kind === "optional-file") return optionalFileDigest(location);
+  try {
+    return createHash("sha256")
+      .update(fs.readFileSync(location))
+      .digest("hex");
+  } catch {
+    return "";
+  }
 }
 
 function graphWatchReachability(): Set<string> {
