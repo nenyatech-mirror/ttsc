@@ -23,9 +23,10 @@ type ModuleResolutionContext struct {
 
 // SupersedingModuleCandidates returns, per source-file envelope key, the
 // resolution candidates strictly ahead of each module target the loaded
-// program selected. A missing member can therefore become a freshness input
-// without making the whole resolution search (including lower-priority paths)
-// an invalidation input.
+// program selected. When the selected target is reported by physical path, it
+// also retains that candidate's lexical spelling. A missing member or a link
+// retarget can therefore become a freshness input without making the whole
+// resolution search (including lower-priority paths) an invalidation input.
 //
 // Candidate enumeration is host-owned. It mirrors the resident graph session's
 // speculation for relative modules, paths, rootDirs, package imports/exports,
@@ -75,7 +76,10 @@ func SupersedingModuleCandidates(prog *Program, cwd string) map[string][]string 
 }
 
 // ModuleResolutionPredecessors returns the paths in the host-owned candidate
-// search that precede resolvedFileName. An unresolved specifier keeps the full
+// search that precede resolvedFileName. When the compiler reports the winner by
+// physical realpath, the result also retains that selected candidate's lexical
+// spelling: retargeting its symlink/junction can change resolution without
+// changing the old or new target bytes. An unresolved specifier keeps the full
 // candidate list through ModuleResolutionCandidates; a resolved specifier must
 // not track a lower-priority path because creating it cannot alter resolution.
 func ModuleResolutionPredecessors(
@@ -101,7 +105,11 @@ func ModuleResolutionPredecessors(
   // spellings already agree pays nothing for it.
   for index, candidate := range candidates {
     if sameExistingPath(candidate, resolvedFileName) {
-      return compactStringsInOrder(candidates[:index])
+      end := index
+      if !sameCandidatePath(candidate, resolvedFileName, caseSensitive) {
+        end++
+      }
+      return compactStringsInOrder(candidates[:end])
     }
   }
   // Never widen freshness to candidates whose precedence relative to the

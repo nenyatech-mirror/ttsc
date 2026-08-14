@@ -69,11 +69,7 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
     const resolutionWorkspace = TestProject.tmpdir(
       "ttsc-lint-resolution-inputs-",
     );
-    const resolutionProject = path.join(
-      resolutionWorkspace,
-      "apps",
-      "app",
-    );
+    const resolutionProject = path.join(resolutionWorkspace, "apps", "app");
     const outerPackage = path.join(
       resolutionWorkspace,
       "node_modules",
@@ -91,16 +87,9 @@ export const test_ttsc_lint_descriptor_tracks_external_discovery_candidates =
       'module.exports = "warning";\n',
       "utf8",
     );
-    const resolutionConfig = path.join(
-      resolutionProject,
-      "lint.config.ts",
-    );
+    const resolutionConfig = path.join(resolutionProject, "lint.config.ts");
     const selectedModule = path.join(resolutionProject, "selection.js");
-    fs.writeFileSync(
-      selectedModule,
-      'module.exports = "warning";\n',
-      "utf8",
-    );
+    fs.writeFileSync(selectedModule, 'module.exports = "warning";\n', "utf8");
     fs.writeFileSync(
       resolutionConfig,
       [

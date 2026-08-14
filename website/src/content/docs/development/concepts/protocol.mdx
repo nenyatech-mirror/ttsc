@@ -468,7 +468,9 @@ Project-wide source transform used by `TtscCompiler.transform()` and in-memory c
     "edges": { "src/main.ts": ["src/types.ts"] },
     "globals": ["src/ambient.d.ts"],
     "configs": ["tsconfig.json", "tsconfig.base.json"],
-    "candidates": { "src/main.ts": ["src/generated.ts"] }
+    "candidates": { "src/main.ts": ["src/generated.ts"] },
+    "inputHashes": { "src/generated.ts": null },
+    "inputRealpaths": { "src/generated.ts": null }
   },
   "volatile": ["src/generated-from-env.ts"]
 }
@@ -483,7 +485,8 @@ Each value in `typescript` is written to disk **verbatim**. The host does not re
 - `edges`: per file, its **direct** resolved references — imports, re-exports, `/// <reference>` targets, type reference directives, type-only edges included. Direct edges are the minimal sufficient statistic (`tsbuildinfo` stores `referencedMap` the same way); consumers that need a flat per-file list compute the reachability closure themselves.
 - `globals`: files contributing to the global scope (ambient declaration files, script files, global augmentations, `typeRoots` entries); a change to any of them can affect every file.
 - `configs`: the project tsconfig followed by its `extends` ancestry.
-- `candidates`: per importer, resolution probes that precede its selected module target in TypeScript-Go's resolution order. A probe can be absent or already exist without resolving; its creation or change can change an unchanged import's meaning, so consumers watch and hash it. Paths below the selected target are omitted and do not invalidate a cache. This is the section's one optional member: a host with nothing to report leaves the key out entirely rather than sending an empty object, and `TtscCompiler.transform()` decodes it the same way.
+- `candidates`: per importer, resolution probes that precede its selected module target in TypeScript-Go's resolution order. A probe can be absent or already exist without resolving; its creation or change can change an unchanged import's meaning, so consumers watch and hash it. When the compiler reports a selected target by physical realpath, the list also retains that selected candidate's lexical spelling so retargeting its symlink or junction invalidates the generation. Paths below the selected target are omitted and do not invalidate a cache. A host with nothing to report leaves the key out entirely rather than sending an empty object, and `TtscCompiler.transform()` decodes it the same way.
+- `inputHashes` and `inputRealpaths`: optional, paired compiler-time proof for graph members. A lowercase SHA-256 of the text returned by the compiler filesystem plus an absolute physical path records an existing file; this follows TypeScript-Go's UTF-8/UTF-16 BOM decoding rather than hashing the encoded file bytes. The shared directory-kind digest records an existing directory candidate, and paired `null` values record a missing candidate. `driver.NewTransformGraph` stamps these from the filesystem observations that constructed the resident Program. A persistent host compares every graph member's generation proof with the post-compile state before it authorizes narrow reuse, so an in-project or external input that changes during compilation and returns to its original bytes cannot bless transient output. An executable sidecar that omits the section remains watch-correct: persistent adapters retain their pre/post snapshot for ordinary in-project members and conservatively decline narrow reuse when that graph reaches outside the project walk.
 
 For each transformed file, `@ttsc/unplugin` also registers the `candidates` of every importer in its `edges` reachability closure. Candidates remain host-owned even when a plugin declares complete dependencies because a plugin cannot vouch for a compiler-resolution change that occurs without any plugin input changing.
 

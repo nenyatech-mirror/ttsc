@@ -38,6 +38,14 @@ export const test_ttsccompiler_transform_drops_malformed_graph_members_and_volat
       configs: ["tsconfig.json"],
       edges: { "src/main.ts": ["src/good.d.ts"] },
       globals: [],
+      inputHashes: {
+        "src/good.d.ts": "a".repeat(64),
+        "src/missing.d.ts": null,
+      },
+      inputRealpaths: {
+        "src/good.d.ts": null,
+        "src/missing.d.ts": null,
+      },
     });
     assert.equal(result.volatile, undefined);
   };

@@ -160,14 +160,20 @@ export const test_loadprojectplugins_tracks_bun_esm_descriptor_dependencies =
     const observedSelection = loaded.hostInputs.find((input) =>
       sameExistingFile(input, selection),
     );
-    assert.ok(observedSelection !== undefined, JSON.stringify(loaded.hostInputs));
+    assert.ok(
+      observedSelection !== undefined,
+      JSON.stringify(loaded.hostInputs),
+    );
     assert.ok(
       loaded.hostInputs.some((input) =>
         sameMissingFile(input, `${selectionBase}.ts`),
       ),
       JSON.stringify(loaded.hostInputs),
     );
-    assert.equal(loaded.hostInputs.includes(path.join(project, "tsconfig.json")), false);
+    assert.equal(
+      loaded.hostInputs.includes(path.join(project, "tsconfig.json")),
+      false,
+    );
     const missingExplicitTs = path.join(explicitDirectory, "explicit.ts");
     assert.ok(
       loaded.hostInputs.includes(missingExplicitTs),

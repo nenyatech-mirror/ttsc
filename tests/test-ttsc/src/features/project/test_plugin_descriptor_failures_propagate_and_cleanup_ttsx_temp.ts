@@ -265,7 +265,7 @@ function assertEvaluatorCleanupPinsPhysicalTempDirectory(root: string): void {
       "const evaluatorDir = path.dirname(process.env.TTSC_PLUGIN_DESCRIPTOR_OUT);",
       'fs.writeFileSync(process.env.TTSC_TEST_EVALUATOR_MARKER, evaluatorDir, "utf8");',
       "fs.rmSync(process.env.TTSC_TEST_TEMP_ALIAS, { force: true, recursive: true });",
-      "fs.symlinkSync(process.env.TTSC_TEST_TEMP_RETARGET, process.env.TTSC_TEST_TEMP_ALIAS, process.platform === \"win32\" ? \"junction\" : \"dir\");",
+      'fs.symlinkSync(process.env.TTSC_TEST_TEMP_RETARGET, process.env.TTSC_TEST_TEMP_ALIAS, process.platform === "win32" ? "junction" : "dir");',
       "const victim = path.join(process.env.TTSC_TEST_TEMP_RETARGET, path.basename(evaluatorDir));",
       "fs.mkdirSync(victim, { recursive: true });",
       'fs.writeFileSync(process.env.TTSC_TEST_TEMP_SENTINEL, "owned", "utf8");',
@@ -316,7 +316,11 @@ function assertEvaluatorCleanupPinsPhysicalTempDirectory(root: string): void {
   assert.equal(fs.existsSync(marker), true, "direct evaluator did not run");
   const evaluatorDir = fs.readFileSync(marker, "utf8");
   assert.equal(fs.existsSync(evaluatorDir), false, evaluatorDir);
-  assert.equal(fs.existsSync(sentinel), true, "descriptor did not retarget TEMP");
+  assert.equal(
+    fs.existsSync(sentinel),
+    true,
+    "descriptor did not retarget TEMP",
+  );
   assert.equal(
     fs.existsSync(
       path.join(retargetTemp, path.basename(evaluatorDir), "sentinel.txt"),

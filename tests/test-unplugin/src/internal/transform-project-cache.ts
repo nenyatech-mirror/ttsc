@@ -22,6 +22,7 @@ import path from "node:path";
  */
 interface ICacheProjectOptions {
   emitExternalKey?: boolean;
+  externalSnapshotAbaRace?: boolean;
   fileCount?: number;
   graphFanout?: number;
   partitionGraph?: boolean;
@@ -931,6 +932,53 @@ async function assertCompileSnapshotAbaRaceCannotAuthorizeStaleOutput(): Promise
   assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
 }
 
+/** External graph input A-B-A churn obeys the same generation invariant. */
+async function assertExternalCompileSnapshotAbaRaceCannotAuthorizeStaleOutput(): Promise<void> {
+  const {
+    beginTtscTransformBuild,
+    createTtscTransformCache,
+    resolveOptions,
+    transformTtsc,
+  } = await TestUnpluginRuntime.loadUnpluginApi();
+  const project = createCacheProject({
+    externalSnapshotAbaRace: true,
+    fileCount: 2,
+    graphFanout: 1,
+  });
+  const cache = createTtscTransformCache();
+  beginTtscTransformBuild(cache);
+  const options = resolveOptions();
+  const main = path.join(project.root, "src", "mod0.ts");
+  const lazy = path.join(project.root, "src", "mod1.ts");
+
+  const first = await transformTtsc(
+    main,
+    fs.readFileSync(main, "utf8"),
+    options,
+    undefined,
+    cache,
+  );
+  assert.ok(first);
+  assert.match(first.code, /EXTERNAL-DURING/);
+  const firstGeneration = [...cache.values()][0];
+
+  const second = await transformTtsc(
+    lazy,
+    fs.readFileSync(lazy, "utf8"),
+    options,
+    undefined,
+    cache,
+  );
+  assert.ok(second);
+  assert.doesNotMatch(second.code, /EXTERNAL-DURING/);
+  assert.notEqual(
+    [...cache.values()][0],
+    firstGeneration,
+    "compiler-time external proof must reject restored post-compile bytes",
+  );
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
+}
+
 /**
  * Asserts a module candidate created after descriptor resolution cannot bless
  * the earlier descriptor result with the later filesystem state.
@@ -1162,8 +1210,14 @@ function createCacheProject(options: ICacheProjectOptions): {
     "mutated",
   );
   const snapshotRaceOriginal = 'export const value1: string = "PROBE";\n';
-  const snapshotRaceDuring =
-    'export const value1: string = "PROBE-DURING";\n';
+  const snapshotRaceDuring = 'export const value1: string = "PROBE-DURING";\n';
+  const externalRaceFile = path.join(
+    TestProject.tmpdir("ttsc-unplugin-external-race-"),
+    "external.d.ts",
+  );
+  if (options.externalSnapshotAbaRace === true) {
+    fs.writeFileSync(externalRaceFile, "EXTERNAL-ORIGINAL\n", "utf8");
+  }
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   for (let index = 0; index < fileCount; index += 1) {
     fs.writeFileSync(
@@ -1214,6 +1268,15 @@ function createCacheProject(options: ICacheProjectOptions): {
                     snapshotRaceOriginal,
                   }
                 : {}),
+              ...(options.externalSnapshotAbaRace === true
+                ? {
+                    externalRaceFile,
+                    externalRaceOriginal: "EXTERNAL-ORIGINAL\n",
+                    snapshotRaceDuring: "EXTERNAL-DURING\n",
+                    snapshotRaceFile: externalRaceFile,
+                    snapshotRaceMarker,
+                  }
+                : {}),
             },
           ],
         },
@@ -1231,12 +1294,6 @@ function createCacheProject(options: ICacheProjectOptions): {
       'const path = require("node:path");',
       "",
       "module.exports = (context) => {",
-      "  const raceFile = context.plugin.snapshotRaceFile;",
-      "  const raceMarker = context.plugin.snapshotRaceMarker;",
-      "  if (typeof raceFile === \"string\" && typeof raceMarker === \"string\" && !fs.existsSync(raceMarker)) {",
-      "    fs.writeFileSync(raceMarker, \"1\");",
-      "    fs.writeFileSync(raceFile, context.plugin.snapshotRaceDuring);",
-      "  }",
       "  return {",
       '    name: context.plugin.name ?? "cache-probe",',
       '    source: path.resolve(context.dirname, "go-plugin"),',
@@ -1291,6 +1348,7 @@ function writeGoPlugin(root: string): void {
       "package main",
       "",
       "import (",
+      '  "crypto/sha256"',
       '  "encoding/json"',
       '  "flag"',
       '  "fmt"',
@@ -1307,6 +1365,8 @@ function writeGoPlugin(root: string): void {
       '  Edges   map[string][]string `json:"edges"`',
       '  Globals []string            `json:"globals"`',
       '  Configs []string            `json:"configs"`',
+      '  InputHashes map[string]*string `json:"inputHashes,omitempty"`',
+      '  InputRealpaths map[string]*string `json:"inputRealpaths,omitempty"`',
       "}",
       "",
       "type transformResult struct {",
@@ -1348,6 +1408,7 @@ function writeGoPlugin(root: string): void {
       "  }",
       "",
       "  ts := map[string]string{}",
+      "  observedInputs := map[string]string{}",
       '  srcDir := filepath.Join(root, "src")',
       "  entries, err := os.ReadDir(srcDir)",
       "  if err != nil { fmt.Fprintln(os.Stderr, err); return 2 }",
@@ -1357,11 +1418,42 @@ function writeGoPlugin(root: string): void {
       "    names = append(names, e.Name())",
       "  }",
       "  for _, name := range names {",
-      "    data, err := os.ReadFile(filepath.Join(srcDir, name))",
+      "    file := filepath.Join(srcDir, name)",
+      '    raceFile := stringValue(cfg, "snapshotRaceFile")',
+      '    raceMarker := stringValue(cfg, "snapshotRaceMarker")',
+      '    if raceFile != "" && filepath.Clean(file) == filepath.Clean(raceFile) && raceMarker != "" {',
+      "      if _, statErr := os.Stat(raceMarker); os.IsNotExist(statErr) {",
+      '        os.WriteFile(raceMarker, []byte("1"), 0o644)',
+      '        os.WriteFile(file, []byte(stringValue(cfg, "snapshotRaceDuring")), 0o644)',
+      "      }",
+      "    }",
+      "    data, err := os.ReadFile(file)",
       "    if err != nil { fmt.Fprintln(os.Stderr, err); return 2 }",
-      '    ts["src/"+name] = strings.ReplaceAll(string(data), "PROBE", "PROBED")',
-      '    if raceFile := stringValue(cfg, "snapshotRaceFile"); raceFile != "" && filepath.Clean(filepath.Join(srcDir, name)) == filepath.Clean(raceFile) && strings.Contains(string(data), "PROBE-DURING") {',
+      '    input := "src/"+name',
+      "    observedInputs[input] = string(data)",
+      '    ts[input] = strings.ReplaceAll(string(data), "PROBE", "PROBED")',
+      '    if raceFile != "" && filepath.Clean(file) == filepath.Clean(raceFile) && stringValue(cfg, "snapshotRaceOriginal") != "" {',
       '      if err := os.WriteFile(raceFile, []byte(stringValue(cfg, "snapshotRaceOriginal")), 0o644); err != nil { fmt.Fprintln(os.Stderr, err); return 2 }',
+      "    }",
+      "  }",
+      '  externalRaceFile := stringValue(cfg, "externalRaceFile")',
+      '  externalRaceOriginal := stringValue(cfg, "externalRaceOriginal")',
+      '  externalRaceText := ""',
+      '  if externalRaceFile != "" {',
+      '    raceMarker := stringValue(cfg, "snapshotRaceMarker")',
+      '    if raceMarker != "" {',
+      "      if _, statErr := os.Stat(raceMarker); os.IsNotExist(statErr) {",
+      '        os.WriteFile(raceMarker, []byte("1"), 0o644)',
+      '        os.WriteFile(externalRaceFile, []byte(stringValue(cfg, "snapshotRaceDuring")), 0o644)',
+      "      }",
+      "    }",
+      "    data, readErr := os.ReadFile(externalRaceFile)",
+      "    if readErr != nil { fmt.Fprintln(os.Stderr, readErr); return 2 }",
+      "    externalRaceText = string(data)",
+      "    observedInputs[externalRaceFile] = externalRaceText",
+      '    for key, value := range ts { ts[key] = value + "// " + strings.TrimSpace(externalRaceText) + "\\n" }',
+      '    if externalRaceOriginal != "" {',
+      "      if writeErr := os.WriteFile(externalRaceFile, []byte(externalRaceOriginal), 0o644); writeErr != nil { fmt.Fprintln(os.Stderr, writeErr); return 2 }",
       "    }",
       "  }",
       '  if boolValue(cfg, "emitExternal") {',
@@ -1391,12 +1483,36 @@ function writeGoPlugin(root: string): void {
       "      Edges:      edges,",
       "      Globals:    []string{},",
       '      Configs:    []string{"tsconfig.json"},',
+      "      InputHashes: map[string]*string{},",
+      "      InputRealpaths: map[string]*string{},",
+      "    }",
+      "    for input, observed := range observedInputs { addGraphInputProof(result.Graph, root, input, observed) }",
+      '    addGraphInputProof(result.Graph, root, "tsconfig.json", "")',
+      '    for _, input := range externals { addGraphInputProof(result.Graph, root, input, "") }',
+      '    if externalRaceFile != "" {',
+      '      result.Graph.Edges["src/mod0.ts"] = append(result.Graph.Edges["src/mod0.ts"], externalRaceFile)',
+      "      addGraphInputProof(result.Graph, root, externalRaceFile, externalRaceText)",
       "    }",
       "  }",
       "",
       "  data, _ := json.Marshal(result)",
       "  fmt.Fprintln(os.Stdout, string(data))",
       "  return 0",
+      "}",
+      "",
+      "func addGraphInputProof(graph *graphSection, root, input, observed string) {",
+      "  file := input",
+      "  if !filepath.IsAbs(file) { file = filepath.Join(root, filepath.FromSlash(file)) }",
+      "  data := []byte(observed)",
+      '  if observed == "" { data, _ = os.ReadFile(file) }',
+      "  digest := sha256.Sum256(data)",
+      '  hash := fmt.Sprintf("%x", digest[:])',
+      "  realpath, err := filepath.EvalSymlinks(file)",
+      "  if err != nil { graph.InputHashes[input] = nil; graph.InputRealpaths[input] = nil; return }",
+      "  absolute, err := filepath.Abs(realpath)",
+      "  if err != nil { return }",
+      "  graph.InputHashes[input] = &hash",
+      "  graph.InputRealpaths[input] = &absolute",
       "}",
       "",
       "func firstConfig(input string) map[string]any {",
@@ -1432,6 +1548,7 @@ export {
   assertCacheTransformsMultiFileProjectOnce,
   assertCompileSnapshotRaceCannotAuthorizeStaleOutput,
   assertCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
+  assertExternalCompileSnapshotAbaRaceCannotAuthorizeStaleOutput,
   assertDescriptorInputRaceCannotAuthorizeStaleGeneration,
   assertConcurrentTransformsCompileOnce,
   assertFirstModuleDeliveriesDoNotRehashProject,

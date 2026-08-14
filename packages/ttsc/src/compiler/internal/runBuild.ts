@@ -211,13 +211,13 @@ function nativePluginEnv(
 ): NodeJS.ProcessEnv {
   const env = mergeEnv(
     {
-    ...(execution.pluginConfigDir === undefined
-      ? {}
-      : { TTSC_PLUGIN_CONFIG_DIR: execution.pluginConfigDir }),
-    TTSC_TSGO_BINARY: process.env.TTSC_TSGO_BINARY ?? execution.tsgo.binary,
-    TTSC_TTSX_BINARY:
-      process.env.TTSC_TTSX_BINARY ??
-      path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
+      ...(execution.pluginConfigDir === undefined
+        ? {}
+        : { TTSC_PLUGIN_CONFIG_DIR: execution.pluginConfigDir }),
+      TTSC_TSGO_BINARY: process.env.TTSC_TSGO_BINARY ?? execution.tsgo.binary,
+      TTSC_TTSX_BINARY:
+        process.env.TTSC_TTSX_BINARY ??
+        path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
       ...extra,
     },
     execution.projectRoot,

@@ -21,8 +21,8 @@ import {
   formatDuration,
   formatGoWorkPath,
   inspectPluginBuildLock,
-  prunePluginCacheRoot,
   pruneGoBuildCacheRoot,
+  prunePluginCacheRoot,
   reclaimPluginBuildLock,
   releasePluginBuildLock,
   resolvePluginCacheRoot,
@@ -56,8 +56,8 @@ import {
  *   writing the output binary, simulating a failed compile.
  * - `FAKE_GO_BUILD_CACHE_OBJECT_COUNT`: write this many four-byte, old objects
  *   into `GOCACHE`, allowing post-build size maintenance to be tested.
- * - `FAKE_GO_BUILD_CACHE_MARKER_VALUE`: overwrite `GOCACHE/.ttsc-gc` during
- *   the build, so a caller can prove post-build maintenance replaces it.
+ * - `FAKE_GO_BUILD_CACHE_MARKER_VALUE`: overwrite `GOCACHE/.ttsc-gc` during the
+ *   build, so a caller can prove post-build maintenance replaces it.
  */
 function createFakeGoBinary(
   root: string,

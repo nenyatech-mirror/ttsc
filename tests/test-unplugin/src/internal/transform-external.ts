@@ -4,6 +4,7 @@ import {
   TestUnpluginRuntime,
 } from "@ttsc/testing";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -187,7 +188,7 @@ export async function assertCacheInvalidatesThroughExternalGraphEdge(): Promise<
 
 /**
  * Asserts an in-root filesystem link remains outside the project-walk hash
- * universe and its target content invalidates a cached generation.
+ * universe and a same-content target retarget invalidates a cached generation.
  */
 export async function assertCacheInvalidatesThroughLinkedGraphEdge(): Promise<void> {
   const {
@@ -196,13 +197,19 @@ export async function assertCacheInvalidatesThroughLinkedGraphEdge(): Promise<vo
     transformTtsc,
     createTtscTransformCache,
   } = await TestUnpluginRuntime.loadUnpluginApi();
-  const shared = TestProject.tmpdir("ttsc-unplugin-linked-");
-  const target = path.join(shared, "types.d.ts");
-  fs.writeFileSync(target, "declare const first: string;\n", "utf8");
   const root = TestUnpluginProject.createProject({ plugins: [] });
+  const targetRoot = path.join(root, "targets");
+  const firstTarget = path.join(targetRoot, "first");
+  const secondTarget = path.join(targetRoot, "second");
+  const declaration = "\ufeffdeclare const selected: string;\n";
+  const compilerText = declaration.slice(1);
+  fs.mkdirSync(firstTarget, { recursive: true });
+  fs.mkdirSync(secondTarget);
+  fs.writeFileSync(path.join(firstTarget, "types.d.ts"), declaration, "utf8");
+  fs.writeFileSync(path.join(secondTarget, "types.d.ts"), declaration, "utf8");
   const linkedDirectory = path.join(root, "linked");
   fs.symlinkSync(
-    shared,
+    firstTarget,
     linkedDirectory,
     process.platform === "win32" ? "junction" : "dir",
   );
@@ -220,20 +227,67 @@ export async function assertCacheInvalidatesThroughLinkedGraphEdge(): Promise<vo
   const options = resolveOptions({
     plugins: emitGraphPlugins({
       edges: { "src/main.ts": ["linked/types.d.ts"] },
+      inputHashes: {
+        "linked/types.d.ts": crypto
+          .createHash("sha256")
+          .update(compilerText)
+          .digest("hex"),
+      },
+      inputRealpaths: {
+        "linked/types.d.ts": fs.realpathSync.native(linked),
+      },
     }),
   });
   const cache = createTtscTransformCache();
+  const watched: string[] = [];
   const before = await transformTtsc(
     TestUnpluginProject.mainFile(root),
     TestUnpluginProject.mainSource(root),
     options,
     undefined,
     cache,
+    { addWatchFile: (input: string) => watched.push(input) },
   );
   assert.ok(before);
-  const generation = cacheEntry(cache);
+  assert.ok(
+    watched.includes(linked),
+    "watch registration must preserve the lexical linked input",
+  );
+  const generation = [...cache.values()][0]!;
+  const generationState = await generation;
+  assert.equal(generationState.result.type, "success");
+  const linkedProofHash =
+    generationState.result.graph?.inputHashes?.["linked/types.d.ts"];
+  assert.ok(
+    typeof linkedProofHash === "string" &&
+      /^[0-9a-f]{64}$/.test(linkedProofHash),
+    "synthetic graph host must publish a content proof for the linked input",
+  );
+  assert.equal(
+    generationState.result.graph?.inputRealpaths?.["linked/types.d.ts"],
+    fs.realpathSync.native(linked),
+  );
 
-  fs.writeFileSync(target, "declare const second: string;\n", "utf8");
+  const unchanged = await transformTtsc(
+    TestUnpluginProject.mainFile(root),
+    TestUnpluginProject.mainSource(root),
+    options,
+    undefined,
+    cache,
+  );
+  assert.ok(unchanged);
+  assert.strictEqual([...cache.values()][0], generation);
+
+  // Notifications are advisory. Close both trackers so the next assertion
+  // specifically proves the compiler-time selected-realpath fingerprint.
+  generationState.projectMutationTracker?.close();
+  generationState.hostInputMutationTracker?.close();
+  fs.rmSync(linkedDirectory, { force: true, recursive: true });
+  fs.symlinkSync(
+    secondTarget,
+    linkedDirectory,
+    process.platform === "win32" ? "junction" : "dir",
+  );
   const after = await transformTtsc(
     TestUnpluginProject.mainFile(root),
     TestUnpluginProject.mainSource(root),
@@ -242,7 +296,7 @@ export async function assertCacheInvalidatesThroughLinkedGraphEdge(): Promise<vo
     cache,
   );
   assert.ok(after);
-  assert.notStrictEqual(cacheEntry(cache), generation);
+  assert.notStrictEqual([...cache.values()][0], generation);
 }
 
 /**

@@ -787,11 +787,15 @@ function parseReferenceGraph(
     configs?: unknown;
     edges?: unknown;
     globals?: unknown;
+    inputHashes?: unknown;
+    inputRealpaths?: unknown;
   };
   const candidates = parseDependencyLists(section.candidates) ?? {};
   const edges = parseDependencyLists(section.edges) ?? {};
   const globals = parseFileList(section.globals) ?? [];
   const configs = parseFileList(section.configs) ?? [];
+  const inputHashes = parseGraphInputHashes(section.inputHashes);
+  const inputRealpaths = parseGraphInputRealpaths(section.inputRealpaths);
   if (
     Object.keys(candidates).length === 0 &&
     Object.keys(edges).length === 0 &&
@@ -800,9 +804,56 @@ function parseReferenceGraph(
   ) {
     return undefined;
   }
-  return Object.keys(candidates).length === 0
-    ? { configs, edges, globals }
-    : { candidates, configs, edges, globals };
+  return {
+    ...(Object.keys(candidates).length === 0 ? {} : { candidates }),
+    configs,
+    edges,
+    globals,
+    ...(inputHashes === undefined ? {} : { inputHashes }),
+    ...(inputRealpaths === undefined ? {} : { inputRealpaths }),
+  };
+}
+
+/** Parse graph-keyed compiler-time content/null observations. */
+function parseGraphInputHashes(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, hash] of Object.entries(value)) {
+    if (
+      file.length === 0 ||
+      (hash !== null &&
+        (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)))
+    ) {
+      continue;
+    }
+    output[file] = hash;
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
+}
+
+/** Parse graph-keyed compiler-time physical/null identities. */
+function parseGraphInputRealpaths(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, realpath] of Object.entries(value)) {
+    if (
+      file.length === 0 ||
+      (realpath !== null &&
+        (typeof realpath !== "string" || !path.isAbsolute(realpath)))
+    ) {
+      continue;
+    }
+    output[file] = realpath === null ? null : path.resolve(realpath);
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
 }
 
 /**

@@ -577,15 +577,21 @@ async function assertPersistentUtilityConfigLinkRetargetInvalidatesTransform() {
   const file = TestUnpluginProject.mainFile(root);
   const source = TestUnpluginProject.mainSource(root);
   const cache = createTtscTransformCache();
+  const watched: string[] = [];
   const first = await transformTtsc(
     file,
     source,
     resolveOptions(),
     undefined,
     cache,
+    { addWatchFile: (input: string) => watched.push(input) },
   );
   assert.ok(first);
   assert.match(first.code, /OLD LINK TARGET/);
+  assert.ok(
+    watched.includes(path.join(link, "selection.cjs")),
+    "watch registration must preserve the lexical link spelling",
+  );
   const firstGeneration = [...cache.values()][0];
 
   const second = await transformTtsc(
@@ -601,9 +607,17 @@ async function assertPersistentUtilityConfigLinkRetargetInvalidatesTransform() {
   assert.doesNotMatch(second.code, /OLD LINK TARGET/);
 
   const secondGeneration = [...cache.values()][0]!;
+  const secondGenerationState = await secondGeneration;
+  assert.equal(secondGenerationState.result.type, "success");
+  const linkedSelection = path.join(link, "selection.cjs");
+  assert.ok(secondGenerationState.result.hostInputs?.includes(linkedSelection));
+  assert.equal(
+    secondGenerationState.result.hostInputRealpaths?.[linkedSelection],
+    fs.realpathSync.native(linkedSelection),
+  );
   // Filesystem notifications are advisory. Close the exact-input watcher to
   // prove metadata validation independently rejects a same-byte link retarget.
-  secondGeneration.hostInputMutationTracker?.close();
+  secondGenerationState.hostInputMutationTracker?.close();
   fs.rmSync(link, { force: true, recursive: true });
   fs.symlinkSync(
     oldTarget,

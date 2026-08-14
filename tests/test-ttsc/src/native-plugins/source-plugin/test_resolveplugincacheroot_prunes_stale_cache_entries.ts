@@ -21,8 +21,8 @@ import {
  *    happen in a pre-populated project cache.
  * 3. Resolve the default plugin cache root (no cacheDir/TTSC_CACHE_DIR override).
  * 4. Assert the stale entry is removed while fresh data and fences remain.
- * 5. Point another default plugin-cache leaf at an external directory and
- *    assert opportunistic GC never follows the junction to delete its entries.
+ * 5. Point another default plugin-cache leaf at an external directory and assert
+ *    opportunistic GC never follows the junction to delete its entries.
  */
 export const test_resolveplugincacheroot_prunes_stale_cache_entries = () => {
   const root = TestProject.tmpdir("ttsc-cache-gc-");
@@ -55,6 +55,8 @@ export const test_resolveplugincacheroot_prunes_stale_cache_entries = () => {
     fs.writeFileSync(path.join(stale, "plugin"), "stale\n", "utf8");
     fs.writeFileSync(path.join(fresh, "plugin"), "fresh\n", "utf8");
     const now = Date.now();
+    const abandoned = new Date(now - 31 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(lock, abandoned, abandoned);
     fs.writeFileSync(
       path.join(stale, ".last-used"),
       `${now - 31 * 24 * 60 * 60 * 1000}\n`,

@@ -197,6 +197,7 @@ type Program struct {
   checkerRelease  func()
   Host            shimcompiler.CompilerHost
   FS              vfs.FS
+  inputObserver   *inputObservationFS
   SourcePreamble  string
   plugins         linkedPluginState
   pluginsApplied  bool
@@ -374,6 +375,8 @@ func LoadProgram(cwd, tsconfigPath string, options LoadProgramOptions) (*Program
   if fs == nil {
     fs = DefaultFS()
   }
+  inputObserver := newInputObservationFS(fs)
+  fs = inputObserver
   if options.SourcePreamble != "" {
     fs = sourcePreambleFS{
       FS:       fs,
@@ -422,6 +425,7 @@ func LoadProgram(cwd, tsconfigPath string, options LoadProgramOptions) (*Program
     checkerRelease: done,
     Host:           host,
     FS:             fs,
+    inputObserver:  inputObserver,
     SourcePreamble: options.SourcePreamble,
   }
   prog.plugins = pluginState

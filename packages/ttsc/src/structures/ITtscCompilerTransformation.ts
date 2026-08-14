@@ -65,6 +65,17 @@ export namespace ITtscCompilerTransformation {
      * the same observation on the wire and after decoding.
      */
     candidates?: Record<string, string[]>;
+
+    /**
+     * SHA-256/null states returned by the compiler filesystem while this graph
+     * was being resolved, keyed in the same vocabulary as {@link edges}.
+     * Persistent hosts use them to reject a graph whose external file or
+     * superseding candidate changed during compilation.
+     */
+    inputHashes?: Record<string, string | null>;
+
+    /** Compiler-time physical identities paired with {@link inputHashes}. */
+    inputRealpaths?: Record<string, string | null>;
   }
 
   /** Successful source-to-source transformation result. */

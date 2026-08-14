@@ -154,11 +154,11 @@ export const test_gobuildcache_prunes_lru_objects_outside_active_build_leases =
     const externalLease = path.join(root, "external-lease-record.json");
     let externalLeaseContents = "";
     withGoBuildCacheLease(linkedLeaseCache, true, () => {
-      const leaseDirectory = path.join(
-        linkedLeaseCache,
-        ".ttsc-build-leases",
+      const leaseDirectory = path.join(linkedLeaseCache, ".ttsc-build-leases");
+      const lease = path.join(
+        leaseDirectory,
+        fs.readdirSync(leaseDirectory)[0]!,
       );
-      const lease = path.join(leaseDirectory, fs.readdirSync(leaseDirectory)[0]!);
       externalLeaseContents = fs.readFileSync(lease, "utf8");
       fs.linkSync(lease, externalLease);
     });

@@ -242,11 +242,7 @@ export function buildSourcePlugin(opts: {
   const pluginRoot = managePluginCache
     ? canonicalPluginCacheRoot(paths.pluginRoot)
     : paths.pluginRoot;
-  maybePruneSourceBuildCaches(
-    { ...paths, pluginRoot },
-    opts.cacheDir,
-    env,
-  );
+  maybePruneSourceBuildCaches({ ...paths, pluginRoot }, opts.cacheDir, env);
   const cacheDir = managePluginCache
     ? canonicalPluginCacheEntry(pluginRoot, key)
     : path.join(pluginRoot, key);
@@ -287,7 +283,10 @@ export function buildSourcePlugin(opts: {
     // The pre-build daily pass cannot account for the binary this cold build
     // just published. Enforce the size policy after publication, once this
     // process has released its per-key build lock.
-    prunePluginCacheRoot(pluginRoot, { force: true });
+    prunePluginCacheRoot(pluginRoot, {
+      force: true,
+      protectedEntries: [cacheDir],
+    });
   }
   return built;
 }
@@ -3150,6 +3149,8 @@ export interface IPluginCachePruneOptions {
   now?: number;
   /** Recent-entry protection window. */
   protectedAgeMs?: number;
+  /** Entries whose binary was returned by the current cold build. */
+  protectedEntries?: readonly string[];
   /** Size to prune toward once the ceiling is crossed. */
   targetBytes?: number;
 }
@@ -3174,8 +3175,11 @@ export function prunePluginCacheRoot(
     const remainingBytes = prunePluginCacheEntries(cacheRoot, {
       maxBytes: options.maxBytes ?? PLUGIN_CACHE_MAX_BYTES,
       now,
-      protectedAgeMs:
-        options.protectedAgeMs ?? PLUGIN_CACHE_PROTECTED_AGE_MS,
+      protectedEntries: canonicalPluginCacheProtectedEntries(
+        cacheRoot,
+        options.protectedEntries ?? [],
+      ),
+      protectedAgeMs: options.protectedAgeMs ?? PLUGIN_CACHE_PROTECTED_AGE_MS,
       targetBytes: options.targetBytes ?? PLUGIN_CACHE_TARGET_BYTES,
     });
     const maxBytes = options.maxBytes ?? PLUGIN_CACHE_MAX_BYTES;
@@ -3189,6 +3193,29 @@ export function prunePluginCacheRoot(
   } catch {
     // Plugin-cache GC is opportunistic; builds still proceed when it fails.
   }
+}
+
+/** Resolve explicit GC exclusions without allowing an alias outside root. */
+function canonicalPluginCacheProtectedEntries(
+  root: string,
+  entries: readonly string[],
+): Set<string> {
+  const protectedEntries = new Set<string>();
+  for (const entry of entries) {
+    const candidate = path.resolve(entry);
+    const stats = fs.lstatSync(candidate);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`ttsc: unsafe protected plugin cache entry: ${entry}`);
+    }
+    const physical = fs.realpathSync.native(candidate);
+    if (path.dirname(physical) !== root) {
+      throw new Error(
+        `ttsc: protected plugin cache entry escaped root: ${entry}`,
+      );
+    }
+    protectedEntries.add(physical);
+  }
+  return protectedEntries;
 }
 
 /** Pin the default plugin cache to one ordinary physical directory. */
@@ -3229,6 +3256,7 @@ function prunePluginCacheEntries(
     maxBytes: number;
     now: number;
     protectedAgeMs: number;
+    protectedEntries: ReadonlySet<string>;
     targetBytes: number;
   },
 ): number {
@@ -3236,7 +3264,8 @@ function prunePluginCacheEntries(
   for (const entry of entries) {
     if (
       options.now - entry.lastUsedAt <= PLUGIN_CACHE_ENTRY_MAX_AGE_MS ||
-      pluginCacheEntryHasActiveBuild(entry)
+      options.protectedEntries.has(entry.dir) ||
+      pluginCacheEntryHasActiveBuild(entry, options.now)
     ) {
       continue;
     }
@@ -3248,12 +3277,12 @@ function prunePluginCacheEntries(
   if (total <= options.maxBytes) {
     return total;
   }
-  const protectedEntries = new Set<string>();
+  const protectedEntries = new Set<string>(options.protectedEntries);
   let protectedBytes = 0;
   for (const entry of [...remaining].sort(
     (a, b) => b.lastUsedAt - a.lastUsedAt,
   )) {
-    if (pluginCacheEntryHasActiveBuild(entry)) {
+    if (pluginCacheEntryHasActiveBuild(entry, options.now)) {
       protectedEntries.add(entry.dir);
       continue;
     }
@@ -3274,27 +3303,17 @@ function prunePluginCacheEntries(
 }
 
 /** Conservatively protect an entry while any build generation owns its key. */
-function pluginCacheEntryHasActiveBuild(entry: PluginCacheEntry): boolean {
+function pluginCacheEntryHasActiveBuild(
+  entry: PluginCacheEntry,
+  now: number,
+): boolean {
   const lockDir = `${entry.dir}.lock`;
-  const candidates = [
-    lockDir,
-    path.join(
-      pluginBuildLockProtocolDir(lockDir),
-      PLUGIN_BUILD_LOCK_CURRENT_DIR,
-    ),
-  ];
-  for (const candidate of candidates) {
-    try {
-      const stats = fs.lstatSync(candidate);
-      if (stats.isDirectory() && !stats.isSymbolicLink()) return true;
-      // An unexpected link or file is ambiguous coordination state. GC must
-      // defer instead of deleting a cache entry another process may own.
-      return true;
-    } catch (error) {
-      if (!isMissingPathError(error)) return true;
-    }
+  try {
+    return inspectPluginBuildLock(lockDir, now).state === "active";
+  } catch {
+    // Malformed or unreadable coordination state cannot disprove ownership.
+    return true;
   }
-  return false;
 }
 
 /** Test/internal controls for deterministic Go object-cache maintenance. */

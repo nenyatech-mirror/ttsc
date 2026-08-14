@@ -86,6 +86,12 @@ export interface TtscCachedProjectTransform {
    */
   externalInputHashes?: Record<string, string>;
   /**
+   * Compiler-time physical identities for graph-owned entries in
+   * {@link externalInputHashes}. Dependency-only paths have no generation
+   * realpath protocol and therefore omit this evidence.
+   */
+  externalInputRealpaths?: Record<string, string | null>;
+  /**
    * Original absolute spellings of {@link externalInputHashes} inputs. These
    * stay separate from their identity keys so validation reads the paths the
    * compiler reported rather than a normalized replacement spelling.
@@ -511,7 +517,7 @@ interface TtscEnvelopeDerivation {
 }
 
 interface TtscHostInputValidation {
-  /** Files/non-files that existed when the generation was captured. */
+  /** Lexical input spellings that existed when the generation was captured. */
   readonly entries: Map<
     string,
     {
@@ -541,6 +547,15 @@ interface TtscEnvelopeGraphIndexes {
   /** Resolved absolute `graph.globals` and `graph.configs` members. */
   readonly globals: string[];
   readonly configs: string[];
+  /** Every realized/candidate graph path, keyed by filesystem identity. */
+  readonly members: Set<string>;
+  /** Compiler-time proof for graph members, keyed by filesystem identity. */
+  readonly inputProofs: Map<
+    string,
+    { hash: string | null; path: string; realpath: string | null }
+  >;
+  /** Aliased graph proof keys that reported contradictory generation states. */
+  readonly inputProofConflicts: Set<string>;
 }
 
 /**
@@ -592,6 +607,9 @@ function envelopeGraphIndexes(
     candidates: [],
     globals: [],
     configs: [],
+    members: new Set(),
+    inputProofs: new Map(),
+    inputProofConflicts: new Set(),
   };
   const graph =
     props.result.type === "exception" ? undefined : props.result.graph;
@@ -602,6 +620,7 @@ function envelopeGraphIndexes(
       }
       const absolute = path.resolve(props.projectRoot, source);
       const identity = derivationIdentity(state, absolute);
+      built.members.add(identity);
       built.spellings.set(identity, absolute);
       const entries = built.edges.get(identity) ?? [];
       entries.push(
@@ -610,23 +629,84 @@ function envelopeGraphIndexes(
             (target): target is string =>
               typeof target === "string" && target.length !== 0,
           )
-          .map((target) => path.resolve(props.projectRoot, target)),
+          .map((target) => {
+            const absoluteTarget = path.resolve(props.projectRoot, target);
+            built.members.add(derivationIdentity(state, absoluteTarget));
+            return absoluteTarget;
+          }),
       );
       built.edges.set(identity, entries);
     }
     built.globals.push(...selectListedFiles(props.projectRoot, graph.globals));
     built.configs.push(...selectListedFiles(props.projectRoot, graph.configs));
+    for (const input of [...built.globals, ...built.configs]) {
+      built.members.add(derivationIdentity(state, input));
+    }
     for (const [source, candidates] of Object.entries(graph.candidates ?? {})) {
       if (!Array.isArray(candidates)) {
         continue;
       }
+      const sourceIdentity = derivationIdentity(
+        state,
+        path.resolve(props.projectRoot, source),
+      );
+      built.members.add(sourceIdentity);
       built.candidates.push({
-        source: derivationIdentity(
-          state,
-          path.resolve(props.projectRoot, source),
-        ),
+        source: sourceIdentity,
         files: selectListedFiles(props.projectRoot, candidates),
       });
+      for (const candidate of candidates) {
+        if (typeof candidate !== "string" || candidate.length === 0) continue;
+        built.members.add(
+          derivationIdentity(state, path.resolve(props.projectRoot, candidate)),
+        );
+      }
+    }
+    for (const [input, hash] of Object.entries(graph.inputHashes ?? {})) {
+      if (
+        hash !== null &&
+        (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash))
+      ) {
+        continue;
+      }
+      if (
+        graph.inputRealpaths === undefined ||
+        !Object.prototype.hasOwnProperty.call(graph.inputRealpaths, input)
+      ) {
+        continue;
+      }
+      const reportedRealpath = graph.inputRealpaths[input];
+      if (
+        reportedRealpath !== null &&
+        (typeof reportedRealpath !== "string" ||
+          !path.isAbsolute(reportedRealpath))
+      ) {
+        continue;
+      }
+      const absolute = path.resolve(props.projectRoot, input);
+      const identity = derivationIdentity(state, absolute);
+      if (!built.members.has(identity)) continue;
+      const proof = {
+        hash,
+        path: absolute,
+        realpath:
+          reportedRealpath === null ? null : path.resolve(reportedRealpath),
+      };
+      const previous = built.inputProofs.get(identity);
+      if (
+        previous !== undefined &&
+        (previous.hash !== proof.hash ||
+          !sameHostInputRealpath(
+            previous.realpath,
+            proof.realpath,
+            state.identityContext,
+          ))
+      ) {
+        built.inputProofs.delete(identity);
+        built.inputProofConflicts.add(identity);
+      } else if (!built.inputProofConflicts.has(identity)) {
+        built.inputProofs.set(identity, proof);
+      }
     }
   }
   state.graph = built;
@@ -761,29 +841,52 @@ function deriveWatchInputs(
 ): string[] {
   const graph = envelopeGraphIndexes(state, props);
   const output: string[] = [];
-  const seen = new Set<string>();
+  const physicalSeen = new Set<string>();
+  const lexicalSeen = new Set<string>();
   const excluded = new Set([fileIdentity]);
   if (props.temporaryTsconfig !== undefined) {
     excluded.add(derivationIdentity(state, props.temporaryTsconfig));
   }
-  for (const absolute of [
-    ...selectFileDependencies(props),
-    ...selectGraphInputs(graph, state, {
-      ...props,
-      complete:
-        declaresCompleteDependencies(state, props) &&
-        !isVolatileFile(state, props),
-    }),
-    ...selectHostInputs(props),
-    ...selectResolutionCandidateInputs(graph, state, props),
-  ]) {
-    const identity = derivationIdentity(state, absolute);
-    if (excluded.has(identity) || seen.has(identity)) {
-      continue;
+  const currentSpelling = path.resolve(props.file);
+  const temporarySpelling =
+    props.temporaryTsconfig === undefined
+      ? undefined
+      : path.resolve(props.temporaryTsconfig);
+  const appendLexical = (input: string): void => {
+    const spelling = path.resolve(input);
+    if (
+      spelling === currentSpelling ||
+      spelling === temporarySpelling ||
+      lexicalSeen.has(spelling)
+    ) {
+      return;
     }
-    seen.add(identity);
-    output.push(absolute);
-  }
+    lexicalSeen.add(spelling);
+    physicalSeen.add(derivationIdentity(state, input));
+    output.push(input);
+  };
+  const appendPhysical = (input: string): void => {
+    const identity = derivationIdentity(state, input);
+    if (excluded.has(identity) || physicalSeen.has(identity)) return;
+    physicalSeen.add(identity);
+    lexicalSeen.add(path.resolve(input));
+    output.push(input);
+  };
+  for (const input of selectFileDependencies(props)) appendLexical(input);
+  for (const input of selectGraphInputs(graph, state, {
+    ...props,
+    complete:
+      declaresCompleteDependencies(state, props) &&
+      !isVolatileFile(state, props),
+  }))
+    appendPhysical(input);
+  // Resolution candidates, plugin dependencies, and universal host inputs
+  // preserve lexical aliases. Physical deduplication would collapse
+  // `alias/selection.cjs` into the selected target path, so a bundler would
+  // watch only the target and miss a symlink/junction retarget.
+  for (const input of selectResolutionCandidateInputs(graph, state, props))
+    appendLexical(input);
+  for (const input of selectHostInputs(props)) appendLexical(input);
   return output;
 }
 
@@ -1134,8 +1237,10 @@ export function createTransformResult(
  *
  * Always compares the current module's in-memory source with the generation
  * snapshot. A cache whose owner called {@link beginTtscTransformBuild} can use
- * that comparison alone for the module's first delivery in the current build.
- * Later graph-bearing requests validate the file's derived input set and
+ * that comparison alone for a stable generation's first module delivery in the
+ * current build. An incomplete generation may not take this shortcut: otherwise
+ * a sibling output captured during a filesystem race could still be served
+ * once. Later graph-bearing requests validate the file's derived input set and
  * project membership; graph-free envelopes conservatively re-hash the complete
  * project and out-of-walk snapshots. Any mismatch forces a complete
  * re-transform.
@@ -1153,6 +1258,7 @@ function matchesCachedSource(
   }
   if (
     buildScoped &&
+    cached.projectSnapshotComplete === true &&
     !cached.servedFiles?.has(pathIdentityKey(file, identities))
   ) {
     return true;
@@ -1327,14 +1433,16 @@ function captureUniversalHostInputValidation(
       }
     }
     const identity = derivationIdentity(state, input);
-    if (validation.identities.has(identity)) continue;
     validation.identities.add(identity);
     const before = inputMetadataSignature(input);
     if (!matchesRecordedInput(cached, input)) return undefined;
     const after = inputMetadataSignature(input);
     if (before !== after) return undefined;
     if (after !== undefined) {
-      validation.entries.set(identity, {
+      // Do not key this manifest by physical identity. A symlink/junction
+      // spelling and its selected target deliberately share that identity,
+      // but both lexical paths must survive so retargeting the alias is visible.
+      validation.entries.set(path.resolve(input), {
         path: input,
         realpath: hostInputRealpath(input),
         signature: after,
@@ -1346,7 +1454,8 @@ function captureUniversalHostInputValidation(
       const blockerIdentity = derivationIdentity(state, probe.blocker);
       const signature = inputMetadataSignature(probe.blocker);
       if (signature === undefined) return undefined;
-      validation.entries.set(blockerIdentity, {
+      validation.identities.add(blockerIdentity);
+      validation.entries.set(path.resolve(probe.blocker), {
         path: probe.blocker,
         realpath: hostInputRealpath(probe.blocker),
         signature,
@@ -1429,6 +1538,43 @@ function hostInputStateHash(file: string): string | null {
   }
 }
 
+/** Fingerprint the text/kind state returned by TypeScript-Go's filesystem. */
+function graphInputStateHash(file: string): string | null {
+  try {
+    const bytes = fs.readFileSync(file);
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+      const even = bytes.subarray(
+        2,
+        2 + Math.floor((bytes.length - 2) / 2) * 2,
+      );
+      return hashText(Buffer.from(even.toString("utf16le"), "utf8"));
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+      const even = Buffer.from(
+        bytes.subarray(2, 2 + Math.floor((bytes.length - 2) / 2) * 2),
+      );
+      even.swap16();
+      return hashText(Buffer.from(even.toString("utf16le"), "utf8"));
+    }
+    const content =
+      bytes.length >= 3 &&
+      bytes[0] === 0xef &&
+      bytes[1] === 0xbb &&
+      bytes[2] === 0xbf
+        ? bytes.subarray(3)
+        : bytes;
+    return hashText(content);
+  } catch {
+    try {
+      return fs.statSync(file).isDirectory()
+        ? hashText("ttsc:host-input:directory\0")
+        : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
 /** Physical target selected by a lexical host-input path. */
 function hostInputRealpath(file: string): string | null {
   try {
@@ -1446,7 +1592,9 @@ function sameHostInputRealpath(
 ): boolean {
   if (left === undefined || (left === null) !== (right === null)) return false;
   if (left === null || right === null) return true;
-  return pathIdentityKey(left, identities) === pathIdentityKey(right, identities);
+  return (
+    pathIdentityKey(left, identities) === pathIdentityKey(right, identities)
+  );
 }
 
 /** Find one directory listing that proves an absent path is still absent. */
@@ -1505,12 +1653,121 @@ function matchesCompleteInputSnapshot(
   // requires a tsconfig or package manifest change, both of which the project
   // walk above already detects.
   const externalHashes = cached.externalInputHashes ?? {};
-  return sameHashes(
-    externalHashes,
-    collectExternalInputHashes(
-      cached.externalInputPaths ?? Object.keys(externalHashes),
-    ),
+  return (
+    sameHashes(externalHashes, collectCachedExternalInputHashes(cached)) &&
+    matchesExternalInputRealpaths(cached)
   );
+}
+
+/** Re-check graph-owned physical identities in complete-snapshot fallback. */
+function matchesExternalInputRealpaths(
+  cached: TtscCachedProjectTransform,
+): boolean {
+  const expected = cached.externalInputRealpaths;
+  if (expected === undefined || Object.keys(expected).length === 0) return true;
+  const state = envelopeDerivation(cached);
+  for (const input of cached.externalInputPaths ?? []) {
+    const identity = derivationIdentity(state, input);
+    if (!Object.prototype.hasOwnProperty.call(expected, identity)) continue;
+    if (
+      !sameHostInputRealpath(
+        expected[identity],
+        hostInputRealpath(input),
+        state.identityContext,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Capture external-input hashes without attaching post-compile state to an
+ * earlier graph. Graph members must carry compiler-time proof and still match
+ * it now; plugin-declared dependency-only paths retain the historical
+ * post-compile snapshot because their own protocol does not claim generation
+ * fingerprints.
+ */
+function captureExternalInputSnapshot(
+  cached: TtscCachedProjectTransform,
+  paths: readonly string[],
+): {
+  complete: boolean;
+  hashes: Record<string, string>;
+  realpaths: Record<string, string | null>;
+} {
+  const state = envelopeDerivation(cached);
+  const graph = envelopeGraphIndexes(state, cached);
+  const hashes: Record<string, string> = {};
+  const realpaths: Record<string, string | null> = {};
+  let complete = true;
+  for (const input of paths) {
+    const identity = derivationIdentity(state, input);
+    if (graph.members.has(identity)) {
+      const proof = graph.inputProofs.get(identity);
+      if (proof === undefined || graph.inputProofConflicts.has(identity)) {
+        complete = false;
+        continue;
+      }
+      const currentHash = graphInputStateHash(input);
+      if (
+        currentHash !== proof.hash ||
+        !sameHostInputRealpath(
+          proof.realpath,
+          hostInputRealpath(input),
+          state.identityContext,
+        )
+      ) {
+        complete = false;
+      }
+      hashes[identity] = proof.hash ?? "missing";
+      realpaths[identity] = proof.realpath;
+      continue;
+    }
+    hashes[identity] = hostInputStateHash(input) ?? "missing";
+  }
+  return { complete, hashes, realpaths };
+}
+
+/** Verify every graph member still has the state read by the compiler. */
+function matchesCompilerGraphInputProofs(
+  cached: TtscCachedProjectTransform,
+): boolean {
+  if (
+    cached.result.type === "exception" ||
+    cached.result.graph === undefined ||
+    (cached.result.graph.inputHashes === undefined &&
+      cached.result.graph.inputRealpaths === undefined)
+  ) {
+    // Legacy sidecars remain compatible for ordinary in-project graphs. Their
+    // out-of-walk members are still rejected by captureExternalInputSnapshot,
+    // where a post-compile snapshot cannot prove the compiler's generation.
+    return true;
+  }
+  const state = envelopeDerivation(cached);
+  const graph = envelopeGraphIndexes(state, cached);
+  if (
+    graph.inputProofConflicts.size !== 0 ||
+    graph.inputProofs.size !== graph.members.size
+  ) {
+    return false;
+  }
+  for (const identity of graph.members) {
+    const proof = graph.inputProofs.get(identity);
+    if (
+      proof === undefined ||
+      graphInputStateHash(proof.path) !== proof.hash ||
+      !sameHostInputRealpath(
+        proof.realpath,
+        hostInputRealpath(proof.path),
+        state.identityContext,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Compare one derived input with the snapshot that owned it at generation. */
@@ -1530,15 +1787,34 @@ function matchesRecordedInput(
   )
     ? cached.inputHashes[projectKey]
     : undefined;
-  const externalHash = (cached.externalInputHashes ?? {})[
-    derivationIdentity(state, input)
-  ];
-  const recorded = projectHash ?? externalHash;
+  const identity = derivationIdentity(state, input);
+  const externalHash = (cached.externalInputHashes ?? {})[identity];
+  const externalRealpaths = cached.externalInputRealpaths;
+  const graphInput =
+    externalRealpaths !== undefined &&
+    Object.prototype.hasOwnProperty.call(externalRealpaths, identity);
+  if (
+    externalRealpaths !== undefined &&
+    Object.prototype.hasOwnProperty.call(externalRealpaths, identity) &&
+    !sameHostInputRealpath(
+      externalRealpaths[identity],
+      hostInputRealpath(input),
+      state.identityContext,
+    )
+  ) {
+    return false;
+  }
+  // Prefer the out-of-walk spelling's own snapshot when it exists. A lexical
+  // alias can point back into the walked project, where the physical target's
+  // project hash is a different authority (and graph text uses BOM decoding).
+  const recorded = externalHash ?? projectHash;
   if (recorded === undefined) {
     return false;
   }
   try {
-    const current = hostInputStateHash(input);
+    const current = graphInput
+      ? graphInputStateHash(input)
+      : hostInputStateHash(input);
     return recorded === (current ?? "missing");
   } catch {
     return recorded === "missing";
@@ -2042,14 +2318,14 @@ async function settleProjectMutationEvents(
 export function isProjectWalkPath(
   root: string,
   file: string,
-  identities: FilesystemPathIdentityContext = createHostPathIdentityContext(),
+  _identities: FilesystemPathIdentityContext = createHostPathIdentityContext(),
 ): boolean {
-  if (!identities.isWithin(root, file)) {
-    return false;
-  }
-  const rootKey = pathIdentityKey(root, identities);
-  const fileKey = pathIdentityKey(file, identities);
-  const relative = fileKey.slice(rootKey.length).replace(/^[/\\]+/, "");
+  // Walk membership is lexical. Resolving `file` to physical identity first
+  // would turn `root/alias/value.ts` into `root/target/value.ts`, hide the
+  // symlink segment from the lstat loop below, and falsely claim the project
+  // walk hashed a path it deliberately never followed.
+  const resolvedRoot = path.resolve(root);
+  const relative = path.relative(resolvedRoot, path.resolve(file));
   if (
     relative.length === 0 ||
     relative === ".." ||
@@ -2062,7 +2338,7 @@ export function isProjectWalkPath(
   if (segments.some(isIgnoredProjectDirectory)) {
     return false;
   }
-  let current = path.resolve(root);
+  let current = resolvedRoot;
   for (let index = 0; index < segments.length; ++index) {
     current = path.join(current, segments[index]!);
     let stats: fs.Stats;
@@ -2103,6 +2379,25 @@ export function collectExternalInputHashes(
       continue;
     }
     hashes[identity] = hostInputStateHash(file) ?? "missing";
+  }
+  return hashes;
+}
+
+/** Re-hash a cached mixed graph/dependency input set with its owning codec. */
+function collectCachedExternalInputHashes(
+  cached: TtscCachedProjectTransform,
+): Record<string, string> {
+  const hashes: Record<string, string> = {};
+  const state = envelopeDerivation(cached);
+  const graphRealpaths = cached.externalInputRealpaths ?? {};
+  for (const file of cached.externalInputPaths ??
+    Object.keys(cached.externalInputHashes ?? {})) {
+    const identity = derivationIdentity(state, file);
+    if (identity in hashes) continue;
+    hashes[identity] =
+      (Object.prototype.hasOwnProperty.call(graphRealpaths, identity)
+        ? graphInputStateHash(file)
+        : hostInputStateHash(file)) ?? "missing";
   }
   return hashes;
 }
@@ -2189,18 +2484,21 @@ function selectExternalInputPaths(props: {
       continue;
     }
     const absolute = path.resolve(props.projectRoot, member);
+    const spelling = path.resolve(absolute);
     const identity = pathIdentityKey(absolute, identities);
     const missingCandidate =
       resolutionCandidates.has(identity) && !fs.existsSync(absolute);
     if (
       identity === excluded ||
-      seen.has(identity) ||
+      seen.has(spelling) ||
       (!missingCandidate &&
         isProjectWalkPath(props.projectRoot, absolute, identities))
     ) {
       continue;
     }
-    seen.add(identity);
+    // Preserve distinct lexical aliases even when they currently select the
+    // same physical file. A later retarget must validate the alias itself.
+    seen.add(spelling);
     output.push(absolute);
   }
   output.sort();
@@ -2318,7 +2616,8 @@ async function transformProject(props: {
       // Capture the out-of-walk input hashes while the generation is fresh so
       // cache validation can re-check them; computed before dispose so the
       // exclusion of the temp-dir tsconfig is the only reason it never keys.
-      externalInputHashes: collectExternalInputHashes(externalInputPaths),
+      externalInputHashes: {},
+      externalInputRealpaths: {},
       externalInputPaths,
       inputHashes: inputSnapshot.hashes,
       projectDirectories: inputSnapshot.projectDirectories,
@@ -2331,8 +2630,16 @@ async function transformProject(props: {
       // but deleted file would invalidate every persistent-cache snapshot.
       ...(temporaryTsconfig === undefined ? {} : { temporaryTsconfig }),
     };
+    const externalInputSnapshot = captureExternalInputSnapshot(
+      cached,
+      externalInputPaths,
+    );
+    cached.externalInputHashes = externalInputSnapshot.hashes;
+    cached.externalInputRealpaths = externalInputSnapshot.realpaths;
     stableProjectSnapshot =
       stableProjectSnapshot &&
+      matchesCompilerGraphInputProofs(cached) &&
+      externalInputSnapshot.complete &&
       captureUniversalHostInputValidation(cached, props.currentFile) !==
         undefined;
     cached.projectSnapshotComplete = stableProjectSnapshot;

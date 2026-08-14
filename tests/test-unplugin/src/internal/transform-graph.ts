@@ -20,6 +20,8 @@ function emitGraphPlugins(graph: {
   echoTsconfig?: boolean;
   edges?: Record<string, string[]>;
   globals?: string[];
+  inputHashes?: Record<string, string | null>;
+  inputRealpaths?: Record<string, string | null>;
 }): unknown[] {
   return [
     {

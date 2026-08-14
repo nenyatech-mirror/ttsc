@@ -36,7 +36,10 @@ export const test_resolvenodebinary_scopes_relative_capability_cache_to_cwd =
     fs.rmSync(candidate);
     fs.writeFileSync(candidate, "not a JavaScript runtime\n", "utf8");
     if (process.platform !== "win32") fs.chmodSync(candidate, 0o755);
-    assertSameAbsoluteFile(resolveNodeBinary(absoluteEnv, first), process.execPath);
+    assertSameAbsoluteFile(
+      resolveNodeBinary(absoluteEnv, first),
+      process.execPath,
+    );
 
     const late = path.join(
       second,

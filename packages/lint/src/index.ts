@@ -1818,9 +1818,9 @@ function currentDependencyDigest(
   kind: "directory" | "file" | "optional-file",
   location: string,
 ): string {
-  if (kind === "directory") return directoryDigest(location);
-  if (kind === "optional-file") return optionalFileDigest(location);
   try {
+    if (kind === "directory") return directoryDigest(location);
+    if (kind === "optional-file") return optionalFileDigest(location);
     return createHash("sha256")
       .update(fs.readFileSync(location))
       .digest("hex");

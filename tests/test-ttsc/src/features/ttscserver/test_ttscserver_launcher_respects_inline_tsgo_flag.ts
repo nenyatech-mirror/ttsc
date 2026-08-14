@@ -14,27 +14,41 @@ import { assert, ttscPackageRoot } from "../../internal/ttscserver";
  * this test proves the explicit compiler path reaches both the native host and
  * every later Go-owned sidecar refresh through one canonical environment.
  *
- * 1. Prepare an isolated cwd plus a fake tsgo path.
+ * 1. Prepare distinct launcher/project cwd values, a fake tsgo path, and a
+ *    project-relative Node runtime.
  * 2. Spawn the JS ttscserver launcher with TTSC_TSGO_BINARY unset.
- * 3. Pass `--tsgo=<binary>`.
- * 4. Assert the fake host received that exact path in TTSC_TSGO_BINARY.
+ * 3. Pass `--cwd <project>` and `--tsgo=<binary>`.
+ * 4. Assert the fake host received the exact compiler path and the runtime
+ *    resolved against the project cwd rather than the launcher's cwd.
  */
 export const test_ttscserver_launcher_respects_inline_tsgo_flag = () => {
   const root = ttscPackageRoot();
   const launcher = path.join(root, "lib", "launcher", "ttscserver.js");
   const cwd = TestProject.tmpdir("ttscserver-inline-tsgo-");
+  const launcherCwd = TestProject.tmpdir("ttscserver-launcher-cwd-");
   const record = path.join(cwd, "record.json");
   const fakeTsgo = path.join(cwd, "tsgo");
+  const runtimeName =
+    process.platform === "win32" ? "project-node.exe" : "project-node";
+  const projectRuntime = path.join(cwd, runtimeName);
   fs.writeFileSync(fakeTsgo, "", "utf8");
+  try {
+    fs.linkSync(process.execPath, projectRuntime);
+  } catch {
+    fs.copyFileSync(process.execPath, projectRuntime);
+  }
+  if (process.platform !== "win32") fs.chmodSync(projectRuntime, 0o755);
   const fakeHostScript = [
     "const fs = require('node:fs');",
     `fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({`,
     "  args: process.argv.slice(1),",
+    "  node: process.env.TTSC_NODE_BINARY || '',",
     "  tsgo: process.env.TTSC_TSGO_BINARY || '',",
     "}));",
   ].join("\n");
   const env = { ...process.env };
   env.TTSCSERVER_BINARY = process.execPath;
+  env.TTSC_NODE_BINARY = `.${path.sep}${runtimeName}`;
   delete env.TTSC_TSGO_BINARY;
 
   try {
@@ -51,7 +65,7 @@ export const test_ttscserver_launcher_respects_inline_tsgo_flag = () => {
         `--tsgo=${fakeTsgo}`,
       ],
       {
-        cwd,
+        cwd: launcherCwd,
         encoding: "utf8",
         env,
         input: "",
@@ -67,6 +81,7 @@ export const test_ttscserver_launcher_respects_inline_tsgo_flag = () => {
     );
     const recorded = JSON.parse(fs.readFileSync(record, "utf8")) as {
       args: string[];
+      node: string;
       tsgo: string;
     };
     assert.deepEqual(recorded.args, [
@@ -75,8 +90,14 @@ export const test_ttscserver_launcher_respects_inline_tsgo_flag = () => {
       cwd,
       `--tsgo=${fakeTsgo}`,
     ]);
+    assert.equal(path.isAbsolute(recorded.node), true);
+    const actualRuntime = fs.statSync(recorded.node);
+    const expectedRuntime = fs.statSync(projectRuntime);
+    assert.equal(actualRuntime.dev, expectedRuntime.dev);
+    assert.equal(actualRuntime.ino, expectedRuntime.ino);
     assert.equal(recorded.tsgo, fakeTsgo);
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(launcherCwd, { recursive: true, force: true });
   }
 };

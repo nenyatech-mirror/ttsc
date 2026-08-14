@@ -593,6 +593,37 @@ function recordPluginDescriptorInput(record: {
   if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
   const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
   if (out === undefined || out.length === 0) return;
+  recordPluginDescriptorInputOnce(record);
+  const resolved = path.resolve(record.resolved);
+  const parsed = path.parse(resolved);
+  let current = parsed.root;
+  const relative = path.relative(parsed.root, resolved);
+  for (const segment of relative.split(path.sep).slice(0, -1)) {
+    if (segment === "") continue;
+    current = path.join(current, segment);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        recordPluginDescriptorInputOnce({ resolved: current });
+      }
+    } catch {
+      break;
+    }
+  }
+}
+
+/** Record one path without recursively revisiting its lexical ancestors. */
+function recordPluginDescriptorInputOnce(record: {
+  hash?: string | null;
+  parent?: string;
+  realpath?: string | null;
+  resolved: string;
+  signature?: string;
+  specifier?: string;
+  unstable?: boolean;
+}): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
+  if (out === undefined || out.length === 0) return;
   try {
     const beforeSignature = pluginDescriptorInputMetadataSignature(
       record.resolved,

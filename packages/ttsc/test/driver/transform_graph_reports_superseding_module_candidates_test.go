@@ -1,6 +1,8 @@
 package driver_test
 
 import (
+  "crypto/sha256"
+  "encoding/hex"
   "path/filepath"
   "slices"
   "testing"
@@ -51,5 +53,20 @@ func TestTransformGraphReportsSupersedingModuleCandidates(t *testing.T) {
   }
   if slices.Contains(candidates, filepath.ToSlash(filepath.Join("src", "value.jsx"))) {
     t.Fatalf("lower-priority value.jsx candidate must not be tracked: %v", candidates)
+  }
+  missing := filepath.ToSlash(filepath.Join("src", "value.ts"))
+  if hash, ok := graph.InputHashes[missing]; !ok || hash != nil {
+    t.Fatalf("missing candidate proof = %#v, %v; want explicit null", hash, ok)
+  }
+  if realpath, ok := graph.InputRealpaths[missing]; !ok || realpath != nil {
+    t.Fatalf("missing candidate realpath = %#v, %v; want explicit null", realpath, ok)
+  }
+  selected := filepath.ToSlash(filepath.Join("src", "value.js"))
+  digest := sha256.Sum256([]byte("export function winner() {}\n"))
+  if hash := graph.InputHashes[selected]; hash == nil || *hash != hex.EncodeToString(digest[:]) {
+    t.Fatalf("selected source proof = %#v, want %s", hash, hex.EncodeToString(digest[:]))
+  }
+  if realpath := graph.InputRealpaths[selected]; realpath == nil || !filepath.IsAbs(*realpath) {
+    t.Fatalf("selected source realpath = %#v, want absolute", realpath)
   }
 }
