@@ -42,8 +42,9 @@ import (
 //     resolution directories reach the final resolver.
 //  14. Retarget the selected exports path through a nested symlink and prove
 //     only that lexical path invalidates while the package root stays absent.
-//  15. Load the conditional package from a TypeScript config and prove the
-//     generated typed loader applies the same active-condition semantics.
+//  15. Load the conditional package from CommonJS-classified `.ts` and explicit
+//     ESM `.mts` configs and prove the generated typed loader applies each
+//     format's active conditions.
 //  16. Resolve a dangling external legacy-main link through root fallback, then
 //     create its unchanged target and prove the new main becomes visible.
 //  17. Resolve an outer package past an existing but unresolvable nearer
@@ -544,7 +545,30 @@ module.exports = {
     assertConfigRuleSeverity(t, retargeted.value, "no-var", "warning")
   }
 
-  typedExportsConfig := filepath.Join(configs, "exports.config.ts")
+  // Stop the preceding link-retarget case from making both conditions produce
+  // the same physical value on POSIX. The direct targets below make an
+  // incorrect condition visible on every platform.
+  write(
+    filepath.Join(exportsPackage, "package.json"),
+    `{"exports":{".":{"import":"./import/index.cjs","require":"./require/index.cjs"}}}`,
+  )
+  typedRequireConfig := filepath.Join(configs, "exports-require.config.ts")
+  write(typedRequireConfig, `import severity from "exports-priority";
+export default { rules: { "no-var": severity } };`)
+  typedRequire, err := loadConfigFileEvaluation(typedRequireConfig)
+  if err != nil {
+    t.Fatalf("load CommonJS-classified typed config: %v", err)
+  }
+  assertConfigRuleSeverity(t, typedRequire.value, "no-var", "error")
+  assertConfigDependencyKindScope(
+    t,
+    typedRequire.dependencyDigests,
+    activeExports,
+    configDependencyDir,
+    configDependencyWatch,
+  )
+
+  typedExportsConfig := filepath.Join(configs, "exports.config.mts")
   write(typedExportsConfig, `import severity from "exports-priority";
 export default { rules: { "no-var": severity } };`)
   typedExports, err := loadConfigFileEvaluation(typedExportsConfig)
