@@ -66,6 +66,8 @@ style: |
   section.divider h1 { color: #ffffff; border-bottom: none; font-size: 72px; }
   section.divider p { color: #b9c9e6; font-size: 40px; }
   section.divider .note { color: #b9c9e6; font-size: 40px; }
+  section.loop-slide ul { margin-top: 32px; }
+  section.loop-slide li { margin-bottom: 18px; font-size: 40px; }
 
   /* Opening summary */
   .tldr-layout {
@@ -88,11 +90,11 @@ style: |
   .opening-measure-title { margin-bottom: 12px; font-size: 28px; font-weight: 700; }
   .opening-bar-row {
     display: grid;
-    grid-template-columns: 88px 1fr 92px;
+    grid-template-columns: 96px 1fr 92px;
     gap: 8px;
     align-items: center;
     margin-top: 10px;
-    font-size: 22px;
+    font-size: 24px;
   }
   .opening-bar-row span { white-space: nowrap; }
   .opening-bar-row strong { text-align: right; white-space: nowrap; }
@@ -103,8 +105,8 @@ style: |
   .opening-bar i.coverage-evidence { width: 100%; }
   .opening-bar i.token-plain { width: 100%; }
   .opening-bar i.token-evidence { width: 7.5%; }
-  .benchmark-context { color: #5b6674; font-size: 24px; text-align: center; }
-  .note { font-size: 24px; color: #5b6674; }
+  .benchmark-context { color: #5b6674; font-size: 26px; text-align: center; }
+  .note { font-size: 26px; color: #5b6674; }
 
   /* Cumulative narrative references */
   .narrative-graph { position: relative; height: 410px; margin-top: -12px; }
@@ -237,7 +239,7 @@ style: |
   .architecture-caption {
     margin: 12px 0 0;
     color: #5b6674;
-    font-size: 24px;
+    font-size: 28px;
     line-height: 1.3;
     text-align: center;
     white-space: nowrap;
@@ -386,9 +388,28 @@ style: |
     line-height: 1.5;
   }
   .card b { display: block; font-size: 40px; color: #14284b; margin-bottom: 8px; }
-  .card .note { font-size: 22px; }
+  .card .note { font-size: 24px; }
   .card.warm { border-top-color: #f08a24; }
   .card.warm b { color: #b35c00; }
+  .problem-measures { display: flex; flex-direction: column; gap: 12px; width: 94%; margin: 12px auto 0; }
+  .problem-measure-title { margin-bottom: 8px; font-size: 32px; font-weight: 700; }
+  .problem-bar {
+    display: flex;
+    width: 100%;
+    height: 70px;
+    overflow: hidden;
+    background: #e2e7ef;
+    border-radius: 14px;
+  }
+  .problem-bar div { display: flex; align-items: center; justify-content: center; font-weight: 800; }
+  .problem-coverage { width: 51.6%; background: #4a76b8; color: #ffffff; font-size: 38px; }
+  .problem-build { width: 10%; background: #14284b; color: #ffffff; font-size: 28px; }
+  .problem-review { width: 90%; background: #9bb4d2; color: #14284b; font-size: 38px; }
+  .problem-legend { display: flex; justify-content: center; gap: 54px; margin-top: 6px; font-size: 28px; }
+  .problem-legend i { display: inline-block; width: 20px; height: 20px; margin-right: 8px; border-radius: 4px; }
+  .problem-legend .build { background: #14284b; }
+  .problem-legend .review { background: #9bb4d2; }
+  .problem-context { margin-top: 16px; color: #5b6674; font-size: 28px; text-align: center; }
 
   /* Bars */
   .track {
@@ -494,9 +515,46 @@ style: |
 
 ---
 
+<!-- _class: loop-slide -->
+
+# Loop Until Dry restarts the full review
+
+- Read everything from the beginning
+- Fix every finding
+- Restart from the beginning
+- Stop only after an empty round
+
+---
+
+# 90% on review. 51.6% coverage.
+
+<div class="problem-measures">
+<div>
+<div class="problem-measure-title">Requirement coverage</div>
+<div class="problem-bar"><div class="problem-coverage">51.6%</div></div>
+</div>
+<div>
+<div class="problem-measure-title">Time distribution</div>
+<div class="problem-bar"><div class="problem-build">10%</div><div class="problem-review">90%</div></div>
+<div class="problem-legend"><span><i class="build"></i>Initial development</span><span><i class="review"></i>Review loops</span></div>
+</div>
+</div>
+
+<div class="problem-context">ERP · 100+ tables · 150K+ LoC</div>
+
+---
+
+<!-- _class: divider -->
+
+# Spec Driven Development
+
+<span class="note">Write and review the requirements.<br/>AI builds everything with 100% coverage.</span>
+
+---
+
 <!-- _class: architecture-slide -->
 
-# First, divide the documents into layers
+# One graph connects the entire delivery
 
 <div class="document-graph">
 <div class="architecture-node document-node meeting">Meeting notes</div>
@@ -517,7 +575,7 @@ style: |
 
 ---
 
-# Method A: Humans write the requirements
+# Method A: Write and review the requirements
 
 - Humans **review `docs/requirements` directly**
 - Specifications, implementation, and tests are **fully delegated**
@@ -527,7 +585,7 @@ style: |
 
 ---
 
-# Method B: Hand over only the raw material
+# Method B: Delegate the requirements too
 
 - Hand over meeting notes and idea notes **as-is, without organizing them**
 - **Delegate everything**, starting with writing the requirements
@@ -537,7 +595,7 @@ style: |
 
 ---
 
-# Even requirements cite their evidence
+# Requirements can cite meeting notes
 
 ```md
 ## Coupon stacking limit {#coupon-stacking}
@@ -615,9 +673,9 @@ style: |
 
 <!-- _class: divider -->
 
-# So how does that work?
+# Compile Every Omission
 
-<span class="note">We attached a compiler to specifications, too</span>
+<span class="note">Two tags are enough</span>
 
 ---
 
@@ -647,21 +705,11 @@ error TS16411: [evidence/graph]
 ```
 
 - One error per requirement → **the error list is the task list**
-- It appears alongside type errors. There is no additional check to attach
+- It runs with `ttsc`, alongside type errors
 
 ---
 
-# There is only one thing an agent obeys
-
-- When told to read documents, it **pretends to have read them**
-- In a review, it **says everything is done**
-- But it **cannot get past a compile error**
-
-> Documents are good to read.<br/>Compile errors have to be read.
-
----
-
-# The configuration is one sentence
+# Configuration declares one relationship
 
 ```ts
 type: "typescript",
@@ -678,14 +726,14 @@ reference: {
 
 ---
 
-# Four kinds of citation targets
+# One grammar spans four artifact types
 
-| Kind          | Unit                         |
-| ------------- | ---------------------------- |
-| 📄 Markdown   | file, H1-H4 section          |
-| 🗄️ Prisma     | model, column, relation      |
-| 🔤 TypeScript | type, function, property     |
-| 🌐 Swagger    | each operation under `paths` |
+| Kind       | Unit                         |
+| ---------- | ---------------------------- |
+| Markdown   | file, H1-H4 section          |
+| Prisma     | model, column, relation      |
+| TypeScript | type, function, property     |
+| Swagger    | each operation under `paths` |
 
 <span class="note">Documents, schemas, code, and API specifications are connected by one grammar.</span>
 
@@ -701,7 +749,7 @@ reference: {
 
 <br/>
 
-Entrust any one of the three to diligence, and 100% is merely **self-reported**.
+**The compiler, not diligence, decides whether coverage is 100%.**
 
 ---
 
@@ -720,7 +768,99 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 
 <!-- _class: divider -->
 
-# What if the product is a story?
+# Measured Results
+
+<span class="note">Same requirements · Same engine · Same model<br/>Only the plugin changed</span>
+
+---
+
+# Coverage reaches 100%
+
+| Subject | Plain | Evidence |
+| --- | --- | --- |
+| todo | 85.5% <span class="track"><i class="w855"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
+| reddit | 80.3% <span class="track"><i class="w803"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
+| shopping | 63.1% <span class="track"><i class="w631"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
+| erp | 51.6% <span class="track"><i class="w516"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
+
+Plain coverage falls as scope grows. **Evidence remains at 100%.**
+
+---
+
+# Token savings grow with scope
+
+<div class="rows">
+<div class="row"><span class="lbl">todo</span><span class="bars"><i class="p b159"></i><i class="e b17"></i></span><span class="val">866M → 92M</span></div>
+<div class="row"><span class="lbl">reddit</span><span class="bars"><i class="p b216"></i><i class="e b45"></i></span><span class="val">1,179M → 245M</span></div>
+<div class="row"><span class="lbl">shopping</span><span class="bars"><i class="p b278"></i><i class="e b50"></i></span><span class="val">1,516M → 271M</span></div>
+<div class="row"><span class="lbl">erp</span><span class="bars"><i class="p b1000"></i><i class="e b75"></i></span><span class="val">5,449M → 411M</span></div>
+</div>
+
+<span class="kp">Plain</span> in blue. <span class="ke">Evidence</span> in orange. The gap widens with scope.
+
+<span class="note">Original charts by phase: [https://ttsc.dev/docs/benchmark/evidence](https://ttsc.dev/docs/benchmark/evidence)</span>
+
+---
+
+# ERP: more complete, cheaper, faster
+
+<div class="cards">
+<div class="card"><b>13.3×</b>fewer tokens<br/><span class="note">5,449M → 411M</span></div>
+<div class="card"><b>13.9×</b>lower cost<br/><span class="note">$68.72 → $4.96</span></div>
+<div class="card warm"><b>7.5×</b>less time<br/><span class="note">102h → 14h</span></div>
+</div>
+
+<br/>
+
+**100% coverage with less time and cost.**
+
+---
+
+# Review share falls from 90–95% to 15–41%
+
+| Subject | Plain | Evidence |
+| --- | --- | --- |
+| todo | <span class="split"><i class="d97"></i><i class="rev"></i></span> Review 90% | <span class="split on"><i class="d720"></i><i class="rev"></i></span> Review 28% |
+| reddit | <span class="split"><i class="d54"></i><i class="rev"></i></span> Review 95% | <span class="split on"><i class="d808"></i><i class="rev"></i></span> Review 19% |
+| shopping | <span class="split"><i class="d47"></i><i class="rev"></i></span> Review 95% | <span class="split on"><i class="d586"></i><i class="rev"></i></span> Review 41% |
+| erp | <span class="split"><i class="d105"></i><i class="rev"></i></span> Review 90% | <span class="split on"><i class="d846"></i><i class="rev"></i></span> Review 15% |
+
+<span class="note">Dark is development. Light is review. Each cell represents 100% of its tokens.</span>
+
+---
+
+# A tag can satisfy coverage and still lie
+
+```ts
+/**
+ * @evidence docs/discount.md#coupon-stacking Explains the per-issuer limit.
+ * @evidenceReview docs/discount.md#coupon-stacking #a1b2c3d4e5f6
+ *                 Verified that the screen copy matches the limit in policy section 3.
+ */
+```
+
+- `@evidenceReview` records the checked source and its fingerprint
+- A source change invalidates the review
+
+> The compiler finds omissions. Humans judge truthfulness.
+
+---
+
+# Human review becomes a finite checklist
+
+|  | Plain | Evidence |
+| --- | --- | --- |
+| What to inspect | All code, documents, and tests | The truthfulness of citations |
+| Scope | Start over in every round | The tag list is the checklist |
+| What is missing | Humans and AI must search to find out | The compiler has already reported it |
+
+**The compiler handles "omissions"; humans handle "falsehoods."**
+
+---
+
+<!-- _class: divider -->
+
+# The Same Harness for Stories
 
 <span class="note">Settings become build constraints</span>
 
@@ -760,10 +900,10 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 
 # Each edge blocks a different drift
 
-- Every narrative layer → principles: literary purpose
-- Every narrative unit → settings: facts, rules, knowledge
-- Scene plan and manuscript → storyline: causes and consequences
-- Manuscript → scene plan: exact execution
+- Storylines, Scenarios, Manuscripts → Principles: literary purpose
+- Storylines, Scenarios, Manuscripts → Settings: facts, rules, knowledge
+- Scenarios, Manuscripts → Storylines: causes and consequences
+- Manuscripts → Scenarios: exact execution
 - Target changes → affected reviews expire
 
 ---
@@ -789,122 +929,14 @@ Entrust any one of the three to diligence, and 100% is merely **self-reported**.
 
 ---
 
-<!-- _class: divider -->
-
-# So how much does it change?
-
-<span class="note">Same requirements · Same engine · Same model, with only the plugin changed</span>
-
----
-
-# Coverage
-
-| Subject | Plain | Evidence |
-| --- | --- | --- |
-| todo | 85.5% <span class="track"><i class="w855"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
-| reddit | 80.3% <span class="track"><i class="w803"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
-| shopping | 63.1% <span class="track"><i class="w631"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
-| erp | 51.6% <span class="track"><i class="w516"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
-
-The larger the project, the more it misses.<br/>**It does not even know that it missed something.**
-
----
-
-# Yet it becomes cheaper
-
-<div class="rows">
-<div class="row"><span class="lbl">todo</span><span class="bars"><i class="p b159"></i><i class="e b17"></i></span><span class="val">866M → 92M</span></div>
-<div class="row"><span class="lbl">reddit</span><span class="bars"><i class="p b216"></i><i class="e b45"></i></span><span class="val">1,179M → 245M</span></div>
-<div class="row"><span class="lbl">shopping</span><span class="bars"><i class="p b278"></i><i class="e b50"></i></span><span class="val">1,516M → 271M</span></div>
-<div class="row"><span class="lbl">erp</span><span class="bars"><i class="p b1000"></i><i class="e b75"></i></span><span class="val">5,449M → 411M</span></div>
-</div>
-
-Token consumption for <span class="kp">Plain</span> and <span class="ke">Evidence</span>.<br/>The gap widens as the project grows.
-
-<span class="note">Original charts by phase: [https://ttsc.dev/docs/benchmark/evidence](https://ttsc.dev/docs/benchmark/evidence)</span>
-
----
-
-# Cost and time decreased as well: erp
-
-<div class="cards">
-<div class="card"><b>13.3×</b>fewer tokens<br/><span class="note">5,449M → 411M</span></div>
-<div class="card"><b>13.9×</b>lower cost<br/><span class="note">$68.72 → $4.96</span></div>
-<div class="card warm"><b>7.5×</b>less time<br/><span class="note">102h → 14h</span></div>
-</div>
-
-<br/>
-
-This was not a cost paid for quality.<br/>**It built more and finished for less.**
-
----
-
-# What if it lies?
-
-```ts
-/**
- * @evidence docs/discount.md#coupon-stacking Explains the per-issuer limit.
- * @evidenceReview docs/discount.md#coupon-stacking #a1b2c3d4e5f6
- *                 Verified that the screen copy matches the limit in policy section 3.
- */
-```
-
-- Inexpensive models **sometimes write facts that do not exist**
-- Requiring fingerprinted reviews makes this **converge toward zero**<br/>but takes more time
-
-> A false tag removes the error, not the problem.
-
----
-
-# Ultimately, the review must run
-
-Review Loop until Dry
-
-```
-① Read everything again from the beginning
-② If there is even one thing to fix → ①
-③ Stop only after a round finds nothing
-```
-
-<span class="note">Both arms were measured under this discipline.</span>
-
----
-
-# But the review consumes all the money
-
-| Subject | Plain | Evidence |
-| --- | --- | --- |
-| todo | <span class="split"><i class="d97"></i><i class="rev"></i></span> Review 90% | <span class="split on"><i class="d720"></i><i class="rev"></i></span> Review 28% |
-| reddit | <span class="split"><i class="d54"></i><i class="rev"></i></span> Review 95% | <span class="split on"><i class="d808"></i><i class="rev"></i></span> Review 19% |
-| shopping | <span class="split"><i class="d47"></i><i class="rev"></i></span> Review 95% | <span class="split on"><i class="d586"></i><i class="rev"></i></span> Review 41% |
-| erp | <span class="split"><i class="d105"></i><i class="rev"></i></span> Review 90% | <span class="split on"><i class="d846"></i><i class="rev"></i></span> Review 15% |
-
-Plain **starts quickly, but its review never ends.**<br/>Evidence is the opposite.
-
-<span class="note">Dark is development, light is review. Each cell represents 100% of its tokens.</span>
-
----
-
-# In return, the review becomes narrower
-
-|  | Plain | Evidence |
-| --- | --- | --- |
-| What to inspect | All code, documents, and tests | The truthfulness of citations |
-| Scope | Start over in every round | The tag list is the checklist |
-| What is missing | Humans and AI must search to find out | The compiler has already reported it |
-
-**The compiler handles "omissions"; humans handle "falsehoods."**
-
----
-
 <!-- _class: dark -->
 
-# Summary
+# Two tags. One completion condition.
 
-- Humans review **only one document layer**
-- The **compiler protects everything below it**
-- A specification can be **software requirements, historical canon, or the laws of a fictional world**
-- 100% is not the goal, but **what remains after every error is closed**
+- `@evidence <target> <reason>`
+- `@evidenceExclude <target> <reason>`
+- Write and review the requirements
+- AI builds everything with 100% coverage
 
 ---
 
