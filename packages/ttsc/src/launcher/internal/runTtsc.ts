@@ -17,7 +17,7 @@ import {
   parseFlags,
 } from "../../flags/parser";
 import { resolveFlagSpec } from "../../flags/schema";
-import { assertSafeExplicitCacheDirectory } from "../../internal/assertSafeExplicitCacheDirectory";
+import { resolveSafeCacheCleanupTargets } from "../../internal/resolveSafeCacheCleanupTargets";
 import {
   isPathWithin,
   legacyGlobalCacheTargets,
@@ -207,9 +207,6 @@ function runClean(argv: readonly string[]): number {
   const explicitCacheDir = options.cacheDir
     ? path.resolve(cwd, options.cacheDir)
     : undefined;
-  if (explicitCacheDir !== undefined) {
-    assertSafeExplicitCacheDirectory(projectRoot, explicitCacheDir);
-  }
   const targets = explicitCacheDir
     ? // Explicit `ttsc clean --cache-dir X`: the user names X as the cache to
       // remove for this command, so remove it wholesale plus the legacy
@@ -223,11 +220,19 @@ function runClean(argv: readonly string[]): number {
       // possibly-shared root is never deleted) plus the pre-0.17 machine-global
       // cache so upgraders reclaim that disk.
       [...resolveCleanTargets(projectRoot), ...legacyGlobalCacheTargets()];
+  // Check the complete deletion set before removing the first directory. An
+  // environment-selected TTSC_GO_CACHE_DIR and a legacy-global cache can be as
+  // destructive as an explicit --cache-dir when either equals or contains the
+  // project through its lexical spelling or a filesystem alias.
+  const safeTargets = resolveSafeCacheCleanupTargets(projectRoot, targets);
   const removed: string[] = [];
-  for (const target of targets) {
-    if (!fs.existsSync(target)) continue;
-    fs.rmSync(target, { recursive: true, force: true });
-    removed.push(target);
+  const visited = new Set<string>();
+  for (const target of safeTargets) {
+    if (visited.has(target.path)) continue;
+    visited.add(target.path);
+    if (!target.exists || !fs.existsSync(target.path)) continue;
+    fs.rmSync(target.path, { recursive: true, force: true });
+    removed.push(target.requestedPath);
   }
   if (removed.length === 0) {
     process.stdout.write(
