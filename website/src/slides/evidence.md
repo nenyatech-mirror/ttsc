@@ -67,12 +67,23 @@ style: |
   section.divider p { color: #b9c9e6; font-size: 30px; }
   section.divider .note { color: #b9c9e6; }
 
-  /* Single-line emphasis */
-  .punch { display: block; font-size: 46px; font-weight: 700; line-height: 1.45; color: #ffd479; }
-  .punch-lead {
-    display: block; font-size: 40px; font-weight: 600;
-    line-height: 1.5; color: #e3e6ea; margin-bottom: 34px;
+  /* Opening claims */
+  .opening-claim {
+    font-size: 64px;
+    font-weight: 800;
+    line-height: 1.25;
+    text-align: center;
   }
+  .opening-metrics { display: flex; width: 100%; gap: 70px; }
+  .opening-metric {
+    flex: 1;
+    border-top: 8px solid #4a76b8;
+    padding-top: 32px;
+    text-align: center;
+  }
+  .opening-metric b { display: block; color: #ffd479; font-size: 104px; line-height: 1; }
+  .opening-metric span { display: block; margin-top: 22px; color: #ffffff; font-size: 38px; }
+  .opening-context { margin-top: 42px; color: #a7b0be; font-size: 28px; text-align: center; }
   .note { font-size: 24px; color: #5b6674; }
 
   /* Cumulative narrative references */
@@ -418,7 +429,7 @@ style: |
 
 # Evidence Graph
 
-## Enforcing 100% specification coverage with compile errors
+## 100% specification coverage with compile errors
 
 <span class="note">https://github.com/samchon/ttsc/tree/master/packages/evidence</span>
 
@@ -426,29 +437,20 @@ style: |
 
 <!-- _class: dark -->
 
-<span class="punch-lead">
-Write the specification, build to the specification, and verify against the specification.<br/>Spec Driven Development.
-</span>
-
-<span class="punch">
-That specification becomes the compile error.
-</span>
-
-<span class="note">your spec as a compile error no coding agent can skip</span>
+<div class="opening-claim">
+Your specification becomes<br/><strong>a compile error no agent can skip.</strong>
+</div>
 
 ---
 
 <!-- _class: dark -->
 
-<span class="punch-lead">
-One meeting note. One idea note.
-</span>
+<div class="opening-metrics">
+<div class="opening-metric"><b>100%</b><span>requirement coverage</span></div>
+<div class="opening-metric"><b>13.3×</b><span>fewer tokens</span></div>
+</div>
 
-<span class="punch">
-That alone produces a full-stack, full-spec product.
-</span>
-
-<span class="note">The ultimate form of Goal Mode: provide only the goal, and the graph catches the rest.<br/>Requirement coverage from 51.6% to 100%, 13.3× fewer tokens, and 7.5× less time.</span>
+<div class="opening-context">ERP benchmark</div>
 
 ---
 
