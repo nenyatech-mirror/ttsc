@@ -80,7 +80,7 @@ for _, file := range prog.SourceFiles() {
 
 `NewTransformGraph(prog, cwd)` computes the loaded program's reference graph under `tsc --incremental` semantics and returns the `graph` envelope section (`edges`, `globals`, `configs`) documented in [Plugin protocol → Transform](/docs/development/concepts/protocol#transform):
 
-- `Edges` maps each file to its direct resolved references — imports, re-exports, `/// <reference>` targets, type reference directives, type-only edges included — exactly the per-file `referencedMap` entry tsgo's own incremental engine stores in `tsbuildinfo`.
+- `Edges` maps each file to its direct resolved references — imports, re-exports, `/// <reference>` targets, type reference directives, type-only edges included. A leaf source remains present with an empty list so its compiler-time input proof cannot be omitted.
 - `Globals` lists the files contributing to the global scope (ambient declaration files, script files, global augmentations, `typeRoots` entries).
 - `Configs` lists the project tsconfig followed by its `extends` ancestry.
 - `Candidates` maps each importing file to resolution probes that would outrank its selected module target. Bundlers watch and hash these paths so creating or changing one reloads an otherwise unchanged program. Lower-priority paths are excluded.

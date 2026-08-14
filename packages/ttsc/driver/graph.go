@@ -23,9 +23,10 @@ const bundledScheme = "bundled:///"
 //
 //   - Edges maps each file to its direct resolved references — imports,
 //     re-exports, `/// <reference>` targets, type reference directives, and
-//     ambient-module declaration files, type-only edges included. Direct
-//     edges are the minimal sufficient statistic; consumers that need a flat
-//     per-file list compute the reachability closure themselves.
+//     ambient-module declaration files, type-only edges included. A leaf file
+//     has an empty list so the node and its compiler-time input proof remain
+//     explicit. Direct edges are the minimal sufficient statistic; consumers
+//     that need a flat per-file list compute the reachability closure themselves.
 //   - Globals lists the files that contribute to the global scope (ambient
 //     declaration files, script files, global augmentations, `typeRoots`
 //     entries). A change to any of them can affect every file.
@@ -71,10 +72,12 @@ func NewTransformGraph(prog *Program, cwd string) *TransformGraph {
     if shimcompiler.FileAffectsGlobalScope(file) {
       graph.Globals = append(graph.Globals, key)
     }
-    targets := referenceTargets(prog, cwd, file)
-    if len(targets) != 0 {
-      graph.Edges[key] = targets
-    }
+    // Keep leaf modules as empty adjacency-list entries. Besides making the
+    // graph's node universe explicit, this lets attachInputProof bind every
+    // source file to the bytes TypeScript-Go actually read. Omitting a leaf
+    // would let an A-B-A edit during compilation pair B's output with identical
+    // pre/post project snapshots for A.
+    graph.Edges[key] = referenceTargets(prog, cwd, file)
   }
   sort.Strings(graph.Globals)
   graph.Configs = configChain(prog, cwd)

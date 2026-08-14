@@ -1,6 +1,8 @@
 package driver_test
 
 import (
+  "crypto/sha256"
+  "encoding/hex"
   "path/filepath"
   "slices"
   "strings"
@@ -28,8 +30,9 @@ import (
 //     alongside an ambient declaration file and an extended tsconfig.
 //  2. Compute the transform graph.
 //  3. Assert both edges, the ambient global, the config chain, and the
-//     negative twins: no self edges, no module files in globals, no entry
-//     for a file without references, and no bundled library anywhere.
+//     negative twins: no self edges, no module files in globals, an explicit
+//     empty node and compiler-time proof for a file without references, and no
+//     bundled library anywhere.
 func TestTransformGraphReportsTypeOnlyEdgesGlobalsAndConfigs(t *testing.T) {
   root := t.TempDir()
   writeProjectFile(t, root, "tsconfig.base.json", `{
@@ -46,7 +49,8 @@ func TestTransformGraphReportsTypeOnlyEdgesGlobalsAndConfigs(t *testing.T) {
 import type { MyType } from "./mytype";
 export const value: MyType = { id: "x" };
 `)
-  writeProjectFile(t, root, "mytype.ts", "export interface MyType { id: string }\n")
+  mytypeText := "export interface MyType { id: string }\n"
+  writeProjectFile(t, root, "mytype.ts", mytypeText)
   writeProjectFile(t, root, "ambient.d.ts", "declare const GLOBAL_FLAG: number;\n")
   writeProjectFile(t, root, "ref.d.ts", "declare interface Referenced { flag: boolean }\n")
 
@@ -77,9 +81,19 @@ export const value: MyType = { id: "x" };
     t.Fatalf("self edge must be dropped: %v", edges)
   }
 
-  // Negative twin: a file that references nothing gets no edge entry at all.
-  if entry, ok := graph.Edges["mytype.ts"]; ok {
-    t.Fatalf("mytype.ts references nothing but has an edge entry: %v", entry)
+  // A file that references nothing remains an explicit leaf node. Its
+  // compiler-time proof closes the A-B-A window that project snapshots alone
+  // cannot detect.
+  entry, ok := graph.Edges["mytype.ts"]
+  if !ok || len(entry) != 0 {
+    t.Fatalf("mytype.ts leaf adjacency = %v, %v; want present and empty", entry, ok)
+  }
+  digest := sha256.Sum256([]byte(mytypeText))
+  if hash := graph.InputHashes["mytype.ts"]; hash == nil || *hash != hex.EncodeToString(digest[:]) {
+    t.Fatalf("mytype.ts compiler-time hash = %#v, want %s", hash, hex.EncodeToString(digest[:]))
+  }
+  if realpath := graph.InputRealpaths["mytype.ts"]; realpath == nil || !filepath.IsAbs(*realpath) {
+    t.Fatalf("mytype.ts compiler-time realpath = %#v, want absolute", realpath)
   }
 
   if !slices.Contains(graph.Globals, "ambient.d.ts") {
