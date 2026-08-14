@@ -509,9 +509,9 @@ style: |
 
 <!-- _class: divider -->
 
-# The Limits of Loop Until Dry
+# Current Limitation
 
-<span class="note">More review. Diminishing returns.</span>
+<span class="note">Loop Until Dry</span>
 
 ---
 
@@ -546,15 +546,15 @@ style: |
 
 <!-- _class: divider -->
 
-# Spec Driven Development
+# Evidence Graph
 
-<span class="note">Write and review the requirements.<br/>AI builds everything with 100% coverage.</span>
+<span class="note">We attached a compiler to specifications, too</span>
 
 ---
 
 <!-- _class: architecture-slide -->
 
-# One graph connects the entire delivery
+# First, divide the documents into layers
 
 <div class="document-graph">
 <div class="architecture-node document-node meeting">Meeting notes</div>
@@ -575,7 +575,102 @@ style: |
 
 ---
 
-# Method A: Write and review the requirements
+# Code cites the specification
+
+```tsx
+/**
+ * @evidence docs/discount.md#coupon-stacking
+ *           Explains the stacking limit defined by this section.
+ * @evidence POST:/orders/{orderId}/coupons
+ *           Explains the rejection response from this endpoint.
+ */
+export function CouponStackingNotice(props: IProps): JSX.Element;
+```
+
+**`@evidence <target> <reason>`**: what it is responsible for, and why.
+
+---
+
+# Without a citation, the build stops
+
+```bash
+$ npx ttsc
+error TS16411: [evidence/graph]
+  Missing acknowledgement for 'docs/discount.md#coupon-stacking'
+  (Markdown H2 'Coupon Stacking' at docs/discount.md:3)
+```
+
+- One error per requirement → **the error list is the task list**
+- It appears alongside type errors. There is no additional check to attach
+
+---
+
+# The configuration is one sentence
+
+```ts
+type: "typescript",
+files: ["src/components/**/*.tsx"],  // The side that discharges the obligation
+symbol: "function",
+reference: {
+  type: "markdown",
+  files: ["docs/**/*.md"],           // The targets whose obligations must be discharged
+  symbol: ["h2", "h3"],
+},
+```
+
+**Components implement documents. Therefore, every H2 and H3 must be cited.**
+
+---
+
+# Four kinds of citation targets
+
+| Kind       | Unit                         |
+| ---------- | ---------------------------- |
+| Markdown   | file, H1-H4 section          |
+| Prisma     | model, column, relation      |
+| TypeScript | type, function, property     |
+| Swagger    | each operation under `paths` |
+
+<span class="note">Documents, schemas, code, and API specifications are connected by one grammar.</span>
+
+---
+
+# Who determines 100%?
+
+<div class="cards">
+<div class="card"><b>Denominator</b>The configuration declares it</div>
+<div class="card"><b>Numerator</b>The developer records it with tags</div>
+<div class="card warm"><b>Decision</b>The compiler makes it every time</div>
+</div>
+
+<br/>
+
+Entrust any one of the three to diligence, and 100% is merely **self-reported**.
+
+---
+
+# It prevents a false 100%
+
+| Option | What it prevents |
+| --- | --- |
+| `noEvidenceExclude` | Escaping with "not applicable" |
+| `uniqueEvidence` | Multiple places passing responsibility to one another |
+| `singleEvidencePerSymbol` | Piling every citation onto one place |
+| `requireReview` | Letting the specification change after it was cited |
+
+<span class="note">An exclusion requires a reason, and a review carries a fingerprint of the document content.</span>
+
+---
+
+<!-- _class: divider -->
+
+# Spec Driven Development
+
+<span class="note">Write and review the requirements.<br/>AI builds everything with 100% coverage.</span>
+
+---
+
+# Method A: Humans write the requirements
 
 - Humans **review `docs/requirements` directly**
 - Specifications, implementation, and tests are **fully delegated**
@@ -585,7 +680,7 @@ style: |
 
 ---
 
-# Method B: Delegate the requirements too
+# Method B: Hand over only the raw material
 
 - Hand over meeting notes and idea notes **as-is, without organizing them**
 - **Delegate everything**, starting with writing the requirements
@@ -595,7 +690,7 @@ style: |
 
 ---
 
-# Requirements can cite meeting notes
+# Even requirements cite their evidence
 
 ```md
 ## Coupon stacking limit {#coupon-stacking}
@@ -673,108 +768,13 @@ style: |
 
 <!-- _class: divider -->
 
-# Compile Every Omission
+# Benchmark
 
-<span class="note">Two tags are enough</span>
-
----
-
-# Code cites the specification
-
-```tsx
-/**
- * @evidence docs/discount.md#coupon-stacking
- *           Explains the stacking limit defined by this section.
- * @evidence POST:/orders/{orderId}/coupons
- *           Explains the rejection response from this endpoint.
- */
-export function CouponStackingNotice(props: IProps): JSX.Element;
-```
-
-**`@evidence <target> <reason>`**: what it is responsible for, and why.
+<span class="note">Same requirements · Same engine · Same model · Only the plugin changed</span>
 
 ---
 
-# Without a citation, the build stops
-
-```bash
-$ npx ttsc
-error TS16411: [evidence/graph]
-  Missing acknowledgement for 'docs/discount.md#coupon-stacking'
-  (Markdown H2 'Coupon Stacking' at docs/discount.md:3)
-```
-
-- One error per requirement → **the error list is the task list**
-- It runs with `ttsc`, alongside type errors
-
----
-
-# Configuration declares one relationship
-
-```ts
-type: "typescript",
-files: ["src/components/**/*.tsx"],  // The side that discharges the obligation
-symbol: "function",
-reference: {
-  type: "markdown",
-  files: ["docs/**/*.md"],           // The targets whose obligations must be discharged
-  symbol: ["h2", "h3"],
-},
-```
-
-**Components implement documents. Therefore, every H2 and H3 must be cited.**
-
----
-
-# One grammar spans four artifact types
-
-| Kind       | Unit                         |
-| ---------- | ---------------------------- |
-| Markdown   | file, H1-H4 section          |
-| Prisma     | model, column, relation      |
-| TypeScript | type, function, property     |
-| Swagger    | each operation under `paths` |
-
-<span class="note">Documents, schemas, code, and API specifications are connected by one grammar.</span>
-
----
-
-# Who determines 100%?
-
-<div class="cards">
-<div class="card"><b>Denominator</b>The configuration declares it</div>
-<div class="card"><b>Numerator</b>The developer records it with tags</div>
-<div class="card warm"><b>Decision</b>The compiler makes it every time</div>
-</div>
-
-<br/>
-
-**The compiler, not diligence, decides whether coverage is 100%.**
-
----
-
-# It prevents a false 100%
-
-| Option | What it prevents |
-| --- | --- |
-| `noEvidenceExclude` | Escaping with "not applicable" |
-| `uniqueEvidence` | Multiple places passing responsibility to one another |
-| `singleEvidencePerSymbol` | Piling every citation onto one place |
-| `requireReview` | Letting the specification change after it was cited |
-
-<span class="note">An exclusion requires a reason, and a review carries a fingerprint of the document content.</span>
-
----
-
-<!-- _class: divider -->
-
-# Measured Results
-
-<span class="note">Same requirements · Same engine · Same model<br/>Only the plugin changed</span>
-
----
-
-# Coverage reaches 100%
+# Coverage
 
 | Subject | Plain | Evidence |
 | --- | --- | --- |
@@ -783,11 +783,11 @@ reference: {
 | shopping | 63.1% <span class="track"><i class="w631"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
 | erp | 51.6% <span class="track"><i class="w516"></i></span> | 100% <span class="track on"><i class="w100"></i></span> |
 
-Plain coverage falls as scope grows. **Evidence remains at 100%.**
+The larger the project, the more it misses.<br/>**It does not even know that it missed something.**
 
 ---
 
-# Token savings grow with scope
+# Yet it becomes cheaper
 
 <div class="rows">
 <div class="row"><span class="lbl">todo</span><span class="bars"><i class="p b159"></i><i class="e b17"></i></span><span class="val">866M → 92M</span></div>
@@ -796,13 +796,13 @@ Plain coverage falls as scope grows. **Evidence remains at 100%.**
 <div class="row"><span class="lbl">erp</span><span class="bars"><i class="p b1000"></i><i class="e b75"></i></span><span class="val">5,449M → 411M</span></div>
 </div>
 
-<span class="kp">Plain</span> in blue. <span class="ke">Evidence</span> in orange. The gap widens with scope.
+Token consumption for <span class="kp">Plain</span> and <span class="ke">Evidence</span>.<br/>The gap widens as the project grows.
 
 <span class="note">Original charts by phase: [https://ttsc.dev/docs/benchmark/evidence](https://ttsc.dev/docs/benchmark/evidence)</span>
 
 ---
 
-# ERP: more complete, cheaper, faster
+# Cost and time decreased as well: ERP
 
 <div class="cards">
 <div class="card"><b>13.3×</b>fewer tokens<br/><span class="note">5,449M → 411M</span></div>
@@ -812,11 +812,11 @@ Plain coverage falls as scope grows. **Evidence remains at 100%.**
 
 <br/>
 
-**100% coverage with less time and cost.**
+This was not a cost paid for quality.<br/>**It built more and finished for less.**
 
 ---
 
-# Review share falls from 90–95% to 15–41%
+# But the review consumes all the money
 
 | Subject | Plain | Evidence |
 | --- | --- | --- |
@@ -829,7 +829,7 @@ Plain coverage falls as scope grows. **Evidence remains at 100%.**
 
 ---
 
-# A tag can satisfy coverage and still lie
+# What if it lies?
 
 ```ts
 /**
@@ -839,14 +839,14 @@ Plain coverage falls as scope grows. **Evidence remains at 100%.**
  */
 ```
 
-- `@evidenceReview` records the checked source and its fingerprint
-- A source change invalidates the review
+- Inexpensive models **sometimes write facts that do not exist**
+- Requiring fingerprinted reviews makes this **converge toward zero**<br/>but takes more time
 
-> The compiler finds omissions. Humans judge truthfulness.
+> A false tag removes the error, not the problem.
 
 ---
 
-# Human review becomes a finite checklist
+# In return, the review becomes narrower
 
 |  | Plain | Evidence |
 | --- | --- | --- |
@@ -858,9 +858,20 @@ Plain coverage falls as scope grows. **Evidence remains at 100%.**
 
 ---
 
+<!-- _class: dark -->
+
+# Summary
+
+- Humans review **only one document layer**
+- The **compiler protects everything below it**
+- A specification can be **software requirements, historical canon, or the laws of a fictional world**
+- 100% is not the goal, but **what remains after every error is closed**
+
+---
+
 <!-- _class: divider -->
 
-# The Same Harness for Stories
+# Appendix: Stories
 
 <span class="note">Settings become build constraints</span>
 
@@ -926,17 +937,6 @@ Plain coverage falls as scope grows. **Evidence remains at 100%.**
 - **Continuity**: knowledge, arcs, revisions
 - Historical fiction, fantasy, science fiction, mystery, drama
 - **Napoleon**: one example with 25 principles, 350 settings commitments, and 742 scenes
-
----
-
-<!-- _class: dark -->
-
-# Two tags. One completion condition.
-
-- `@evidence <target> <reason>`
-- `@evidenceExclude <target> <reason>`
-- Write and review the requirements
-- AI builds everything with 100% coverage
 
 ---
 
