@@ -82,7 +82,7 @@ The plugin builder reads Go's effective build environment for the cache key. It 
 
 ### Cache-key inputs: `GO_BUILD_ENV_KEYS`
 
-These effective Go build env values fold into the cache key when non-empty, so cross-compile targets, build-tag tweaks, cgo compiler/linker choices, FIPS mode, and toolchain roots never collide with the native build slot. `ttsc` reads them through `go env`, so `go env -w` settings are covered too. `GOROOT` is normalized to a toolchain-content fingerprint instead of the install path, preserving pnpm path sharing for identical bundled toolchains. Command-valued entries such as `CC`, `CXX`, `AR`, `GCCGO`, and `PKG_CONFIG` include the resolved executable content hash as well as the command string.
+These effective Go build env values fold into the cache key when non-empty, so cross-compile targets, build-tag tweaks, cgo compiler/linker choices, FIPS mode, and toolchain roots never collide with the native build slot. `ttsc` reads them through `go env`, so `go env -w` settings are covered too. `GOROOT` is normalized to a toolchain-content fingerprint instead of the install path, preserving pnpm path sharing for identical bundled toolchains. Within one process, an unchanged GOROOT reuses that fingerprint after a fresh file-metadata manifest check; an added, removed, replaced, or modified toolchain file recomputes the same content fingerprint, so this skips repeated SDK reads without changing key bytes or freshness. Command-valued entries such as `CC`, `CXX`, `AR`, `GCCGO`, and `PKG_CONFIG` include the resolved executable content hash as well as the command string.
 
 ```text
 GOOS GOARCH GOAMD64 GOARM GOARM64 GO386 GOMIPS GOMIPS64 GOPPC64
@@ -104,12 +104,12 @@ Source: `packages/ttsc/src/plugin/internal/buildSourcePlugin.ts` (`GO_BUILD_ENV_
 
 Before spawning a plugin, `ttsc` sets three env vars (`TTSC_NODE_BINARY`, `TTSC_TSGO_BINARY`, `TTSC_TTSX_BINARY`) in the child environment so the plugin can re-spawn the ttsc toolchain without resolving paths itself, plus a fourth (`TTSC_PLUGIN_CONFIG_DIR`) when the embedder declared a plugin config anchor:
 
-- `TTSC_NODE_BINARY`: absolute path of the Node binary that launched `ttsc`.
+- `TTSC_NODE_BINARY`: absolute path of the Node runtime selected for Node-only `ttsx` and native-config helpers. A Node parent reuses its own executable; a Bun parent resolves a real Node executable separately.
 - `TTSC_TSGO_BINARY`: resolved tsgo native binary used by this `ttsc` invocation.
 - `TTSC_TTSX_BINARY`: resolved `ttsx` launcher.
 - `TTSC_PLUGIN_CONFIG_DIR` (only when the embedding sets `pluginConfigDir`): the directory that plugin config-file discovery and relative `configFile` resolution anchor at. Build integrations that compile through a generated wrapper tsconfig set it to the real project root (the bundler adapters write such a wrapper into the system temp directory for aliases and `compilerOptions` overlays); absent it, plugins anchor at the tsconfig's own directory.
 
-A plugin that wants to re-spawn `ttsx` or `tsgo` (for example to type-check a generated file) should call these vars rather than re-resolving from `$PATH`. They guarantee the same host the consumer ran. A plugin that discovers its own config file should anchor at `TTSC_PLUGIN_CONFIG_DIR` when set; the shipped utility plugins do this through `driver.PluginConfigBaseDir`. Sources: `runBuild.ts` and `transformProjectInMemory.ts`. See [Recipes → Re-spawn ttsx or tsgo from a plugin](/docs/development/authoring/recipes#re-spawn-ttsx-or-tsgo-from-a-plugin) for usage.
+A plugin that wants to re-spawn `ttsx` or `tsgo` (for example to type-check a generated file) should call these vars rather than re-resolving from `$PATH`. They guarantee the same helper toolchain selected by the host. A plugin that discovers its own config file should anchor at `TTSC_PLUGIN_CONFIG_DIR` when set; the shipped utility plugins do this through `driver.PluginConfigBaseDir`. Sources: `runBuild.ts` and `transformProjectInMemory.ts`. See [Recipes → Re-spawn ttsx or tsgo from a plugin](/docs/development/authoring/recipes#re-spawn-ttsx-or-tsgo-from-a-plugin) for usage.
 
 ### `GOROOT` is auto-injected only when unset
 

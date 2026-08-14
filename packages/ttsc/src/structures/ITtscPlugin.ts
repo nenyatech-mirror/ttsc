@@ -23,6 +23,42 @@ export interface ITtscPlugin {
   name?: string;
 
   /**
+   * Absolute files whose contents or presence influence this descriptor or its
+   * native transform for every project file.
+   *
+   * Ttsc automatically records the descriptor's CommonJS module graph, tsconfig
+   * ancestry, package-discovery manifest, and an explicit `configFile`. Use
+   * this field for additional implicit config discovery and for files a native
+   * plugin reads outside the TypeScript reference graph. Missing paths are
+   * valid: they represent higher-priority discovery candidates whose later
+   * creation must invalidate a resident transform.
+   */
+  hostInputs?: string[];
+
+  /**
+   * Evaluation-time SHA-256 fingerprints for entries in {@link hostInputs}.
+   *
+   * Use a lowercase 64-digit digest for a file observed during descriptor
+   * evaluation and `null` for a missing candidate. Ttsc's generated resolution
+   * loaders also digest the stable kind marker for an existing directory
+   * candidate, so replacing that directory with a file invalidates the
+   * generation. The map is optional: ttsc still watches unhashed inputs, but
+   * persistent adapters conservatively decline narrow generation reuse because
+   * a later host snapshot cannot prove which state produced the descriptor.
+   */
+  hostInputHashes?: Record<string, string | null>;
+
+  /**
+   * Evaluation-time physical paths for entries in {@link hostInputs}.
+   *
+   * Use the canonical path returned by `fs.realpathSync.native`, or `null` when
+   * the input was missing. Persistent adapters pair this with
+   * {@link hostInputHashes} so retargeting a symlink or junction cannot attach
+   * output evaluated from one target to equal bytes at another target.
+   */
+  hostInputRealpaths?: Record<string, string | null>;
+
+  /**
    * Go package directory, or a `go.mod` file, that ttsc lazily builds.
    *
    * Ttsc accepts source only. It does not accept a prebuilt binary path: the

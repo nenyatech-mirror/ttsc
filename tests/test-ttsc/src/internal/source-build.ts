@@ -17,14 +17,18 @@ import {
   autoQuoteGoModToken,
   buildSourcePlugin,
   computeCacheKey,
+  ensureExecutableGoToolchain,
   formatDuration,
   formatGoWorkPath,
   inspectPluginBuildLock,
+  pruneGoBuildCacheRoot,
+  prunePluginCacheRoot,
   reclaimPluginBuildLock,
   releasePluginBuildLock,
   resolvePluginCacheRoot,
   resolveSourceBuildCachePaths,
   waitForPluginBinary,
+  withGoBuildCacheLease,
 } from "../../../../packages/ttsc/lib/plugin/internal/buildSourcePlugin.js";
 
 /**
@@ -50,6 +54,10 @@ import {
  *   (bounded by a two-minute safety deadline).
  * - `FAKE_GO_BUILD_EXIT_CODE`: exit `go build` with this status instead of
  *   writing the output binary, simulating a failed compile.
+ * - `FAKE_GO_BUILD_CACHE_OBJECT_COUNT`: write this many four-byte, old objects
+ *   into `GOCACHE`, allowing post-build size maintenance to be tested.
+ * - `FAKE_GO_BUILD_CACHE_MARKER_VALUE`: overwrite `GOCACHE/.ttsc-gc` during the
+ *   build, so a caller can prove post-build maintenance replaces it.
  */
 function createFakeGoBinary(
   root: string,
@@ -108,6 +116,25 @@ function createFakeGoBinary(
       "    }",
       "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);",
       "  }",
+      "}",
+      "if (process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT && process.env.GOCACHE) {",
+      "  const count = Number(process.env.FAKE_GO_BUILD_CACHE_OBJECT_COUNT);",
+      "  const old = new Date(Date.now() - 3 * 60 * 60 * 1000);",
+      "  for (let index = 0; index < count; index += 1) {",
+      '    const bucket = index.toString(16).padStart(2, "0");',
+      "    const file = path.join(process.env.GOCACHE, bucket, `fake-${index}`);",
+      "    fs.mkdirSync(path.dirname(file), { recursive: true });",
+      '    fs.writeFileSync(file, "data", "utf8");',
+      "    fs.utimesSync(file, old, old);",
+      "  }",
+      "}",
+      "if (process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE && process.env.GOCACHE) {",
+      "  fs.mkdirSync(process.env.GOCACHE, { recursive: true });",
+      "  fs.writeFileSync(",
+      '    path.join(process.env.GOCACHE, ".ttsc-gc"),',
+      '    process.env.FAKE_GO_BUILD_CACHE_MARKER_VALUE + "\\n",',
+      '    "utf8",',
+      "  );",
       "}",
       "if (process.env.FAKE_GO_BUILD_EXIT_CODE) {",
       '  console.error("fake go: build failed as directed by FAKE_GO_BUILD_EXIT_CODE");',
@@ -341,6 +368,7 @@ export {
   child_process,
   computeCacheKey,
   createFakeGoBinary,
+  ensureExecutableGoToolchain,
   createSourcePluginWorkerScript,
   formatDuration,
   formatGoWorkPath,
@@ -348,6 +376,8 @@ export {
   inspectPluginBuildLock,
   os,
   path,
+  prunePluginCacheRoot,
+  pruneGoBuildCacheRoot,
   reclaimPluginBuildLock,
   releasePluginBuildLock,
   resolvePluginCacheRoot,
@@ -358,4 +388,5 @@ export {
   spawnSourcePluginWorker,
   waitForCondition,
   waitForPluginBinary,
+  withGoBuildCacheLease,
 };

@@ -3,6 +3,7 @@ package banner
 import (
   "bytes"
   "context"
+  "crypto/sha256"
   "encoding/json"
   "fmt"
   "os"
@@ -61,13 +62,21 @@ func validateBannerConfig(config map[string]any) error {
 // SourcePreamble resolves the banner text from the plugin config and returns it
 // formatted as a JSDoc block comment suitable for prepending to each emitted file.
 func (plugin) SourcePreamble(ctx driver.PluginContext) (string, error) {
-  return parseBanner(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig)
+  return parseBannerWithReporters(ctx.Entry.Config, ctx.Cwd, ctx.Tsconfig, ctx.ReportHostInput, ctx.ReportHostInputHash, ctx.ReportHostInputRealpath)
 }
 
 // parseBanner resolves and formats banner text into a JSDoc block comment.
 // Trailing blank lines are stripped from the resolved text before formatting.
 func parseBanner(config map[string]any, cwd, tsconfigPath string) (string, error) {
-  text, err := resolveBannerText(config, cwd, tsconfigPath)
+  return parseBannerWithReporter(config, cwd, tsconfigPath, nil)
+}
+
+func parseBannerWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
+  return parseBannerWithReporters(config, cwd, tsconfigPath, reporter, nil, nil)
+}
+
+func parseBannerWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string), realpathReporter func(string, *string)) (string, error) {
+  text, err := resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, hashReporter, realpathReporter)
   if err != nil {
     return "", err
   }
@@ -108,6 +117,14 @@ func sanitizeJSDocLine(line string) string {
 // The discovery base directory doubles as the resolution root the config
 // loader anchors its toolchain lookup on; see configToolAnchors.
 func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string, error) {
+  return resolveBannerTextWithReporter(config, cwd, tsconfigPath, nil)
+}
+
+func resolveBannerTextWithReporter(config map[string]any, cwd, tsconfigPath string, reporter func(string)) (string, error) {
+  return resolveBannerTextWithReporters(config, cwd, tsconfigPath, reporter, nil, nil)
+}
+
+func resolveBannerTextWithReporters(config map[string]any, cwd, tsconfigPath string, reporter func(string), hashReporter func(string, *string), realpathReporter func(string, *string)) (string, error) {
   if err := validateBannerConfig(config); err != nil {
     return "", err
   }
@@ -119,11 +136,12 @@ func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string,
       return "", fmt.Errorf("@ttsc/banner: \"configFile\" must be a non-empty string path")
     }
     location := resolveBannerConfigPath(configFile, cwd, tsconfigPath)
-    raw, err := loadBannerConfigFile(location, resolutionRoot)
+    loaded, err := loadBannerConfigFileWithInputs(location, resolutionRoot)
     if err != nil {
       return "", err
     }
-    text, ok, err := bannerTextFromConfigValue(raw, filepath.Base(location))
+    reportBannerConfigInputs(loaded.inputs, loaded.hashes, loaded.realpaths, reporter, hashReporter, realpathReporter)
+    text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
     if err != nil {
       return "", err
     }
@@ -140,11 +158,12 @@ func resolveBannerText(config map[string]any, cwd, tsconfigPath string) (string,
   if location == "" {
     return "", fmt.Errorf("@ttsc/banner: no banner.config.{ts,cts,mts,js,cjs,mjs,json} file found; create one or set \"configFile\" in the tsconfig plugin entry")
   }
-  raw, err := loadBannerConfigFile(location, resolutionRoot)
+  loaded, err := loadBannerConfigFileWithInputs(location, resolutionRoot)
   if err != nil {
     return "", err
   }
-  text, ok, err := bannerTextFromConfigValue(raw, filepath.Base(location))
+  reportBannerConfigInputs(loaded.inputs, loaded.hashes, loaded.realpaths, reporter, hashReporter, realpathReporter)
+  text, ok, err := bannerTextFromConfigValue(loaded.value, filepath.Base(location))
   if err != nil {
     return "", err
   }
@@ -253,17 +272,118 @@ func tsconfigBaseDir(cwd, tsconfigPath string) string {
 // toolchain resolution on when the config file's own ancestry answers nothing;
 // see configToolAnchors. The JSON and JS branches spawn no ttsx and ignore it.
 func loadBannerConfigFile(location, resolutionRoot string) (any, error) {
+  loaded, err := loadBannerConfigFileWithInputs(location, resolutionRoot)
+  return loaded.value, err
+}
+
+type bannerLoadedConfig struct {
+  hashes    map[string]*string
+  inputs    []string
+  realpaths map[string]*string
+  value     any
+}
+
+func loadBannerConfigFileWithInputs(location, resolutionRoot string) (bannerLoadedConfig, error) {
   if !isBannerConfigFileName(filepath.Base(location)) {
-    return nil, fmt.Errorf("@ttsc/banner: config file must be named banner.config.{ts,cts,mts,js,cjs,mjs,json}: %s", location)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: config file must be named banner.config.{ts,cts,mts,js,cjs,mjs,json}: %s", location)
   }
   ext := strings.ToLower(filepath.Ext(location))
   switch ext {
   case ".json":
-    return loadBannerJSONConfigFile(location)
+    body, err := os.ReadFile(location)
+    if err != nil {
+      return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: read config file %s: %w", location, err)
+    }
+    value, err := parseBannerJSONConfigFile(location, body)
+    digest := fmt.Sprintf("%x", sha256.Sum256(body))
+    return bannerLoadedConfig{hashes: map[string]*string{location: &digest}, inputs: []string{location}, realpaths: map[string]*string{location: physicalHostInput(location)}, value: value}, err
   case ".js", ".cjs", ".mjs":
-    return loadBannerScriptConfigFile(location)
+    return loadBannerScriptConfigFileWithInputs(location)
   }
-  return loadBannerTypeScriptConfigFile(location, resolutionRoot)
+  return loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot)
+}
+
+func reportBannerConfigInputs(inputs []string, hashes, realpaths map[string]*string, reporter func(string), hashReporter, realpathReporter func(string, *string)) {
+  if reporter == nil && hashReporter == nil && realpathReporter == nil {
+    return
+  }
+  for _, input := range inputs {
+    if reporter != nil {
+      reporter(input)
+    }
+    if hashReporter != nil {
+      if hash, ok := hashes[input]; ok {
+        hashReporter(input, hash)
+      }
+    }
+    if realpathReporter != nil {
+      if realpath, ok := realpaths[input]; ok {
+        realpathReporter(input, realpath)
+      }
+    }
+  }
+}
+
+func physicalHostInput(file string) *string {
+  resolved, err := filepath.Abs(file)
+  if err != nil {
+    return nil
+  }
+  resolved = filepath.Clean(resolved)
+  seen := make(map[string]struct{})
+  for range 255 {
+    if _, exists := seen[resolved]; exists {
+      return nil
+    }
+    seen[resolved] = struct{}{}
+    if evaluated, evalErr := filepath.EvalSymlinks(resolved); evalErr == nil {
+      evaluated, evalErr = filepath.Abs(evaluated)
+      if evalErr != nil {
+        return nil
+      }
+      evaluated = filepath.Clean(evaluated)
+      if _, statErr := os.Stat(evaluated); statErr != nil {
+        return nil
+      }
+      return &evaluated
+    }
+    next, ok := resolveHostInputLinkAncestor(resolved)
+    if !ok {
+      return nil
+    }
+    resolved = next
+  }
+  return nil
+}
+
+// resolveHostInputLinkAncestor follows the nearest link-like ancestor and
+// reattaches its remaining suffix. Windows junction children can be opened and
+// os.Readlink exposes the junction itself even when EvalSymlinks rejects the
+// complete child path.
+func resolveHostInputLinkAncestor(location string) (string, bool) {
+  probe := filepath.Clean(location)
+  suffix := make([]string, 0)
+  for {
+    if target, err := os.Readlink(probe); err == nil {
+      if !filepath.IsAbs(target) {
+        target = filepath.Join(filepath.Dir(probe), target)
+      }
+      for i := len(suffix) - 1; i >= 0; i-- {
+        target = filepath.Join(target, suffix[i])
+      }
+      absolute, absErr := filepath.Abs(target)
+      if absErr != nil {
+        return "", false
+      }
+      return filepath.Clean(absolute), true
+    }
+    parent := filepath.Dir(probe)
+    if parent == probe {
+      return "", false
+    }
+    suffix = append(suffix, filepath.Base(probe))
+    probe = parent
+  }
 }
 
 // isBannerConfigFileName reports whether name is an allowed banner config file name.
@@ -290,6 +410,10 @@ func loadBannerJSONConfigFile(location string) (any, error) {
   if err != nil {
     return nil, fmt.Errorf("@ttsc/banner: read config file %s: %w", location, err)
   }
+  return parseBannerJSONConfigFile(location, body)
+}
+
+func parseBannerJSONConfigFile(location string, body []byte) (any, error) {
   // Strip a leading UTF-8 BOM so files saved by Windows editors round
   // trip through json.Unmarshal without an opaque "invalid character" failure.
   body = bytes.TrimPrefix(body, []byte{0xEF, 0xBB, 0xBF})
@@ -304,8 +428,207 @@ func loadBannerJSONConfigFile(location string) (any, error) {
 // running a small Node.js loader script that dynamic-imports the file and
 // serializes its exported value to stdout as JSON.
 func loadBannerScriptConfigFile(location string) (any, error) {
+  loaded, err := loadBannerScriptConfigFileWithInputs(location)
+  return loaded.value, err
+}
+
+func loadBannerScriptConfigFileWithInputs(location string) (bannerLoadedConfig, error) {
   const script = `
-const { pathToFileURL } = require("node:url");
+const { createRequire, isBuiltin, registerHooks } = require("node:module");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const { fileURLToPath, pathToFileURL } = require("node:url");
+const inputs = new Set();
+const hashes = new Map();
+const realpaths = new Map();
+const signatures = new Map();
+const unstableHashes = new Set();
+
+function existingFile(file) {
+  try { return fs.statSync(file).isFile(); }
+  catch { return false; }
+}
+
+function missingPathError(error) {
+  return error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function inputMetadataSignature(file) {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch { return undefined; }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function recordInput(file) {
+  file = path.resolve(file);
+  inputs.add(file);
+  if (unstableHashes.has(file)) return;
+  const beforeSignature = inputMetadataSignature(file);
+  let observed;
+  let observedRealpath;
+  try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+  catch { observed = null; }
+  try { observedRealpath = fs.realpathSync.native(file); }
+  catch { observedRealpath = null; }
+  const afterSignature = inputMetadataSignature(file);
+  if (beforeSignature === undefined || afterSignature === undefined || beforeSignature !== afterSignature || (signatures.has(file) && signatures.get(file) !== afterSignature) || (hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
+    hashes.delete(file);
+    realpaths.delete(file);
+    signatures.delete(file);
+    unstableHashes.add(file);
+    return;
+  }
+  signatures.set(file, afterSignature);
+  hashes.set(file, observed);
+  realpaths.set(file, observedRealpath);
+}
+
+function recordFile(file) {
+  const resolvedFile = path.resolve(file);
+  recordInput(resolvedFile);
+  for (let directory = path.dirname(resolvedFile);;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (existingFile(manifest)) {
+      break;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+}
+
+function recordPackageManifests(file) {
+  for (let directory = path.dirname(path.resolve(file));;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (existingFile(manifest)) return;
+    const parent = path.dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
+}
+
+const moduleProbeExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"];
+function moduleCandidates(base) {
+  return [
+    base,
+    ...moduleProbeExtensions.map((extension) => base + extension),
+    path.join(base, "package.json"),
+    ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension)),
+  ];
+}
+const recordedModuleBases = new Set();
+function recordManifestTargets(value, directory, allowBare = false) {
+  if (typeof value === "string") {
+    if (value !== "" && (allowBare || value.startsWith("./") || value.startsWith("../"))) recordModuleCandidates(path.resolve(directory, value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) recordManifestTargets(item, directory, allowBare);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) recordManifestTargets(item, directory, allowBare);
+  }
+}
+function recordModuleCandidates(base) {
+  const resolvedBase = path.resolve(base);
+  if (recordedModuleBases.has(resolvedBase)) return;
+  recordedModuleBases.add(resolvedBase);
+  for (const candidate of moduleCandidates(resolvedBase)) recordInput(candidate);
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
+    recordManifestTargets(manifest.exports, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase, true);
+    recordManifestTargets(manifest.main, resolvedBase, true);
+  } catch {}
+}
+function candidateSelected(base, resolvedFile) {
+  for (const candidate of moduleCandidates(base)) {
+    try {
+      const canonical = fs.realpathSync.native(candidate);
+      const relative = path.relative(canonical, resolvedFile);
+      if (relative === "" || (fs.statSync(canonical).isDirectory() && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))) return true;
+    } catch {}
+  }
+  return false;
+}
+function localBases(specifier, parentDirectory) {
+  if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];
+  const raw = path.resolve(parentDirectory, specifier);
+  const suffixStart = specifier.search(/[?#]/);
+  if (suffixStart === -1) return [raw];
+  const pathname = specifier.slice(0, suffixStart);
+  return pathname === "" ? [raw] : [...new Set([raw, path.resolve(parentDirectory, pathname)])];
+}
+function recordResolutionCandidates(specifier, parentURL, resolvedURL) {
+  if (typeof parentURL !== "string" || !parentURL.startsWith("file:")) return;
+  const parentDirectory = path.dirname(fileURLToPath(parentURL));
+  let resolvedFile;
+  try {
+    resolvedFile = typeof resolvedURL === "string" && resolvedURL.startsWith("file:")
+      ? fs.realpathSync.native(fileURLToPath(resolvedURL))
+      : undefined;
+  } catch {}
+  if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {
+    try {
+      for (const base of localBases(specifier, parentDirectory)) {
+        recordPackageManifests(base);
+        let exact = false;
+        try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
+        if (exact) recordInput(base);
+        else recordModuleCandidates(base);
+      }
+    } catch {}
+    return;
+  }
+  if (isBuiltin(specifier) || specifier.startsWith("#")) return;
+  const parts = specifier.split("/");
+  const packageParts = parts[0].startsWith("@") ? parts.slice(0, 2) : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) return;
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  const searchPaths = createRequire(parentURL).resolve.paths(specifier) ?? [];
+  for (const searchPath of searchPaths) {
+    const packageDirectory = path.join(searchPath, packageName);
+    recordModuleCandidates(packageDirectory);
+    if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));
+    if (resolvedFile !== undefined && candidateSelected(packageDirectory, resolvedFile)) break;
+  }
+}
+
+recordFile(process.argv[1]);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    recordResolutionCandidates(specifier, context.parentURL, undefined);
+    const resolved = nextResolve(specifier, context);
+    const url = typeof resolved === "string" ? resolved : resolved && resolved.url;
+    recordResolutionCandidates(specifier, context.parentURL, url);
+    if (typeof url === "string" && url.startsWith("file:")) {
+      recordFile(fileURLToPath(url));
+    }
+    return resolved;
+  },
+});
 
 (async () => {
   const mod = await import(pathToFileURL(process.argv[1]).href);
@@ -321,15 +644,11 @@ const { pathToFileURL } = require("node:url");
     break;
   }
   const value = typeof current === "function" ? await current() : current;
-  process.stdout.write(JSON.stringify(toSerializableBanner(value)));
+  const serializedValue = toSerializableBanner(value);
+  for (const input of [...inputs]) recordInput(input);
+  process.stdout.write(JSON.stringify({ value: serializedValue, hashes: Object.fromEntries(hashes), inputs: [...inputs].sort(), realpaths: Object.fromEntries(realpaths) }));
 })().catch((error) => {
   process.stderr.write(error && error.stack ? error.stack : String(error));
-  // The stack above is for the reader. This is for the caller: the parent reads
-  // stdout as the payload channel either way, so a failure reason travels as
-  // data rather than as text scraped back out of a captured stream. The exit
-  // code is set before the write so a callback that never fires still fails the
-  // load, and the write's completion is what triggers the exit, because
-  // process.exit abandons a pending pipe write.
   process.exitCode = 1;
   process.stdout.write(JSON.stringify({ __ttscLoaderError: error && error.message ? String(error.message) : String(error) }), () => process.exit(1));
 });
@@ -347,7 +666,13 @@ function toSerializableBanner(value) {
   }
   ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
-  cmd := exec.CommandContext(ctx, node, "-e", script, location)
+  // Windows limits the whole process command line to roughly 32 KiB. The
+  // dependency-tracking loader is intentionally larger than that, so keep only
+  // an explicit CommonJS stdin program and remove Node's stdin sentinel before
+  // the loader runs. This preserves the historical process.argv layout seen by
+  // both the loader and the imported user config without using string eval.
+  cmd := exec.CommandContext(ctx, node, "--input-type=commonjs", "-", location)
+  cmd.Stdin = strings.NewReader("process.argv.splice(1, 1);\n" + script)
   cmd.Env = nodeConfigLoaderEnv(location)
   // The child's stderr is human output and goes straight to this process's
   // stderr as it is written. Collecting it only to replay it afterwards is what
@@ -360,15 +685,46 @@ function toSerializableBanner(value) {
     // What it could not put there is a reason a caller can act on, so that
     // arrives through the payload channel instead.
     if reason := loaderFailureReason(output); reason != "" {
-      return nil, fmt.Errorf("@ttsc/banner: load config file %s: %s", location, reason)
+      return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load config file %s: %s", location, reason)
     }
-    return nil, fmt.Errorf("@ttsc/banner: load config file %s: %w", location, err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load config file %s: %w", location, err)
   }
-  var out any
-  if err := json.Unmarshal(output, &out); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: parse config file %s output: %w", location, err)
+  loaded, err := decodeBannerConfigLoaderOutput(output)
+  if err != nil {
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: parse config file %s output: %w", location, err)
   }
-  return out, nil
+  return loaded, nil
+}
+
+func decodeBannerConfigLoaderOutput(output []byte) (bannerLoadedConfig, error) {
+  var envelope struct {
+    Error     string             `json:"__ttscLoaderError"`
+    Hashes    map[string]*string `json:"hashes"`
+    Inputs    []string           `json:"inputs"`
+    Realpaths map[string]*string `json:"realpaths"`
+    Value     json.RawMessage    `json:"value"`
+  }
+  if err := json.Unmarshal(output, &envelope); err != nil {
+    return bannerLoadedConfig{}, err
+  }
+  if envelope.Error != "" {
+    return bannerLoadedConfig{}, fmt.Errorf("%s", envelope.Error)
+  }
+  if len(envelope.Value) == 0 {
+    // Test/fallback launchers written against the historical payload return
+    // the config value directly. Preserve that accepted contract while real
+    // loaders use the envelope to carry runtime inputs.
+    var value any
+    if err := json.Unmarshal(output, &value); err != nil {
+      return bannerLoadedConfig{}, err
+    }
+    return bannerLoadedConfig{value: value}, nil
+  }
+  var value any
+  if err := json.Unmarshal(envelope.Value, &value); err != nil {
+    return bannerLoadedConfig{}, err
+  }
+  return bannerLoadedConfig{hashes: envelope.Hashes, inputs: envelope.Inputs, realpaths: envelope.Realpaths, value: value}, nil
 }
 
 // loadBannerTypeScriptConfigFile compiles and runs a TypeScript banner config
@@ -381,28 +737,33 @@ function toSerializableBanner(value) {
 // resolved from the project rather than from the process environment alone;
 // see configToolAnchors.
 func loadBannerTypeScriptConfigFile(location, resolutionRoot string) (any, error) {
+  loaded, err := loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot)
+  return loaded.value, err
+}
+
+func loadBannerTypeScriptConfigFileWithInputs(location, resolutionRoot string) (bannerLoadedConfig, error) {
   tempDir, err := os.MkdirTemp(loaderTempBase(location, os.TempDir()), "ttsc-banner-config-")
   if err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: create config loader tempdir: %w", err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: create config loader tempdir: %w", err)
   }
   defer os.RemoveAll(tempDir)
 
   if err := linkConfigNodeModules(tempDir, filepath.Dir(location)); err != nil {
-    return nil, err
+    return bannerLoadedConfig{}, err
   }
 
   loader := filepath.Join(tempDir, "loader.mts")
   tsconfig := filepath.Join(tempDir, "tsconfig.json")
   importSpecifier, err := relativeImportSpecifier(tempDir, location)
   if err != nil {
-    return nil, err
+    return bannerLoadedConfig{}, err
   }
   importLiteral, _ := json.Marshal(importSpecifier)
   if err := writeConfigLoaderFile(loader, []byte(bannerTypeScriptConfigLoaderSource(string(importLiteral))), 0o644); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: write config loader: %w", err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: write config loader: %w", err)
   }
   if err := writeConfigLoaderFile(tsconfig, []byte(typeScriptConfigLoaderTsconfig(loader, location, tempDir)), 0o644); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: write config loader tsconfig: %w", err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: write config loader tsconfig: %w", err)
   }
 
   args := []string{
@@ -432,22 +793,232 @@ func loadBannerTypeScriptConfigFile(location, resolutionRoot string) (any, error
     // What it could not put there is a reason a caller can act on, so that
     // arrives through the payload channel instead.
     if reason := loaderFailureReason(output); reason != "" {
-      return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %s", location, reason)
+      return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %s", location, reason)
     }
-    return nil, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %w", location, err)
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: load TypeScript config file %s: %w", location, err)
   }
-  var out any
-  if err := json.Unmarshal(output, &out); err != nil {
-    return nil, fmt.Errorf("@ttsc/banner: parse TypeScript config file %s output: %w", location, err)
+  loaded, err := decodeBannerConfigLoaderOutput(output)
+  if err != nil {
+    return bannerLoadedConfig{}, fmt.Errorf("@ttsc/banner: parse TypeScript config file %s output: %w", location, err)
   }
-  return out, nil
+  return loaded, nil
 }
 
 // bannerTypeScriptConfigLoaderSource returns the source of a TypeScript loader
 // module that imports the banner config file specified by importLiteral (a
 // JSON-encoded import specifier) and writes the serialized banner value to stdout.
 func bannerTypeScriptConfigLoaderSource(importLiteral string) string {
-  return fmt.Sprintf(`import * as importedConfig from %s;
+  return fmt.Sprintf(`// @ts-nocheck
+import { createRequire, isBuiltin, registerHooks } from "node:module";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const inputs = new Set<string>();
+const hashes = new Map<string, string | null>();
+const realpaths = new Map<string, string | null>();
+const signatures = new Map<string, string>();
+const unstableHashes = new Set<string>();
+
+function existingFile(file: string): boolean {
+  try { return fs.statSync(file).isFile(); }
+  catch { return false; }
+}
+
+function missingPathError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function inputMetadataSignature(file: string): string | undefined {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch { return undefined; }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function recordInput(file: string): void {
+  file = path.resolve(file);
+  inputs.add(file);
+  if (unstableHashes.has(file)) return;
+  const beforeSignature = inputMetadataSignature(file);
+  let observed: string | null;
+  let observedRealpath: string | null;
+  try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+  catch { observed = null; }
+  try { observedRealpath = fs.realpathSync.native(file); }
+  catch { observedRealpath = null; }
+  const afterSignature = inputMetadataSignature(file);
+  if (beforeSignature === undefined || afterSignature === undefined || beforeSignature !== afterSignature || (signatures.has(file) && signatures.get(file) !== afterSignature) || (hashes.has(file) && hashes.get(file) !== observed) || (realpaths.has(file) && realpaths.get(file) !== observedRealpath)) {
+    hashes.delete(file);
+    realpaths.delete(file);
+    signatures.delete(file);
+    unstableHashes.add(file);
+    return;
+  }
+  signatures.set(file, afterSignature);
+  hashes.set(file, observed);
+  realpaths.set(file, observedRealpath);
+}
+
+function recordFile(file: string): void {
+  const resolvedFile = path.resolve(file);
+  recordInput(resolvedFile);
+  for (let directory = path.dirname(resolvedFile);;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (existingFile(manifest)) {
+      break;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      break;
+    }
+    directory = parent;
+  }
+}
+
+function recordPackageManifests(file: string): void {
+  for (let directory = path.dirname(path.resolve(file));;) {
+    const manifest = path.join(directory, "package.json");
+    recordInput(manifest);
+    if (existingFile(manifest)) return;
+    const parent = path.dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
+}
+
+const moduleProbeExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"] as const;
+const jsToTsProbeExtensions = new Map<string, readonly string[]>([
+  [".js", [".ts", ".tsx"]],
+  [".jsx", [".tsx"]],
+  [".mjs", [".mts"]],
+  [".cjs", [".cts"]],
+]);
+function sourceSubstitutionCandidates(base: string): string[] {
+  const extension = path.extname(base).toLowerCase();
+  const substitutions = jsToTsProbeExtensions.get(extension);
+  if (substitutions === undefined) return [];
+  const stem = base.slice(0, base.length - extension.length);
+  return substitutions.map((candidate) => stem + candidate);
+}
+function moduleCandidates(base: string): string[] {
+  return [
+    base,
+    ...sourceSubstitutionCandidates(base),
+    ...moduleProbeExtensions.map((extension) => base + extension),
+    path.join(base, "package.json"),
+    ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension)),
+  ];
+}
+const recordedModuleBases = new Set<string>();
+function recordManifestTargets(value: unknown, directory: string, allowBare: boolean = false): void {
+  if (typeof value === "string") {
+    if (value !== "" && (allowBare || value.startsWith("./") || value.startsWith("../"))) recordModuleCandidates(path.resolve(directory, value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) recordManifestTargets(item, directory, allowBare);
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) recordManifestTargets(item, directory, allowBare);
+  }
+}
+function recordModuleCandidates(base: string): void {
+  const resolvedBase = path.resolve(base);
+  if (recordedModuleBases.has(resolvedBase)) return;
+  recordedModuleBases.add(resolvedBase);
+  for (const candidate of moduleCandidates(resolvedBase)) recordInput(candidate);
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));
+    recordManifestTargets(manifest.exports, resolvedBase);
+    recordManifestTargets(manifest.module, resolvedBase, true);
+    recordManifestTargets(manifest.main, resolvedBase, true);
+  } catch {}
+}
+function candidateSelected(base: string, resolvedFile: string): boolean {
+  for (const candidate of moduleCandidates(base)) {
+    try {
+      const canonical = fs.realpathSync.native(candidate);
+      const relative = path.relative(canonical, resolvedFile);
+      if (relative === "" || (fs.statSync(canonical).isDirectory() && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))) return true;
+    } catch {}
+  }
+  return false;
+}
+function localBases(specifier: string, parentDirectory: string): string[] {
+  if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];
+  const raw = path.resolve(parentDirectory, specifier);
+  const suffixStart = specifier.search(/[?#]/);
+  if (suffixStart === -1) return [raw];
+  const pathname = specifier.slice(0, suffixStart);
+  return pathname === "" ? [raw] : [...new Set([raw, path.resolve(parentDirectory, pathname)])];
+}
+function recordResolutionCandidates(specifier: string, parentURL: string | undefined, resolvedURL: string | undefined): void {
+  if (typeof parentURL !== "string" || !parentURL.startsWith("file:")) return;
+  const parentDirectory = path.dirname(fileURLToPath(parentURL));
+  let resolvedFile: string | undefined;
+  try {
+    resolvedFile = typeof resolvedURL === "string" && resolvedURL.startsWith("file:")
+      ? fs.realpathSync.native(fileURLToPath(resolvedURL))
+      : undefined;
+  } catch {}
+  if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {
+    try {
+      for (const base of localBases(specifier, parentDirectory)) {
+        recordPackageManifests(base);
+        let exact = false;
+        try { exact = resolvedFile === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === resolvedFile; } catch {}
+        if (exact) recordInput(base);
+        else recordModuleCandidates(base);
+      }
+    } catch {}
+    return;
+  }
+  if (isBuiltin(specifier) || specifier.startsWith("#")) return;
+  const parts = specifier.split("/");
+  const packageParts = parts[0]!.startsWith("@") ? parts.slice(0, 2) : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) return;
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  const searchPaths = createRequire(parentURL).resolve.paths(specifier) ?? [];
+  for (const searchPath of searchPaths) {
+    const packageDirectory = path.join(searchPath, packageName);
+    recordModuleCandidates(packageDirectory);
+    if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));
+    if (resolvedFile !== undefined && candidateSelected(packageDirectory, resolvedFile)) break;
+  }
+}
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    recordResolutionCandidates(specifier, context.parentURL, undefined);
+    const resolved = nextResolve(specifier, context);
+    const url = typeof resolved === "string" ? resolved : resolved?.url;
+    recordResolutionCandidates(specifier, context.parentURL, url);
+    if (typeof url === "string" && url.startsWith("file:")) {
+      recordFile(fileURLToPath(url));
+    }
+    return resolved;
+  },
+});
 
 declare const process: {
   exitCode?: number;
@@ -463,8 +1034,16 @@ declare const process: {
 // left for a trailing handler to settle.
 (async () => {
   try {
+    const importedConfig = await import(%s);
     const value = await resolveConfig(importedConfig);
-    process.stdout.write(JSON.stringify(toSerializableBanner(value)));
+    const serializedValue = toSerializableBanner(value);
+    for (const input of [...inputs]) recordInput(input);
+    process.stdout.write(JSON.stringify({
+      value: serializedValue,
+      hashes: Object.fromEntries(hashes),
+      inputs: [...inputs].sort(),
+      realpaths: Object.fromEntries(realpaths),
+    }));
   } catch (error) {
     process.stderr.write(error instanceof Error && error.stack ? error.stack : String(error));
     // The stack above is for the reader. This is for the caller: the parent
@@ -534,6 +1113,7 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
       // resolving either way.
       "module":                          configModuleOption(location),
       "moduleResolution":                "bundler",
+      "jsx":                             "preserve",
       "outDir":                          filepath.ToSlash(filepath.Join(outDir, "out")),
       "rewriteRelativeImportExtensions": true,
       "rootDir":                         loaderRootDir(outDir),

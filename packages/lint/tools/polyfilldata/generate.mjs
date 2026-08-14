@@ -75,7 +75,7 @@ delete process.env.BROWSERSLIST_STATS;
 delete process.env.BROWSERSLIST_ROOT_PATH;
 delete process.env.NODE_ENV;
 
-const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-polyfilldata-"));
+const workDir = createCanonicalTempDirectory("ttsc-polyfilldata-");
 try {
   // Extract every pinned tarball into a flat node_modules layout so the
   // packages can be required in-process with their real dependency graph.
@@ -271,6 +271,29 @@ try {
   console.log("wrote", path.join(fixtureDir, "corejs-compat-cases.json"));
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true });
+}
+
+/** Create generator storage beneath the frozen physical system-temp parent. */
+function createCanonicalTempDirectory(prefix) {
+  const physicalParent = fs.realpathSync.native(os.tmpdir());
+  if (!fs.lstatSync(physicalParent).isDirectory()) {
+    throw new Error(
+      `polyfilldata: temporary directory parent is not a directory: ${physicalParent}`,
+    );
+  }
+  const directory = fs.mkdtempSync(path.join(physicalParent, prefix));
+  if (!fs.lstatSync(directory).isDirectory()) {
+    throw new Error(
+      `polyfilldata: temporary directory postflight is not a directory: ${directory}`,
+    );
+  }
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== physicalParent) {
+    throw new Error(
+      `polyfilldata: temporary directory escaped its physical parent: ${physicalDirectory}`,
+    );
+  }
+  return physicalDirectory;
 }
 
 /** Download and extract one pinned npm tarball; return the package root. */

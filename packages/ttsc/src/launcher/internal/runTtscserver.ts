@@ -9,11 +9,13 @@ import { readProjectConfig } from "../../compiler/internal/project/readProjectCo
 import { resolveBinary } from "../../compiler/internal/resolveBinary";
 import { resolveTsgo } from "../../compiler/internal/resolveTsgo";
 import { outputText, spawnNative } from "../../compiler/internal/spawnNative";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 import {
   type ProjectInputPathIdentityContext,
   createProjectInputPathIdentityContext,
   resolveProjectInputPath,
 } from "../../internal/projectInputPathIdentity";
+import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import {
   hasProjectPluginEntries,
   loadProjectPlugins,
@@ -127,6 +129,9 @@ function resolveTtscserverEnv(argv: readonly string[]): TtscserverEnvironment {
   }
   const context = resolveLspExecutionContext(argv);
   const env = lspSidecarEnvironment({
+    cwd:
+      context.projectContext?.logicalProjectRoot ??
+      path.resolve(optionValue(argv, "--cwd") ?? process.cwd()),
     pluginConfigOrigin: context.projectContext?.pluginConfigOrigin,
     tsgoBinary: context.tsgoBinary,
   });
@@ -170,7 +175,7 @@ export function materializeLSPPluginManifest(manifest: unknown): {
   dispose(): void;
   path: string;
 } {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-lsp-"));
+  const directory = createCanonicalTempDirectory("ttsc-lsp-");
   const location = path.join(directory, "plugins.json");
   try {
     fs.writeFileSync(location, JSON.stringify(manifest), {
@@ -194,17 +199,20 @@ export function materializeLSPPluginManifest(manifest: unknown): {
 }
 
 function lspSidecarEnvironment(options: {
+  cwd: string;
   pluginConfigOrigin: string | undefined;
   tsgoBinary: string;
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TTSC_NODE_BINARY: process.env.TTSC_NODE_BINARY ?? process.execPath,
     TTSC_TSGO_BINARY: options.tsgoBinary,
     TTSC_TTSX_BINARY:
       process.env.TTSC_TTSX_BINARY ??
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
   };
+  const node = resolveNodeBinary(env, options.cwd);
+  if (node === undefined) delete env.TTSC_NODE_BINARY;
+  else env.TTSC_NODE_BINARY = node;
   if (options.pluginConfigOrigin === undefined) {
     delete env.TTSC_PLUGIN_CONFIG_DIR;
   } else {
@@ -318,7 +326,13 @@ function loadLSPProjectPlugins(
         pluginConfigDir: pluginConfigOrigin,
         tsconfig: project.identity.logicalConfigPath,
       })
-    : { nativePlugins: [], project };
+    : {
+        hostInputHashes: {},
+        hostInputRealpaths: {},
+        hostInputs: [...project.configPaths],
+        nativePlugins: [],
+        project,
+      };
 }
 
 function captureInitialLSPProjectInputs(options: {
@@ -355,6 +369,7 @@ function captureInitialLSPProjectInputs(options: {
       );
     }
     const env = lspSidecarEnvironment({
+      cwd: options.project.root,
       pluginConfigOrigin: options.pluginConfigOrigin,
       tsgoBinary: options.tsgoBinary,
     });

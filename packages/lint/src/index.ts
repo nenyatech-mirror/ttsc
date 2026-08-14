@@ -34,6 +34,9 @@ type TtscPluginDescriptor = {
     threadingArgs?: boolean;
   };
   contributors?: TtscPluginContributor[];
+  hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
+  hostInputs?: string[];
   name: string;
   reportsTypeScriptDiagnostics?: boolean;
   source: string;
@@ -82,20 +85,20 @@ function goSubpackageName(namespace: string): string {
 }
 
 const LINT_CONFIG_FILENAMES = [
+  "lint.config.json",
+  "lint.config.js",
+  "lint.config.mjs",
+  "lint.config.cjs",
   "lint.config.ts",
   "lint.config.mts",
   "lint.config.cts",
-  "lint.config.mjs",
-  "lint.config.cjs",
-  "lint.config.js",
-  "lint.config.json",
+  "ttsc-lint.config.json",
+  "ttsc-lint.config.js",
+  "ttsc-lint.config.mjs",
+  "ttsc-lint.config.cjs",
   "ttsc-lint.config.ts",
   "ttsc-lint.config.mts",
   "ttsc-lint.config.cts",
-  "ttsc-lint.config.mjs",
-  "ttsc-lint.config.cjs",
-  "ttsc-lint.config.js",
-  "ttsc-lint.config.json",
 ];
 
 /**
@@ -133,7 +136,7 @@ export default function createTtscPlugin(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): TtscPluginDescriptor {
   rejectUnsupportedEntryKeys(context.plugin);
-  const contributors = resolveConfigFileContributors(context);
+  const resolvedConfig = resolveConfigFileContributors(context);
   // Build the descriptor without a `contributors` key when none were
   // declared, so consumers (and the existing key-shape regression
   // tests) see the same surface as before this feature shipped.
@@ -147,6 +150,9 @@ export default function createTtscPlugin(
       residentCheck: true,
       threadingArgs: true,
     },
+    hostInputHashes: resolvedConfig.hostInputHashes,
+    hostInputRealpaths: resolvedConfig.hostInputRealpaths,
+    hostInputs: resolvedConfig.hostInputs,
     name: "@ttsc/lint",
     reportsTypeScriptDiagnostics: true,
     // `context.dirname` is this descriptor's own directory in every load mode —
@@ -155,8 +161,8 @@ export default function createTtscPlugin(
     source: path.resolve(context.dirname, "..", "plugin"),
     stage: "check",
   };
-  if (contributors.length > 0) {
-    descriptor.contributors = contributors;
+  if (resolvedConfig.contributors.length > 0) {
+    descriptor.contributors = resolvedConfig.contributors;
   }
   return descriptor;
 }
@@ -210,8 +216,10 @@ type ConfigPluginEntry = { namespace: string; source: string };
 
 type ConfigDependencyFingerprint = {
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "file" | "optional-file";
   path: string;
+  realpath: string | null;
   scope: "cache" | "watch";
 };
 
@@ -237,15 +245,38 @@ type ConfigPluginEvaluation = {
  */
 function resolveConfigFileContributors(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): TtscPluginContributor[] {
+): {
+  contributors: TtscPluginContributor[];
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  hostInputs: string[];
+} {
   const configFile = readConfigFileOption(context);
-  const configPath =
-    configFile !== undefined
-      ? path.resolve(pluginConfigBaseDir(context), configFile)
-      : findLintConfigFile(context);
-  if (!configPath || !fs.existsSync(configPath)) return [];
+  const explicitConfigPath =
+    configFile === undefined
+      ? undefined
+      : path.resolve(pluginConfigBaseDir(context), configFile);
+  const discovery =
+    explicitConfigPath === undefined
+      ? discoverLintConfigFile(context)
+      : {
+          configPath: explicitConfigPath,
+          hostInputHashes: hashHostInputPaths([explicitConfigPath]),
+          hostInputRealpaths: realpathHostInputPaths([explicitConfigPath]),
+          hostInputs: [explicitConfigPath],
+        };
+  const { configPath } = discovery;
+  if (!configPath || !fs.existsSync(configPath)) {
+    return {
+      contributors: [],
+      hostInputHashes: discovery.hostInputHashes,
+      hostInputRealpaths: discovery.hostInputRealpaths,
+      hostInputs: discovery.hostInputs,
+    };
+  }
 
-  const entries = readConfigPluginEntries(configPath, context);
+  const evaluation = readConfigPluginEntries(configPath, context);
+  const entries = evaluation.entries;
   assertContributorNamespacesDoNotCollide(entries, configPath);
   // Dedup exact repeated namespaces on the Go-subpackage form. Config-array
   // folding can surface the same namespace more than once; that existing
@@ -258,7 +289,180 @@ function resolveConfigFileContributors(
     occupied.add(goName);
     out.push({ name: goName, source: entry.source });
   }
-  return out;
+  const dependencyInputs = evaluation.dependencies
+    .filter(
+      (dependency) =>
+        dependency.scope === "watch" && dependency.kind !== "directory",
+    )
+    .map((dependency) => dependency.path);
+  const hostInputHashes = { ...discovery.hostInputHashes };
+  const hostInputRealpaths = { ...discovery.hostInputRealpaths };
+  const unstableRealpaths = new Set<string>();
+  const unprovenInputs = new Set<string>();
+  const missingOptionalDigest = createHash("sha256")
+    .update("missing\0")
+    .digest("hex");
+  const directoryCandidateDigest = createHash("sha256")
+    .update("ttsc:host-input:directory\0")
+    .digest("hex");
+  for (const dependency of evaluation.dependencies) {
+    if (dependency.scope !== "watch" || dependency.kind === "directory") {
+      continue;
+    }
+    const input = path.resolve(dependency.path);
+    const realpath = dependency.realpath;
+    if (!dependency.identityStable) {
+      delete hostInputRealpaths[input];
+      delete hostInputHashes[input];
+      unstableRealpaths.add(input);
+      unprovenInputs.add(input);
+      continue;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(hostInputRealpaths, input) &&
+      hostInputRealpaths[input] !== realpath
+    ) {
+      delete hostInputRealpaths[input];
+      delete hostInputHashes[input];
+      unstableRealpaths.add(input);
+    } else if (!unstableRealpaths.has(input)) {
+      hostInputRealpaths[input] = realpath;
+    }
+    let hash: string | null | undefined;
+    if (
+      dependency.kind === "file" &&
+      /^[0-9a-f]{64}$/.test(dependency.digest)
+    ) {
+      hash = dependency.digest;
+    } else if (dependency.digest === missingOptionalDigest) {
+      // The evaluator's optional-file digest includes a state prefix. The
+      // public host-input contract uses null for the observed missing state.
+      hash = null;
+    } else if (dependency.digest === directoryCandidateDigest) {
+      // A path that is currently a directory is still an exact file candidate:
+      // replacing it with a file changes module/config selection.
+      hash = directoryCandidateDigest;
+    }
+    if (hash === undefined) {
+      delete hostInputHashes[input];
+      unprovenInputs.add(input);
+    } else if (unprovenInputs.has(input)) {
+      // A later observation cannot revive proof another evaluation stage
+      // could not provide for the same combined descriptor result.
+    } else if (
+      Object.prototype.hasOwnProperty.call(hostInputHashes, input) &&
+      hostInputHashes[input] !== hash
+    ) {
+      delete hostInputHashes[input];
+      unprovenInputs.add(input);
+    } else {
+      hostInputHashes[input] = hash;
+    }
+  }
+  return {
+    contributors: out,
+    hostInputHashes,
+    hostInputRealpaths,
+    hostInputs: [...discovery.hostInputs, ...dependencyInputs],
+  };
+}
+
+/** Snapshot config candidates before any discovery/evaluation side effect. */
+function hashHostInputPaths(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => {
+      const file = path.resolve(input);
+      try {
+        if (fs.statSync(file).isDirectory()) {
+          return [
+            file,
+            createHash("sha256")
+              .update("ttsc:host-input:directory\0")
+              .digest("hex"),
+          ] as const;
+        }
+        return [
+          file,
+          createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+        ] as const;
+      } catch {
+        return [file, null] as const;
+      }
+    }),
+  );
+}
+
+function hostInputRealpath(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
+  }
+}
+
+function realpathHostInputPaths(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => {
+      const file = path.resolve(input);
+      return [file, hostInputRealpath(file)] as const;
+    }),
+  );
+}
+
+/** Mirror native discovery and fingerprint every candidate before selecting. */
+function discoverLintConfigFile(
+  context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
+): {
+  configPath?: string;
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  hostInputs: string[];
+} {
+  const hostInputHashes: Record<string, string | null> = {};
+  const hostInputRealpaths: Record<string, string | null> = {};
+  const hostInputs: string[] = [];
+  const recordCandidates = (candidates: readonly string[]): void => {
+    for (const candidate of candidates) {
+      const absolute = path.resolve(candidate);
+      if (Object.prototype.hasOwnProperty.call(hostInputHashes, absolute)) {
+        continue;
+      }
+      hostInputs.push(absolute);
+      Object.assign(hostInputHashes, hashHostInputPaths([absolute]));
+      Object.assign(hostInputRealpaths, realpathHostInputPaths([absolute]));
+    }
+  };
+  for (const origin of discoveryConfigBaseDirs(context)) {
+    for (let directory = origin; ; directory = path.dirname(directory)) {
+      const candidates = LINT_CONFIG_FILENAMES.map((name) =>
+        path.join(directory, name),
+      );
+      recordCandidates(candidates);
+      const matches = lintConfigMatchesIn(directory);
+      if (matches.length === 1) {
+        return {
+          configPath: matches[0],
+          hostInputHashes,
+          hostInputRealpaths,
+          hostInputs,
+        };
+      }
+      if (matches.length > 1) {
+        throw new Error(
+          `@ttsc/lint: multiple lint config files found in ${directory} (${matches
+            .map((file) => path.basename(file))
+            .join(", ")}); set "configFile" explicitly`,
+        );
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+    }
+  }
+  return { hostInputHashes, hostInputRealpaths, hostInputs };
 }
 
 function assertContributorNamespacesDoNotCollide(
@@ -328,26 +532,6 @@ function readConfigFileOption(
   return value;
 }
 
-function findLintConfigFile(
-  context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): string | undefined {
-  // Mirror the Go side (driver.PluginConfigBaseDir): the caller-declared
-  // pluginConfigDir is the single walk origin when present — it names the
-  // real project when the resolved tsconfig is a generated wrapper in a temp
-  // dir (@ttsc/unplugin's alias overlay), and it keeps the wrapper's temp
-  // ancestry out of the walk so a stray config planted there is never
-  // honored. Otherwise walk upward from the tsconfig directory first, then
-  // fall back to the working directory: that covers callers that point at an
-  // out-of-tree tsconfig without declaring an anchor.
-  for (const origin of discoveryConfigBaseDirs(context)) {
-    const discovered = findLintConfigFileFrom(origin);
-    if (discovered !== undefined) {
-      return discovered;
-    }
-  }
-  return undefined;
-}
-
 function discoveryConfigBaseDirs(
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): string[] {
@@ -359,41 +543,23 @@ function discoveryConfigBaseDirs(
   return tsconfigDir === cwd ? [tsconfigDir] : [tsconfigDir, cwd];
 }
 
-function findLintConfigFileFrom(origin: string): string | undefined {
-  // Mirror the Go-side discovery loop: walk from `origin` upward, returning
-  // the first directory that has exactly one of the candidate filenames.
-  // Multiple files in the same directory is treated as ambiguous and skipped
-  // (the Go side raises a hard error on the duplicate; here we leave it to
-  // the binary's own discovery to surface the issue once with one canonical
-  // message).
-  const candidateSet = new Set<string>(LINT_CONFIG_FILENAMES);
-  let dir = origin;
-  while (true) {
-    // One `readdirSync` per directory level beats 14 `existsSync`+
-    // `statSync` pairs (= 28 stat syscalls) per level; intersect the
-    // listing with the candidate set instead.
-    let entries: fs.Dirent[];
+/** Return the non-directory candidates native discovery recognizes. */
+function lintConfigMatchesIn(directory: string): string[] {
+  const matches: string[] = [];
+  for (const name of LINT_CONFIG_FILENAMES) {
+    const candidate = path.join(directory, name);
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      // Go's os.Stat follows symlinks and junctions. Follow them here too so a
+      // directory or dangling link cannot stop descriptor discovery before
+      // the native host reaches a valid ancestor config. Probing the canonical
+      // candidate spelling also preserves Go's behavior on case-insensitive
+      // filesystems when the directory entry uses different casing.
+      if (!fs.statSync(candidate).isDirectory()) matches.push(candidate);
     } catch {
-      entries = [];
+      // Missing, dangling, and unreadable candidates are not native matches.
     }
-    const matches: string[] = [];
-    for (const entry of entries) {
-      if (!candidateSet.has(entry.name)) continue;
-      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-      matches.push(path.join(dir, entry.name));
-    }
-    if (matches.length === 1) {
-      return matches[0];
-    }
-    if (matches.length > 1) {
-      return undefined; // ambiguous — defer to the Go side's error
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
   }
+  return matches;
 }
 
 /**
@@ -429,7 +595,7 @@ function tsconfigBaseDir(
 function readConfigPluginEntries(
   configPath: string,
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): ConfigPluginEntry[] {
+): ConfigPluginEvaluation {
   // A JSON config that can bring no contributor with it — no `plugins` map and
   // no `extends` chain to follow — has nothing to extract, and reading it runs
   // no user code, so the isolated evaluator is not needed to keep its strings
@@ -437,7 +603,9 @@ function readConfigPluginEntries(
   // is a real subprocess, and a host that only wanted to know whether there
   // were contributors would otherwise depend on a launcher being resolvable and
   // on a compiler accepting one more invocation.
-  if (jsonConfigDeclaresNoContributor(configPath)) return [];
+  if (jsonConfigDeclaresNoContributor(configPath)) {
+    return { dependencies: [], entries: [] };
+  }
   // Every other config uses the same isolated evaluator. Executable config can
   // name contributor packages whose top-level code writes to stdout, so loading
   // it in this host process would corrupt CLI JSON or preface the first LSP
@@ -520,9 +688,11 @@ const CONFIG_KEYS = new Set<string>([
 ]);
 const dependencies = new Map<string, {
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "file" | "optional-file";
   path: string;
   owners: Set<string>;
+  realpath: string | null;
 }>();
 const graphNodes = new Map<string, string>();
 const graphEdges: Array<{
@@ -553,6 +723,23 @@ const configUrlSpellings = [
     pathToFileURL(realConfigLocation()).href,
   ]),
 ];
+const moduleProbeExtensions = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".node",
+] as const;
+const jsToTsProbeExtensions = new Map<string, readonly string[]>([
+  [".js", [".ts", ".tsx"]],
+  [".jsx", [".tsx"]],
+  [".mjs", [".mts"]],
+  [".cjs", [".cts"]],
+]);
 for (const spelling of configUrlSpellings) {
   graphNodes.set(spelling, configLocation);
 }
@@ -574,6 +761,11 @@ declare const process: {
 
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
+    const requestedParent =
+      context.parentURL && new URL(context.parentURL).href;
+    if (requestedParent !== undefined && graphNodes.has(requestedParent)) {
+      recordLocalResolutionCandidates(specifier, requestedParent);
+    }
     const resolved = nextResolve(specifier, context);
     if (typeof resolved.url !== "string" || !resolved.url.startsWith("file:")) {
       return resolved;
@@ -706,12 +898,30 @@ function recordDependency(
   const previous = dependencies.get(key);
   const mergedOwners = previous?.owners ?? new Set<string>();
   for (const owner of owners) mergedOwners.add(owner);
+  const realpath = dependencyRealpath(location);
+  const identityStable =
+    previous?.identityStable !== false &&
+    (previous === undefined || previous.realpath === realpath);
   dependencies.set(key, {
-    digest: previous !== undefined && previous.digest !== digest ? "" : digest,
+    digest:
+      !identityStable ||
+      (previous !== undefined && previous.digest !== digest)
+        ? ""
+        : digest,
+    identityStable,
     kind,
     owners: mergedOwners,
     path: location,
+    realpath,
   });
+}
+
+function dependencyRealpath(location: string): string | null {
+  try {
+    return realPath(location);
+  } catch {
+    return null;
+  }
 }
 
 function isLocalModuleSpecifier(specifier: string): boolean {
@@ -831,13 +1041,19 @@ function directoryDigestRecord(
 
 function optionalFileDigest(location: string): string {
   try {
-    if (fs.statSync(location).isFile()) {
+    const entry = fs.statSync(location);
+    if (entry.isFile()) {
       return createHash("sha256")
         .update(Buffer.concat([Buffer.from("file\\0"), fs.readFileSync(location)]))
         .digest("hex");
     }
+    if (entry.isDirectory()) {
+      return createHash("sha256")
+        .update("ttsc:host-input:directory\\0")
+        .digest("hex");
+    }
   } catch {
-    // Missing, unreadable, and non-file candidates share the absent state.
+    // Missing and unreadable candidates share the absent state.
   }
   return createHash("sha256").update("missing\\0").digest("hex");
 }
@@ -861,6 +1077,80 @@ function recordOptionalFileDependency(
   }
   recordDependency("optional-file", location, optionalFileDigest(location), owners);
   return false;
+}
+
+function moduleResolutionCandidates(base: string): string[] {
+  const extension = path.extname(base).toLowerCase();
+  const substitutions = jsToTsProbeExtensions.get(extension) ?? [];
+  const stem = base.slice(0, base.length - extension.length);
+  return [
+    base,
+    ...substitutions.map((candidate) => stem + candidate),
+    ...moduleProbeExtensions.map((candidate) => base + candidate),
+    path.join(base, "package.json"),
+    ...moduleProbeExtensions.map((candidate) =>
+      path.join(base, "index" + candidate),
+    ),
+  ];
+}
+
+/** Record exact local probes before the runtime resolver chooses one. */
+function recordLocalResolutionCandidates(
+  specifier: string,
+  parentUrl: string,
+): void {
+  if (!isLocalModuleSpecifier(specifier)) return;
+  let bases: string[];
+  try {
+    if (specifier.startsWith("file:")) {
+      bases = [fileURLToPath(specifier)];
+    } else {
+      const directory = path.dirname(fileURLToPath(parentUrl));
+      const raw = path.resolve(directory, specifier);
+      const suffixStart = specifier.search(/[?#]/);
+      const pathname =
+        suffixStart === -1 ? specifier : specifier.slice(0, suffixStart);
+      bases = pathname === ""
+        ? [raw]
+        : [...new Set([raw, path.resolve(directory, pathname)])];
+    }
+  } catch {
+    return;
+  }
+  const owners = [parentUrl];
+  for (const base of bases) {
+    try {
+      if (fs.statSync(base).isFile()) {
+        recordOptionalFileDependency(base, owners);
+        continue;
+      }
+    } catch {
+      // A missing exact spelling falls through to source/extension/directory
+      // probes, all of which can redirect a later evaluation.
+    }
+    for (const candidate of moduleResolutionCandidates(base)) {
+      recordOptionalFileDependency(candidate, owners);
+    }
+  }
+}
+
+/** CommonJS LOAD_AS_FILE / LOAD_AS_DIRECTORY candidates for one legacy path. */
+function recordLegacyPackagePathCandidates(
+  candidate: string,
+  owners: readonly string[],
+): void {
+  for (const file of [
+    candidate,
+    candidate + ".js",
+    candidate + ".json",
+    candidate + ".node",
+    path.join(candidate, "package.json"),
+    path.join(candidate, "index.js"),
+    path.join(candidate, "index.json"),
+    path.join(candidate, "index.node"),
+  ]) {
+    recordOptionalFileDependency(file, owners);
+  }
 }
 
 function recordPackageManifests(
@@ -908,25 +1198,25 @@ function recordNodeModulesSearchDirectories(
             // The directory digest of node_modules records a missing scope.
           }
         }
-        if (packageName !== undefined) {
-          const selected = recordPackageCandidateTopology(
-            modules,
-            packageName,
-            specifier,
-            childLocation,
-            owners,
-            conditions,
-          );
-          if (
-            selected ||
-            resolvedPackageContains(modules, packageName, childLocation)
-          ) {
-            return;
-          }
-        }
       }
     } catch {
       // Missing search levels do not participate in the current resolution.
+    }
+    if (packageName !== undefined) {
+      const selected = recordPackageCandidateTopology(
+        modules,
+        packageName,
+        specifier,
+        childLocation,
+        owners,
+        conditions,
+      );
+      if (
+        selected ||
+        resolvedPackageContains(modules, packageName, childLocation)
+      ) {
+        return;
+      }
     }
     if (
       packageName === undefined &&
@@ -949,14 +1239,32 @@ function recordPackageCandidateTopology(
   conditions: readonly string[],
 ): boolean {
   const packageRoot = path.join(modules, packageName);
-  try {
-    if (!fs.statSync(packageRoot).isDirectory()) return false;
-  } catch {
-    return false;
-  }
   const subpath = specifier
     .slice(packageName.length)
     .replace(/^[/\\\\]+/, "");
+  try {
+    if (!fs.statSync(packageRoot).isDirectory()) {
+      recordOptionalFileDependency(
+        path.join(packageRoot, "package.json"),
+        owners,
+      );
+      recordLegacyPackagePathCandidates(
+        subpath === "" ? packageRoot : path.join(packageRoot, subpath),
+        owners,
+      );
+      return false;
+    }
+  } catch {
+    recordOptionalFileDependency(
+      path.join(packageRoot, "package.json"),
+      owners,
+    );
+    recordLegacyPackagePathCandidates(
+      subpath === "" ? packageRoot : path.join(packageRoot, subpath),
+      owners,
+    );
+    return false;
+  }
   const rootTopology = recordPackageRootTopology(
     packageRoot,
     owners,
@@ -991,6 +1299,7 @@ function recordPackageRootTopology(
   const legacySelected = (): boolean =>
     useMain &&
     packagePathCandidateMatchesChild(normalizedRoot, childLocation, true);
+  if (useMain) recordLegacyPackagePathCandidates(normalizedRoot, owners);
   if (!recordOptionalFileDependency(manifest, owners)) {
     const selected = legacySelected();
     if (!selected) {
@@ -1037,6 +1346,7 @@ function recordPackageRootTopology(
         // it literally and permits absolute paths and paths outside the package.
         const main = path.resolve(normalizedRoot, metadata.main);
         recordPackagePathCandidate(main, owners);
+        recordLegacyPackagePathCandidates(main, owners);
         selected =
           packagePathCandidateMatchesChild(main, childLocation, true) ||
           selected;
@@ -1284,6 +1594,7 @@ function recordPackageSubpathTopology(
   const candidate = boundedPackageTarget(packageRoot, subpath);
   if (candidate === undefined) return false;
   recordPackagePathCandidate(candidate, owners);
+  recordLegacyPackagePathCandidates(candidate, owners);
   let selected = packagePathCandidateMatchesChild(
     candidate,
     childLocation,
@@ -1303,6 +1614,7 @@ function recordPackageSubpathTopology(
       if (typeof metadata.main === "string") {
         const main = path.resolve(candidate, metadata.main);
         recordPackagePathCandidate(main, owners);
+        recordLegacyPackagePathCandidates(main, owners);
         selected =
           packagePathCandidateMatchesChild(main, childLocation, true) ||
           selected;
@@ -1473,10 +1785,25 @@ function realPath(location: string): string {
 
 function finalizeDependencies(): Array<{
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "file" | "optional-file";
   path: string;
+  realpath: string | null;
   scope: "cache" | "watch";
 }> {
+  // The evaluator may have observed a dependency, run arbitrary config code,
+  // and then serialize after that path changed again. Re-read every recorded
+  // dependency under its original ownership set so an A -> B -> A transition
+  // is marked identity-unstable instead of pairing transient output with the
+  // restored fingerprint.
+  for (const dependency of [...dependencies.values()]) {
+    recordDependency(
+      dependency.kind,
+      dependency.path,
+      currentDependencyDigest(dependency.kind, dependency.path),
+      [...dependency.owners],
+    );
+  }
   const watched = graphWatchReachability();
   return [...dependencies.values()].map(({ owners, ...dependency }) => ({
     ...dependency,
@@ -1484,6 +1811,21 @@ function finalizeDependencies(): Array<{
       ? "watch"
       : "cache",
   }));
+}
+
+function currentDependencyDigest(
+  kind: "directory" | "file" | "optional-file",
+  location: string,
+): string {
+  try {
+    if (kind === "directory") return directoryDigest(location);
+    if (kind === "optional-file") return optionalFileDigest(location);
+    return createHash("sha256")
+      .update(fs.readFileSync(location))
+      .digest("hex");
+  } catch {
+    return "";
+  }
 }
 
 function graphWatchReachability(): Set<string> {
@@ -1642,7 +1984,7 @@ function extractPluginSource(value: unknown): string | undefined {
 function readTtsxConfigPlugins(
   configPath: string,
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
-): ConfigPluginEntry[] {
+): ConfigPluginEvaluation {
   const resolutionRoot = path.resolve(pluginConfigBaseDir(context));
   const cacheKey = configCacheKey(`plugins\0${resolutionRoot}`, configPath);
   if (cacheKey) {
@@ -1656,7 +1998,7 @@ function readTtsxConfigPlugins(
       cached.entries.every(isValidConfigPluginEntry) &&
       configDependenciesAreCurrent(cached.dependencies)
     ) {
-      return cached.entries;
+      return cached;
     }
   }
   // A config can be saved while it is being evaluated. Retry a bounded number
@@ -1668,10 +2010,10 @@ function readTtsxConfigPlugins(
     evaluation = evaluateTtsxConfigPlugins(configPath, context);
     if (configDependenciesAreCurrent(evaluation.dependencies)) {
       if (cacheKey) writeConfigPluginCache(cacheKey, evaluation);
-      return evaluation.entries;
+      return evaluation;
     }
   }
-  return evaluation!.entries;
+  return evaluation!;
 }
 
 /**
@@ -1704,8 +2046,9 @@ function evaluateTtsxConfigPlugins(
   configPath: string,
   context: TtscPluginFactoryContext<ITtscLintPluginConfig>,
 ): ConfigPluginEvaluation {
-  const tempDir = realpathIfPossible(
-    fs.mkdtempSync(path.join(loaderTempBase(configPath), "ttsc-lint-cfg-")),
+  const tempDir = createCanonicalTempDirectory(
+    "ttsc-lint-cfg-",
+    loaderTempBase(configPath),
   );
   try {
     linkNearestNodeModules(tempDir, path.dirname(configPath));
@@ -1896,11 +2239,34 @@ function evaluateTtsxConfigPlugins(
 // Config cache (shared with the Go sidecar — packages/lint/linthost/config.go)
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Create evaluator storage beneath a frozen physical parent. */
+function createCanonicalTempDirectory(prefix: string, parent: string): string {
+  const physicalParent = fs.realpathSync.native(parent);
+  if (!fs.lstatSync(physicalParent).isDirectory()) {
+    throw new Error(
+      `@ttsc/lint: temporary directory parent is not a directory: ${physicalParent}`,
+    );
+  }
+  const directory = fs.mkdtempSync(path.join(physicalParent, prefix));
+  if (!fs.lstatSync(directory).isDirectory()) {
+    throw new Error(
+      `@ttsc/lint: temporary directory postflight is not a directory: ${directory}`,
+    );
+  }
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== physicalParent) {
+    throw new Error(
+      `@ttsc/lint: temporary directory escaped its physical parent: ${physicalDirectory}`,
+    );
+  }
+  return physicalDirectory;
+}
+
 /**
  * Namespaces the on-disk config cache. Kept in lockstep with the Go sidecar's
  * `configCacheVersion`; bump both when the cached shape changes.
  */
-const CONFIG_CACHE_VERSION = "v5";
+const CONFIG_CACHE_VERSION = "v7";
 
 /**
  * Directory shared by this factory and the Go sidecar for cached lint configs.
@@ -2024,6 +2390,14 @@ function normalizeConfigDependencyFingerprints(
       typeof candidate !== "object" ||
       typeof (candidate as ConfigDependencyFingerprint).path !== "string" ||
       typeof (candidate as ConfigDependencyFingerprint).digest !== "string" ||
+      typeof (candidate as ConfigDependencyFingerprint).identityStable !==
+        "boolean" ||
+      ((candidate as ConfigDependencyFingerprint).realpath !== null &&
+        (typeof (candidate as ConfigDependencyFingerprint).realpath !==
+          "string" ||
+          !path.isAbsolute(
+            (candidate as ConfigDependencyFingerprint).realpath as string,
+          ))) ||
       !["directory", "file", "optional-file"].includes(
         (candidate as ConfigDependencyFingerprint).kind,
       ) ||
@@ -2036,24 +2410,40 @@ function normalizeConfigDependencyFingerprints(
     const candidatePath = (candidate as ConfigDependencyFingerprint).path;
     const digest = (candidate as ConfigDependencyFingerprint).digest;
     const kind = (candidate as ConfigDependencyFingerprint).kind;
+    const identityStable = (candidate as ConfigDependencyFingerprint)
+      .identityStable;
+    const realpath = (candidate as ConfigDependencyFingerprint).realpath;
     const scope = (candidate as ConfigDependencyFingerprint).scope;
-    if (!path.isAbsolute(candidatePath) || !/^[0-9a-f]{64}$/.test(digest)) {
+    if (
+      !path.isAbsolute(candidatePath) ||
+      (digest !== "" && !/^[0-9a-f]{64}$/.test(digest))
+    ) {
       return undefined;
     }
     const location = path.resolve(candidatePath);
-    const previous = dependencies.get(location);
+    // The same lexical path can be both a traversed directory and an exact
+    // file candidate. Those observations have different freshness contracts:
+    // one fingerprints the listing, while the other fingerprints its entry
+    // type. Preserve both, but still reject contradictory duplicates of one
+    // kind.
+    const key = kind + "\0" + location;
+    const previous = dependencies.get(key);
     if (
       previous !== undefined &&
       (previous.digest !== digest ||
+        previous.identityStable !== identityStable ||
         previous.kind !== kind ||
+        previous.realpath !== realpath ||
         previous.scope !== scope)
     ) {
       return undefined;
     }
-    dependencies.set(location, {
+    dependencies.set(key, {
       digest,
+      identityStable,
       kind,
       path: location,
+      realpath,
       scope,
     });
   }
@@ -2067,6 +2457,12 @@ function configDependenciesAreCurrent(
 ): boolean {
   if (dependencies.length === 0) return false;
   return dependencies.every((dependency) => {
+    if (
+      !dependency.identityStable ||
+      dependency.realpath !== hostInputRealpath(dependency.path)
+    ) {
+      return false;
+    }
     if (!/^[0-9a-f]{64}$/.test(dependency.digest)) return false;
     try {
       const digest =
@@ -2156,15 +2552,21 @@ function configDirectoryDigestRecord(
 
 function configOptionalFileDigest(location: string): string {
   try {
-    if (fs.statSync(location).isFile()) {
+    const entry = fs.statSync(location);
+    if (entry.isFile()) {
       return createHash("sha256")
         .update(
           Buffer.concat([Buffer.from("file\0"), fs.readFileSync(location)]),
         )
         .digest("hex");
     }
+    if (entry.isDirectory()) {
+      return createHash("sha256")
+        .update("ttsc:host-input:directory\0")
+        .digest("hex");
+    }
   } catch {
-    // Missing, unreadable, and non-file candidates share the absent state.
+    // Missing and unreadable candidates share the absent state.
   }
   return createHash("sha256").update("missing\0").digest("hex");
 }
@@ -2423,14 +2825,6 @@ function loaderTempBase(configPath: string): string {
     // fall through to the config's own directory
   }
   return path.dirname(configPath);
-}
-
-function realpathIfPossible(location: string): string {
-  try {
-    return fs.realpathSync(location);
-  } catch {
-    return location;
-  }
 }
 
 function nodeConfigLoaderEnv(configPath: string): NodeJS.ProcessEnv {

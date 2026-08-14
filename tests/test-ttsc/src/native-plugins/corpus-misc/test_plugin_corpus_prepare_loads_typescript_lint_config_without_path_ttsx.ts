@@ -19,8 +19,9 @@ import {
  * `node_modules/.bin`, so prepare must provide the bundled ttsx launcher.
  *
  * 1. Create an @ttsc/lint project with a TypeScript lint config.
- * 2. Import its severity through an exports package whose inactive condition
- *    throws, exercising the descriptor extractor's package-topology mirror.
+ * 2. Import its severity through an extensionless local TypeScript helper and an
+ *    exports package whose inactive condition throws, exercising both local
+ *    candidate capture and the descriptor extractor's package-topology mirror.
  * 3. Run `ttsc prepare` with TTSC_TTSX_BINARY removed from the environment.
  * 4. Assert prepare succeeds and does not report a missing `ttsx` executable.
  */
@@ -29,7 +30,10 @@ export const test_plugin_corpus_prepare_loads_typescript_lint_config_without_pat
     const root = setupLintProject("lint-violations");
     fs.writeFileSync(
       path.join(root, "package.json"),
-      JSON.stringify({ devDependencies: { "@ttsc/lint": "*" } }),
+      JSON.stringify({
+        devDependencies: { "@ttsc/lint": "*" },
+        type: "module",
+      }),
     );
     const selectionPackage = path.join(
       root,
@@ -58,10 +62,18 @@ export const test_plugin_corpus_prepare_loads_typescript_lint_config_without_pat
       path.join(selectionPackage, "inactive", "index.mjs"),
       `throw new Error("inactive exports condition loaded");\n`,
     );
+    // The shared fixture starts with a JSON config. This scenario replaces it
+    // with TypeScript; retaining both would be the ambiguity native discovery
+    // deliberately rejects before evaluating either file.
+    fs.rmSync(path.join(root, "lint.config.json"));
+    fs.writeFileSync(
+      path.join(root, "severity.ts"),
+      `export { default } from "descriptor-selection";\n`,
+    );
     fs.writeFileSync(
       path.join(root, "lint.config.ts"),
       `import type { ITtscLintConfig } from "@ttsc/lint";
-import severity from "descriptor-selection";
+import severity from "./severity";
 
 export default {
   rules: {

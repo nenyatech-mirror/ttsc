@@ -385,9 +385,11 @@ func (s *graphSession) captureState() error {
     return err
   }
   inputs := auxiliaryInputs(program, configs, s.cwd)
-  inputs = append(inputs, missingRootInputs(configs, sourceHashes)...)
+  for _, path := range missingRootInputs(configs, sourceHashes) {
+    inputs = append(inputs, auxiliaryInput{path: path})
+  }
   s.configHashes = configHashes
-  s.auxStates = captureDiskStates(compactSortedStrings(inputs))
+  s.auxStates = captureDiskStates(compactAuxiliaryInputs(inputs))
   s.sourceHashes = sourceHashes
   s.diskDigests = diskDigests
   s.rootFiles = projectRootFilesFromConfigs(configs, false)
@@ -661,8 +663,19 @@ func changedSources(previous map[string][sha256.Size]byte) (map[string]string, b
 }
 
 type diskState struct {
-  Hash   [sha256.Size]byte
-  Exists bool
+  Hash         [sha256.Size]byte
+  Exists       bool
+  Realpath     string
+  IdentityOnly bool
+}
+
+// auxiliaryInput distinguishes speculative inputs whose contents select the
+// build universe from the lexical spelling of the source the compiler already
+// selected. The resident source hash owns the latter's contents; this input
+// owns only whether the spelling still reaches the same physical file.
+type auxiliaryInput struct {
+  path         string
+  identityOnly bool
 }
 
 // captureDiskStates records the freshness state of speculative resolution
@@ -671,29 +684,35 @@ type diskState struct {
 // Windows), so any path that is neither a readable file nor a directory is
 // recorded as absent instead of failing the snapshot: the recorded state only
 // needs to flip when the candidate becomes resolvable.
-func captureDiskStates(paths []string) map[string]diskState {
-  states := make(map[string]diskState, len(paths))
-  for _, path := range paths {
-    content, err := os.ReadFile(path)
+func captureDiskStates(inputs []auxiliaryInput) map[string]diskState {
+  states := make(map[string]diskState, len(inputs))
+  for _, input := range inputs {
+    state := diskState{IdentityOnly: input.identityOnly}
+    content, err := os.ReadFile(input.path)
     if err != nil {
-      if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-        states[path] = diskState{Exists: true}
-      } else {
-        states[path] = diskState{}
+      if info, statErr := os.Stat(input.path); statErr == nil && info.IsDir() {
+        state.Exists = true
+        state.Realpath = diskRealpath(input.path)
       }
+      states[input.path] = state
       continue
     }
-    states[path] = diskState{Hash: sha256.Sum256(content), Exists: true}
+    state.Exists = true
+    state.Realpath = diskRealpath(input.path)
+    if !input.identityOnly {
+      state.Hash = sha256.Sum256(content)
+    }
+    states[input.path] = state
   }
   return states
 }
 
 func diskStatesChanged(previous map[string]diskState) bool {
-  paths := make([]string, 0, len(previous))
-  for path := range previous {
-    paths = append(paths, path)
+  inputs := make([]auxiliaryInput, 0, len(previous))
+  for path, state := range previous {
+    inputs = append(inputs, auxiliaryInput{path: path, identityOnly: state.IdentityOnly})
   }
-  current := captureDiskStates(paths)
+  current := captureDiskStates(inputs)
   for path, state := range previous {
     if current[path] != state {
       return true
@@ -702,16 +721,16 @@ func diskStatesChanged(previous map[string]diskState) bool {
   return false
 }
 
-func auxiliaryInputs(program *driver.Program, configs []*shimtsoptions.ParsedCommandLine, cwd string) []string {
-  inputs := []string{
-    filepath.Join(cwd, ".gitignore"),
-    filepath.Join(cwd, ".git", "info", "exclude"),
-    filepath.Join(cwd, "package.json"),
-    filepath.Join(cwd, "package-lock.json"),
-    filepath.Join(cwd, "pnpm-lock.yaml"),
-    filepath.Join(cwd, "yarn.lock"),
-    filepath.Join(cwd, "bun.lock"),
-    filepath.Join(cwd, "bun.lockb"),
+func auxiliaryInputs(program *driver.Program, configs []*shimtsoptions.ParsedCommandLine, cwd string) []auxiliaryInput {
+  inputs := []auxiliaryInput{
+    {path: filepath.Join(cwd, ".gitignore")},
+    {path: filepath.Join(cwd, ".git", "info", "exclude")},
+    {path: filepath.Join(cwd, "package.json")},
+    {path: filepath.Join(cwd, "package-lock.json")},
+    {path: filepath.Join(cwd, "pnpm-lock.yaml")},
+    {path: filepath.Join(cwd, "yarn.lock")},
+    {path: filepath.Join(cwd, "bun.lock")},
+    {path: filepath.Join(cwd, "bun.lockb")},
   }
   for _, source := range program.TSProgram.SourceFiles() {
     file := source.FileName()
@@ -719,12 +738,18 @@ func auxiliaryInputs(program *driver.Program, configs []*shimtsoptions.ParsedCom
       continue
     }
     directory := filepath.Dir(file)
-    inputs = appendAncestorInputs(inputs, directory, cwd)
+    for _, path := range appendAncestorInputs(nil, directory, cwd) {
+      inputs = append(inputs, auxiliaryInput{path: path})
+    }
     for _, reference := range source.ReferencedFiles {
-      inputs = append(inputs, driver.FileCandidates(filepath.Join(directory, filepath.FromSlash(reference.FileName)))...)
+      for _, path := range driver.FileCandidates(filepath.Join(directory, filepath.FromSlash(reference.FileName))) {
+        inputs = append(inputs, auxiliaryInput{path: path})
+      }
     }
     for _, reference := range source.TypeReferenceDirectives {
-      inputs = append(inputs, driver.TypeReferenceCandidates(configs, directory, cwd, reference.FileName)...)
+      for _, path := range driver.TypeReferenceCandidates(configs, directory, cwd, reference.FileName) {
+        inputs = append(inputs, auxiliaryInput{path: path})
+      }
     }
     for _, specifier := range driver.SourceModuleSpecifiers(source) {
       context := driver.ModuleResolutionContext{
@@ -738,7 +763,7 @@ func auxiliaryInputs(program *driver.Program, configs []*shimtsoptions.ParsedCom
       }
       resolved := program.TSProgram.GetResolvedModuleFromModuleSpecifier(source, specifier)
       if resolved != nil && resolved.IsResolved() {
-        inputs = append(inputs, driver.ModuleResolutionPredecessors(
+        predecessors := driver.ModuleResolutionPredecessors(
           configs,
           directory,
           cwd,
@@ -746,10 +771,18 @@ func auxiliaryInputs(program *driver.Program, configs []*shimtsoptions.ParsedCom
           resolved.ResolvedFileName,
           program.FS.UseCaseSensitiveFileNames(),
           context,
-        )...)
+        )
+        for _, path := range predecessors {
+          inputs = append(inputs, auxiliaryInput{
+            path:         path,
+            identityOnly: sameExistingAuxiliaryPath(path, resolved.ResolvedFileName),
+          })
+        }
         continue
       }
-      inputs = append(inputs, driver.ModuleResolutionCandidates(configs, directory, cwd, specifier.Text(), context)...)
+      for _, path := range driver.ModuleResolutionCandidates(configs, directory, cwd, specifier.Text(), context) {
+        inputs = append(inputs, auxiliaryInput{path: path})
+      }
     }
   }
   // Config `types` entries request type packages without any source syntax, so
@@ -760,10 +793,46 @@ func auxiliaryInputs(program *driver.Program, configs []*shimtsoptions.ParsedCom
       continue
     }
     for _, name := range parsed.ParsedConfig.CompilerOptions.Types {
-      inputs = append(inputs, driver.TypeReferenceCandidates(configs, parsed.GetCurrentDirectory(), cwd, name)...)
+      for _, path := range driver.TypeReferenceCandidates(configs, parsed.GetCurrentDirectory(), cwd, name) {
+        inputs = append(inputs, auxiliaryInput{path: path})
+      }
     }
   }
-  return compactSortedStrings(inputs)
+  return compactAuxiliaryInputs(inputs)
+}
+
+func sameExistingAuxiliaryPath(left, right string) bool {
+  leftInfo, err := os.Stat(left)
+  if err != nil {
+    return false
+  }
+  rightInfo, err := os.Stat(right)
+  return err == nil && os.SameFile(leftInfo, rightInfo)
+}
+
+func compactAuxiliaryInputs(inputs []auxiliaryInput) []auxiliaryInput {
+  byPath := make(map[string]auxiliaryInput, len(inputs))
+  for _, input := range inputs {
+    if strings.TrimSpace(input.path) == "" {
+      continue
+    }
+    if previous, exists := byPath[input.path]; exists {
+      // A path that also participates as a manifest or other content-bearing
+      // input keeps the stronger content-sensitive contract.
+      input.identityOnly = previous.identityOnly && input.identityOnly
+    }
+    byPath[input.path] = input
+  }
+  paths := make([]string, 0, len(byPath))
+  for path := range byPath {
+    paths = append(paths, path)
+  }
+  sort.Strings(paths)
+  output := make([]auxiliaryInput, 0, len(paths))
+  for _, path := range paths {
+    output = append(output, byPath[path])
+  }
+  return output
 }
 
 func appendAncestorInputs(inputs []string, directory, stop string) []string {

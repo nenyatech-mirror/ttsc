@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import {
   Module,
+  createRequire,
   isBuiltin,
   registerHooks,
   stripTypeScriptTypes,
@@ -15,6 +16,7 @@ import { resolveEmittedJavaScript } from "../../compiler/internal/resolveEmitted
 import { resolveTsgo } from "../../compiler/internal/resolveTsgo";
 import { runBuild } from "../../compiler/internal/runBuild";
 import { outputText, spawnNative } from "../../compiler/internal/spawnNative";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 import {
   type FilesystemPathIdentityContext,
   createFilesystemPathIdentityContext,
@@ -59,6 +61,13 @@ const RESOLVABLE_EXTENSIONS = [
   ".js",
   ".mjs",
   ".cjs",
+] as const;
+
+/** Union of the ttsx rescue probes and Node's built-in CommonJS probes. */
+const DESCRIPTOR_PROBE_EXTENSIONS = [
+  ...RESOLVABLE_EXTENSIONS,
+  ".json",
+  ".node",
 ] as const;
 
 /** TypeScript source extensions these hooks compile. */
@@ -361,8 +370,9 @@ function resolve(
   context: ResolveContext,
   nextResolve: NextResolve,
 ): ResolveResult {
+  recordPluginDescriptorResolutionCandidates(specifier, context.parentURL);
   try {
-    return rememberRuntimeEntry(
+    const result = rememberRuntimeEntry(
       rememberCommonJsNamedInterop(
         restoreStrippedNodeBuiltinScheme(
           specifier,
@@ -372,19 +382,365 @@ function resolve(
       ),
       context,
     );
+    recordPluginDescriptorResolution(specifier, context.parentURL, result.url);
+    return result;
   } catch (error) {
     const rescued = probeRescuableSpecifier(specifier, context.parentURL);
     if (rescued === null) {
       throw error;
     }
-    return rememberRuntimeEntry(
+    const result = rememberRuntimeEntry(
       rememberCommonJsNamedInterop(
         { shortCircuit: true, url: rescued },
         context,
       ),
       context,
     );
+    recordPluginDescriptorResolution(specifier, context.parentURL, result.url);
+    return result;
   }
+}
+
+/**
+ * Fingerprint every path whose state can redirect one descriptor import.
+ *
+ * This runs before the real resolver. Reporting candidates only after the
+ * descriptor finished would pair an earlier descriptor result with later file
+ * state when a higher-priority candidate appeared during evaluation.
+ */
+function recordPluginDescriptorResolutionCandidates(
+  specifier: string,
+  parentURL: string | undefined,
+): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  if (isBuiltin(specifier) || specifier.startsWith("node:")) return;
+  const parent = runtimeFilePath(parentURL);
+  if (parent === undefined) return;
+  const recorded = new Set<string>();
+  const record = (candidate: string): void => {
+    const resolved = path.resolve(candidate);
+    if (recorded.has(resolved)) return;
+    recorded.add(resolved);
+    recordPluginDescriptorInput({
+      parent,
+      resolved,
+    });
+  };
+  const recordManifestTargets = (
+    value: unknown,
+    directory: string,
+    allowBare: boolean = false,
+  ): void => {
+    if (typeof value === "string") {
+      if (
+        value !== "" &&
+        (allowBare || value.startsWith("./") || value.startsWith("../"))
+      ) {
+        recordBase(path.resolve(directory, value));
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        recordManifestTargets(item, directory, allowBare);
+      }
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const item of Object.values(value)) {
+        recordManifestTargets(item, directory, allowBare);
+      }
+    }
+  };
+  const recordPackageManifests = (file: string): void => {
+    for (
+      let directory = path.dirname(file);
+      ;
+      directory = path.dirname(directory)
+    ) {
+      const manifest = path.join(directory, "package.json");
+      record(manifest);
+      if (isFile(manifest)) return;
+      const parentDirectory = path.dirname(directory);
+      if (parentDirectory === directory) return;
+    }
+  };
+  const localBases = (value: string): string[] => {
+    if (value.startsWith("file:")) return [fileURLToPath(value)];
+    const raw = path.resolve(path.dirname(parent), value);
+    const suffixStart = value.search(/[?#]/);
+    if (suffixStart === -1) return [raw];
+    const pathname = value.slice(0, suffixStart);
+    return pathname === ""
+      ? [raw]
+      : [...new Set([raw, path.resolve(path.dirname(parent), pathname)])];
+  };
+  const bases = new Set<string>();
+  const recordBase = (base: string): void => {
+    const resolvedBase = path.resolve(base);
+    if (bases.has(resolvedBase)) return;
+    bases.add(resolvedBase);
+    record(resolvedBase);
+    for (const candidate of typescriptSourcesForJavaScriptSpecifier(
+      resolvedBase,
+    )) {
+      record(candidate);
+    }
+    for (const extension of DESCRIPTOR_PROBE_EXTENSIONS) {
+      record(resolvedBase + extension);
+    }
+    const manifestFile = path.join(resolvedBase, "package.json");
+    record(manifestFile);
+    for (const extension of DESCRIPTOR_PROBE_EXTENSIONS) {
+      record(path.join(resolvedBase, `index${extension}`));
+    }
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(manifestFile, "utf8").replace(/^\uFEFF/, ""),
+      ) as Record<string, unknown>;
+      recordManifestTargets(manifest.exports, resolvedBase);
+      recordManifestTargets(manifest.module, resolvedBase, true);
+      recordManifestTargets(manifest.main, resolvedBase, true);
+    } catch {
+      // The real resolver owns malformed package diagnostics.
+    }
+  };
+
+  if (
+    specifier.startsWith(".") ||
+    path.isAbsolute(specifier) ||
+    specifier.startsWith("file:")
+  ) {
+    try {
+      for (const base of localBases(specifier)) {
+        recordPackageManifests(base);
+        if (isFile(base)) record(base);
+        else recordBase(base);
+      }
+    } catch {
+      // The real resolver owns invalid URL spellings.
+    }
+    return;
+  }
+
+  const parts = specifier.split("/");
+  const packageParts = parts[0]?.startsWith("@")
+    ? parts.slice(0, 2)
+    : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) return;
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  for (const searchPath of createRequire(parent).resolve.paths(specifier) ??
+    []) {
+    const packageDirectory = path.join(searchPath, packageName);
+    recordBase(packageDirectory);
+    if (subpath.length !== 0) {
+      recordBase(path.join(packageDirectory, ...subpath));
+    }
+    // CommonJS resolution continues past an existing but unusable package
+    // directory. Record every search root before the resolver runs so a
+    // farther selected package retains evaluation-time hashes for its
+    // superseding candidates.
+  }
+}
+
+/**
+ * Report one resolved descriptor edge to the parent loader. The channel is
+ * armed by the generated descriptor shim only after ttsx's own bootstrap and
+ * imports have loaded, keeping compiler implementation files out of the
+ * project's persistent-cache inputs.
+ */
+function recordPluginDescriptorResolution(
+  specifier: string,
+  parentURL: string | undefined,
+  resolvedURL: string,
+): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
+  if (out === undefined || out.length === 0) return;
+  const resolved = runtimeFilePath(resolvedURL);
+  if (resolved === undefined) return;
+  const parent = runtimeFilePath(parentURL);
+  recordPluginDescriptorInput({
+    ...(parent === undefined ? {} : { parent }),
+    resolved,
+    specifier,
+  });
+  for (
+    let directory = path.dirname(resolved);
+    ;
+    directory = path.dirname(directory)
+  ) {
+    const manifest = path.join(directory, "package.json");
+    recordPluginDescriptorInput({
+      ...(parent === undefined ? {} : { parent }),
+      resolved: manifest,
+    });
+    if (isFile(manifest)) break;
+    const parentDirectory = path.dirname(directory);
+    if (parentDirectory === directory) break;
+  }
+}
+
+function recordPluginDescriptorInput(record: {
+  hash?: string | null;
+  parent?: string;
+  realpath?: string | null;
+  resolved: string;
+  signature?: string;
+  specifier?: string;
+  unstable?: boolean;
+}): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
+  if (out === undefined || out.length === 0) return;
+  recordPluginDescriptorInputOnce(record);
+  const resolved = path.resolve(record.resolved);
+  const parsed = path.parse(resolved);
+  let current = parsed.root;
+  const relative = path.relative(parsed.root, resolved);
+  for (const segment of relative.split(path.sep).slice(0, -1)) {
+    if (segment === "") continue;
+    current = path.join(current, segment);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        recordPluginDescriptorInputOnce({ resolved: current });
+      }
+    } catch {
+      break;
+    }
+  }
+}
+
+/** Record one path without recursively revisiting its lexical ancestors. */
+function recordPluginDescriptorInputOnce(record: {
+  hash?: string | null;
+  parent?: string;
+  realpath?: string | null;
+  resolved: string;
+  signature?: string;
+  specifier?: string;
+  unstable?: boolean;
+}): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  const out = process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT;
+  if (out === undefined || out.length === 0) return;
+  try {
+    const beforeSignature = pluginDescriptorInputMetadataSignature(
+      record.resolved,
+    );
+    const observedHash = pluginDescriptorInputHash(record.resolved);
+    const observedRealpath = pluginDescriptorInputRealpath(record.resolved);
+    const afterSignature = pluginDescriptorInputMetadataSignature(
+      record.resolved,
+    );
+    const unstable =
+      record.unstable === true ||
+      beforeSignature === undefined ||
+      afterSignature === undefined ||
+      beforeSignature !== afterSignature ||
+      (record.hash !== undefined && record.hash !== observedHash) ||
+      (record.realpath !== undefined && record.realpath !== observedRealpath) ||
+      (record.signature !== undefined && record.signature !== afterSignature);
+    fs.appendFileSync(
+      out,
+      `${JSON.stringify({
+        ...record,
+        hash: observedHash,
+        realpath: observedRealpath,
+        ...(unstable ? { unstable: true } : { signature: afterSignature }),
+      })}\n`,
+      "utf8",
+    );
+  } catch {
+    // Dependency reporting is advisory to cache reuse; the selected entry is
+    // still retained by the parent if this best-effort side channel fails.
+  }
+}
+
+function pluginDescriptorInputRealpath(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
+  }
+}
+
+/** Metadata identity that exposes content-preserving A-B-A replacement. */
+function pluginDescriptorInputMetadataSignature(
+  file: string,
+): string | undefined {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      if (link.isSymbolicLink()) {
+        try {
+          target = fs.statSync(current, { bigint: true });
+        } catch {
+          // A broken link's own metadata cannot expose its target appearing
+          // and disappearing during evaluation. Decline cache proof instead.
+          return undefined;
+        }
+      }
+      return [
+        path.relative(current, requested),
+        link.dev,
+        link.ino,
+        link.mode,
+        link.size,
+        link.mtimeNs,
+        link.ctimeNs,
+        target.dev,
+        target.ino,
+        target.mode,
+        target.size,
+        target.mtimeNs,
+        target.ctimeNs,
+      ].join(":");
+    } catch (error) {
+      if (!isMissingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function pluginDescriptorInputHash(file: string): string | null {
+  try {
+    if (fs.statSync(file).isDirectory()) {
+      return pluginDescriptorDirectoryHash();
+    }
+    return crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(file))
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/** Stable public fingerprint for an existing directory candidate's kind. */
+function pluginDescriptorDirectoryHash(): string {
+  return crypto
+    .createHash("sha256")
+    .update("ttsc:host-input:directory\0")
+    .digest("hex");
+}
+
+function runtimeFilePath(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value.startsWith("file:")) {
+    try {
+      return path.resolve(fileURLToPath(value));
+    } catch {
+      return undefined;
+    }
+  }
+  return path.isAbsolute(value) ? path.resolve(value) : undefined;
 }
 
 /** Remember an ESM root until its synchronous load hook prepares the project. */
@@ -432,6 +788,12 @@ interface BuiltProject {
   moduleOptions: OwningModuleOptions;
 }
 const builtProjects = new Map<string, BuiltProject>();
+// A descriptor evaluator's dependency emit must never be reused by another
+// process. PIDs are eventually recycled while the disk cache persists, so PID
+// alone cannot provide that isolation. One cryptographically random process
+// nonce keeps every evaluator generation distinct while `builtProjects` still
+// shares repeated imports inside this process.
+const descriptorProcessCacheNonce = crypto.randomBytes(16).toString("hex");
 
 /** File URLs whose CommonJS source was reached from an ESM parent import. */
 const commonJsNamedInteropUrls = new Set<string>();
@@ -559,10 +921,7 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
   }
   let options: OwningModuleOptions = {};
   try {
-    const project = readProjectConfig({
-      cwd: path.dirname(tsconfig),
-      tsconfig,
-    });
+    const project = readPluginDescriptorProjectConfig(tsconfig);
     options = projectModuleOptions(project.compilerOptions);
   } catch {
     // The owning project cannot be read, so nothing is known about the format
@@ -574,6 +933,147 @@ function owningModuleOptions(filename: string): OwningModuleOptions | null {
   }
   moduleOptionsCache.set(tsconfig, options);
   return options;
+}
+
+/**
+ * Read one owning config while its discovered chain stays unchanged.
+ *
+ * A preliminary read discovers `extends`; an accepted read is bracketed by
+ * equal fingerprints over that exact chain. If churn never settles, ttsx can
+ * still execute the last project but reports every observed config as unstable,
+ * preventing a later snapshot from certifying the torn result.
+ */
+function readPluginDescriptorProjectConfig(
+  tsconfig: string,
+): ReturnType<typeof readProjectConfig> {
+  const read = () =>
+    readProjectConfig({ cwd: path.dirname(tsconfig), tsconfig });
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return read();
+
+  const observed = new Set<string>([path.resolve(tsconfig)]);
+  let project: ReturnType<typeof readProjectConfig>;
+  try {
+    project = read();
+  } catch (error) {
+    recordPluginDescriptorProjectInputs(observed, true);
+    throw error;
+  }
+  let inputs = normalizedProjectConfigPaths(project, tsconfig);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (const input of inputs) observed.add(input);
+    const before = pluginDescriptorInputHashes(inputs);
+    const beforeRealpaths = pluginDescriptorInputRealpaths(inputs);
+    const beforeSignatures = pluginDescriptorInputMetadataSignatures(inputs);
+    let candidate: ReturnType<typeof readProjectConfig>;
+    try {
+      candidate = read();
+    } catch (error) {
+      recordPluginDescriptorProjectInputs(observed, true);
+      throw error;
+    }
+    const candidateInputs = normalizedProjectConfigPaths(candidate, tsconfig);
+    for (const input of candidateInputs) observed.add(input);
+    const after = pluginDescriptorInputHashes(candidateInputs);
+    const afterRealpaths = pluginDescriptorInputRealpaths(candidateInputs);
+    const afterSignatures =
+      pluginDescriptorInputMetadataSignatures(candidateInputs);
+    if (
+      equalPluginDescriptorInputLists(inputs, candidateInputs) &&
+      equalPluginDescriptorInputHashes(before, after) &&
+      equalPluginDescriptorInputHashes(beforeRealpaths, afterRealpaths) &&
+      beforeSignatures !== undefined &&
+      afterSignatures !== undefined &&
+      equalPluginDescriptorInputHashes(beforeSignatures, afterSignatures)
+    ) {
+      for (const input of candidateInputs) {
+        recordPluginDescriptorInput({
+          hash: after[input]!,
+          realpath: afterRealpaths[input]!,
+          resolved: input,
+          signature: afterSignatures[input]!,
+        });
+      }
+      return candidate;
+    }
+    project = candidate;
+    inputs = candidateInputs;
+  }
+  recordPluginDescriptorProjectInputs(observed, true);
+  return project;
+}
+
+function normalizedProjectConfigPaths(
+  project: ReturnType<typeof readProjectConfig>,
+  requestedConfig: string,
+): string[] {
+  return [
+    ...new Set(
+      [requestedConfig, ...project.configPaths].map((file) =>
+        path.resolve(file),
+      ),
+    ),
+  ].sort();
+}
+
+function pluginDescriptorInputHashes(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => [input, pluginDescriptorInputHash(input)]),
+  );
+}
+
+function pluginDescriptorInputRealpaths(
+  inputs: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    inputs.map((input) => [input, pluginDescriptorInputRealpath(input)]),
+  );
+}
+
+function pluginDescriptorInputMetadataSignatures(
+  inputs: readonly string[],
+): Record<string, string> | undefined {
+  const output: Record<string, string> = {};
+  for (const input of inputs) {
+    const signature = pluginDescriptorInputMetadataSignature(input);
+    if (signature === undefined) return undefined;
+    output[path.resolve(input)] = signature;
+  }
+  return output;
+}
+
+function equalPluginDescriptorInputLists(
+  first: readonly string[],
+  second: readonly string[],
+): boolean {
+  return (
+    first.length === second.length &&
+    first.every((input, index) => input === second[index])
+  );
+}
+
+function equalPluginDescriptorInputHashes(
+  first: Readonly<Record<string, string | null>>,
+  second: Readonly<Record<string, string | null>>,
+): boolean {
+  return (
+    Object.keys(first).length === Object.keys(second).length &&
+    Object.entries(first).every(([input, hash]) => second[input] === hash)
+  );
+}
+
+function recordPluginDescriptorProjectInputs(
+  inputs: Iterable<string>,
+  unstable: boolean,
+): void {
+  for (const input of inputs) {
+    const resolved = path.resolve(input);
+    recordPluginDescriptorInput({
+      resolved,
+      ...(unstable ? { unstable: true } : {}),
+    });
+  }
 }
 
 /** Narrow a resolved project's compiler options to the emit-format pair. */
@@ -708,7 +1208,7 @@ function emitOrphanAsCommonJs(filename: string): string | null {
       return hit;
     }
   }
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsx-orphan-"));
+  const outDir = createCanonicalTempDirectory("ttsx-orphan-");
   try {
     const res = spawnNative(
       tsgo,
@@ -771,7 +1271,7 @@ function emitCommonJsForNameScan(filename: string): string | null {
     commonJsNameScanSources.set(real, null);
     return null;
   }
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsx-export-scan-"));
+  const outDir = createCanonicalTempDirectory("ttsx-export-scan-");
   try {
     const res = spawnNative(
       tsgo,
@@ -1507,11 +2007,7 @@ interface DependencyCachePaths {
 }
 
 function dependencyCachePaths(tsconfig: string): DependencyCachePaths {
-  const key = crypto
-    .createHash("sha256")
-    .update(tsconfig)
-    .digest("hex")
-    .slice(0, 16);
+  const key = dependencyCacheKey(tsconfig);
   const root = dependencyCacheRoot();
   return {
     cacheDir: path.join(root, key),
@@ -1519,6 +2015,38 @@ function dependencyCachePaths(tsconfig: string): DependencyCachePaths {
     metaPath: path.join(root, `${key}.json`),
     root,
   };
+}
+
+/** Derive one dependency cache key; exported for isolation regressions. */
+export function dependencyCacheKey(
+  tsconfig: string,
+  options: {
+    descriptorLoad?: boolean;
+    descriptorNonce?: string;
+  } = {},
+): string {
+  const descriptorLoad =
+    options.descriptorLoad ?? process.env.TTSC_PLUGIN_DESCRIPTOR_LOAD === "1";
+  return (
+    crypto
+      .createHash("sha256")
+      .update(tsconfig)
+      // Descriptor evaluation promises a result bound to this process's exact
+      // input observations. Reusing an emit another evaluator built can pair
+      // that process's old source/config bytes with this process's later hashes.
+      // Keep ordinary ttsx worker sharing, but isolate descriptor builds with a
+      // non-reusable process nonce; the in-process `builtProjects` map still
+      // compiles each owning project once.
+      .update(
+        descriptorLoad
+          ? `\0descriptor-process:${
+              options.descriptorNonce ?? descriptorProcessCacheNonce
+            }`
+          : "",
+      )
+      .digest("hex")
+      .slice(0, 16)
+  );
 }
 
 /** The immutable emit directory of one build generation under `cacheDir`. */
@@ -1673,7 +2201,7 @@ function buildDependency(
   cacheDir: string,
   metaPath: string,
 ): BuiltProject {
-  const project = readProjectConfig({ cwd: path.dirname(tsconfig), tsconfig });
+  const project = readPluginDescriptorProjectConfig(tsconfig);
   const generation = newDependencyGeneration();
   const emitDir = dependencyGenerationDir(cacheDir, generation);
   fs.rmSync(emitDir, { force: true, recursive: true });
@@ -1768,7 +2296,23 @@ function publishDependencyMeta(
   }
 }
 
-function dependencyCacheRoot(): string {
+export function dependencyCacheRoot(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  // Descriptor evaluators are disposable and must not leave one isolated emit
+  // generation in the shared temp cache per load. Their result file already
+  // lives in the evaluator-owned directory that the parent removes in
+  // `finally`; put dependency emits beside it so that cleanup owns both.
+  if (
+    env.TTSC_PLUGIN_DESCRIPTOR_LOAD === "1" &&
+    typeof env.TTSC_PLUGIN_DESCRIPTOR_OUT === "string" &&
+    path.isAbsolute(env.TTSC_PLUGIN_DESCRIPTOR_OUT)
+  ) {
+    return path.join(
+      path.dirname(env.TTSC_PLUGIN_DESCRIPTOR_OUT),
+      "dependency-cache",
+    );
+  }
   const owner = runtimeManifests().find(
     (candidate) => candidate.depCacheDir.length !== 0,
   );
@@ -2148,7 +2692,12 @@ function formatDuration(ms: number): string {
 }
 
 /** Owning-tsconfig cache keyed by directory, mirroring `packageTypeCache`. */
-const tsconfigCache = new Map<string, string | null>();
+interface ITsconfigLookup {
+  candidates: readonly string[];
+  result: string | null;
+}
+
+const tsconfigCache = new Map<string, ITsconfigLookup>();
 const moduleOptionsCache = new Map<string, OwningModuleOptions | null>();
 
 /**
@@ -2169,13 +2718,30 @@ function nearestTsconfig(file: string): string | null {
   for (;;) {
     const cached = tsconfigCache.get(directory);
     if (cached !== undefined) {
-      return rememberTsconfig(chain, cached);
+      if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") {
+        return rememberTsconfig(chain, cached.result, cached.candidates);
+      }
+      // Bracket the cached selection with the same candidate observations the
+      // parent later reconciles. A nearer config created between a liveness
+      // check and reporting must conflict, not be paired with the cached
+      // farther result and certified as current.
+      recordPluginDescriptorTsconfigCandidates(cached.candidates);
+      const current = nearestExistingTsconfig(cached.candidates);
+      recordPluginDescriptorTsconfigCandidates(cached.candidates);
+      if (current === cached.result) {
+        return rememberTsconfig(chain, cached.result, cached.candidates);
+      }
+      // Descriptor factories can deliberately create a config before a lazy
+      // import. A lookup cached while an earlier import ran must not keep
+      // serving the orphan lane after the nearest candidate changed.
+      tsconfigCache.delete(directory);
     }
     if (path.basename(directory) === "node_modules") {
       return rememberTsconfig(chain, null);
     }
     chain.push(directory);
     const candidate = path.join(directory, "tsconfig.json");
+    recordPluginDescriptorTsconfigCandidates([candidate]);
     if (isFile(candidate)) {
       return rememberTsconfig(chain, candidate);
     }
@@ -2187,14 +2753,38 @@ function nearestTsconfig(file: string): string | null {
   }
 }
 
+function nearestExistingTsconfig(candidates: readonly string[]): string | null {
+  for (const candidate of candidates) {
+    if (isFile(candidate)) return path.resolve(candidate);
+  }
+  return null;
+}
+
 function rememberTsconfig(
   directories: readonly string[],
   result: string | null,
+  tailCandidates: readonly string[] = [],
 ): string | null {
-  for (const directory of directories) {
-    tsconfigCache.set(directory, result);
+  let candidates = [...tailCandidates];
+  for (let index = directories.length - 1; index >= 0; index -= 1) {
+    const directory = directories[index]!;
+    candidates = [path.join(directory, "tsconfig.json"), ...candidates];
+    tsconfigCache.set(directory, { candidates, result });
   }
   return result;
+}
+
+/** Report every owning-config candidate observed by the nearest-config walk. */
+function recordPluginDescriptorTsconfigCandidates(
+  candidates: readonly string[],
+): void {
+  if (process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE !== "1") return;
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    recordPluginDescriptorInput({
+      resolved,
+    });
+  }
 }
 
 function readFileOrNull(file: string | null): string | null {
@@ -2300,6 +2890,15 @@ const JS_TO_TS_EXTENSIONS: ReadonlyMap<string, readonly string[]> = new Map([
   [".mjs", [".mts"]],
   [".cjs", [".cts"]],
 ]);
+
+/** Candidate sources that can satisfy one missing JavaScript spelling. */
+function typescriptSourcesForJavaScriptSpecifier(file: string): string[] {
+  const extension = path.extname(file).toLowerCase();
+  const substitutions = JS_TO_TS_EXTENSIONS.get(extension);
+  if (substitutions === undefined) return [];
+  const stem = file.slice(0, file.length - extension.length);
+  return substitutions.map((candidate) => stem + candidate);
+}
 
 /**
  * Rescue a `specifier` that Node's resolver rejected: map a JavaScript

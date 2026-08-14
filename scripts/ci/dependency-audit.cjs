@@ -38,6 +38,10 @@ const WAIVED = new Map([
     "GHSA-5p2g-fcmc-qvqq",
     "image-size JXL and HEIF parser infinite loops; same package, same unpatched line, same edge as GHSA-w3rx-r6r6-pgpr.",
   ],
+  [
+    "GHSA-jmr9-qjv8-65gv",
+    "extract-zip permits a malicious archive symlink to escape its destination, but no patched release exists. It reaches this workspace only through Puppeteer's browser downloader inside the website-only @marp-team/marp-cli build dependency. ttsc's slide build emits HTML from repository Markdown and does not download or extract an attacker-supplied browser archive.",
+  ],
 ]);
 
 function parseSummary(stdout) {

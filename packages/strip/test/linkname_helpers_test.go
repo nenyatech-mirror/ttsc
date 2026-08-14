@@ -93,5 +93,8 @@ func stripNodePlatformPairFor(goos, goarch string) (string, string)
 //go:linkname stripRealpathIfPossible github.com/samchon/ttsc/packages/strip/driver.stripRealpathIfPossible
 func stripRealpathIfPossible(location string) string
 
+//go:linkname stripPhysicalHostInput github.com/samchon/ttsc/packages/strip/driver.stripPhysicalHostInput
+func stripPhysicalHostInput(location string) *string
+
 //go:linkname stripTtsxCommandContext github.com/samchon/ttsc/packages/strip/driver.stripTtsxCommandContext
 func stripTtsxCommandContext(ctx context.Context, anchors []string, args ...string) *exec.Cmd

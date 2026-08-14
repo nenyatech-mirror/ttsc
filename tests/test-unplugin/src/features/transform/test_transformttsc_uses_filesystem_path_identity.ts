@@ -64,6 +64,16 @@ export const test_transformttsc_uses_filesystem_path_identity = async () => {
     core.pathIdentityKey("C:\\Sensitive\\src\\future.ts", windows),
     "missing module candidates must inherit sensitive ownership",
   );
+  assert.equal(
+    core.normalizeHostInputName("Selection.JS", false),
+    "selection.js",
+    "case-insensitive watcher events must match candidate spellings",
+  );
+  assert.equal(
+    core.normalizeHostInputName("Selection.JS", true),
+    "Selection.JS",
+    "case-sensitive filesystems must preserve distinct entry names",
+  );
 
   if (core.pathIdentityKey(file) === core.pathIdentityKey(alternate)) {
     const cache = api.createTtscTransformCache();

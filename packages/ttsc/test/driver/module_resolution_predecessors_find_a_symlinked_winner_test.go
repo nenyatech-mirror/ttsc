@@ -2,7 +2,9 @@ package driver_test
 
 import (
   "os"
+  "os/exec"
   "path/filepath"
+  "runtime"
   "slices"
   "testing"
 
@@ -23,8 +25,8 @@ import (
 //  1. Point a link directory at a real directory holding the selected value.js.
 //  2. Ask for the predecessors of an import spelled through the link, naming
 //     the winner by its real path.
-//  3. Assert the higher-priority value.ts is reported and the lower-priority
-//     value.jsx is not.
+//  3. Assert the higher-priority value.ts and selected lexical value.js are
+//     reported while the lower-priority value.jsx is not.
 func TestModuleResolutionPredecessorsFindASymlinkedWinner(t *testing.T) {
   root := t.TempDir()
   real := filepath.Join(root, "real")
@@ -35,8 +37,19 @@ func TestModuleResolutionPredecessorsFindASymlinkedWinner(t *testing.T) {
     t.Fatal(err)
   }
   link := filepath.Join(root, "link")
-  if err := os.Symlink(real, link); err != nil {
-    t.Skipf("symbolic links unavailable on this host: %v", err)
+  if runtime.GOOS == "windows" {
+    command := exec.Command(
+      "node",
+      "-e",
+      `require("node:fs").symlinkSync(process.argv[1], process.argv[2], "junction")`,
+      real,
+      link,
+    )
+    if output, err := command.CombinedOutput(); err != nil {
+      t.Skipf("directory junction unavailable on this host: %v: %s", err, output)
+    }
+  } else if err := os.Symlink(real, link); err != nil {
+    t.Skipf("directory symlink unavailable on this host: %v", err)
   }
 
   predecessors := driver.ModuleResolutionPredecessors(
@@ -54,6 +67,9 @@ func TestModuleResolutionPredecessorsFindASymlinkedWinner(t *testing.T) {
   }
   if !slices.Contains(predecessors, filepath.Join(link, "value.ts")) {
     t.Fatalf("missing higher-priority value.ts candidate: %v", predecessors)
+  }
+  if !slices.Contains(predecessors, filepath.Join(link, "value.js")) {
+    t.Fatalf("missing selected symlink spelling value.js: %v", predecessors)
   }
   if slices.Contains(predecessors, filepath.Join(link, "value.jsx")) {
     t.Fatalf("lower-priority value.jsx candidate must not be tracked: %v", predecessors)

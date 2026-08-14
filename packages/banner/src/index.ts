@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 
 import type { ITtscBannerPluginConfig } from "./structures";
@@ -12,6 +14,12 @@ export * from "./structures/index";
  * executable sidecar or linked native source.
  */
 type TtscPluginDescriptor = {
+  /** Universal config-discovery inputs consumed by the native transform. */
+  hostInputs?: string[];
+  /** Evaluation-time fingerprints paired with {@link hostInputs}. */
+  hostInputHashes?: Record<string, string | null>;
+  /** Evaluation-time physical targets paired with {@link hostInputs}. */
+  hostInputRealpaths?: Record<string, string | null>;
   /** Human-readable plugin name used in logs and error messages. */
   name: string;
   /** Absolute path to the Go source directory for this plugin. */
@@ -45,6 +53,8 @@ type TtscPluginFactoryContext<TConfig> = {
    * replacement for `__filename`.
    */
   filename: string;
+  /** Host-declared anchor for implicit plugin config discovery. */
+  pluginConfigDir?: string;
   /** The raw plugin entry from `compilerOptions.plugins[]`. */
   plugin: TConfig;
   /** Absolute path to the project root (directory containing tsconfig). */
@@ -90,7 +100,11 @@ export default function createTtscBanner(
     }
   }
 
+  const configInputs = bannerConfigInputs(context);
   return {
+    hostInputHashes: configInputs.hashes,
+    hostInputRealpaths: configInputs.realpaths,
+    hostInputs: configInputs.inputs,
     name: "@ttsc/banner",
     // Point at the `driver/` directory one level above `lib/` in the
     // installed package tree (where the Go sources live). `context.dirname`
@@ -99,4 +113,99 @@ export default function createTtscBanner(
     source: path.resolve(context.dirname, "..", "driver"),
     stage: "transform",
   };
+}
+
+const BANNER_CONFIG_FILENAMES = [
+  "banner.config.json",
+  "banner.config.js",
+  "banner.config.cjs",
+  "banner.config.mjs",
+  "banner.config.ts",
+  "banner.config.cts",
+  "banner.config.mts",
+];
+
+/** Mirror native config resolution while retaining missing priority probes. */
+function bannerConfigInputs(
+  context: TtscPluginFactoryContext<ITtscBannerPluginConfig>,
+): {
+  hashes: Record<string, string | null>;
+  inputs: string[];
+  realpaths: Record<string, string | null>;
+} {
+  const configFile = (context.plugin as { configFile?: unknown }).configFile;
+  const base = path.resolve(
+    context.pluginConfigDir ?? path.dirname(context.tsconfig),
+  );
+  if (typeof configFile === "string" && configFile.trim() !== "") {
+    const file = path.isAbsolute(configFile)
+      ? path.resolve(configFile)
+      : path.resolve(base, configFile);
+    return {
+      hashes: { [file]: hostInputHash(file) },
+      inputs: [file],
+      realpaths: { [file]: hostInputRealpath(file) },
+    };
+  }
+  return configDiscoveryInputs(base, BANNER_CONFIG_FILENAMES);
+}
+
+function configDiscoveryInputs(
+  base: string,
+  names: readonly string[],
+): {
+  hashes: Record<string, string | null>;
+  inputs: string[];
+  realpaths: Record<string, string | null>;
+} {
+  const inputs: string[] = [];
+  const hashes: Record<string, string | null> = {};
+  const realpaths: Record<string, string | null> = {};
+  for (let directory = base; ; directory = path.dirname(directory)) {
+    const candidates = names.map((name) => path.join(directory, name));
+    inputs.push(...candidates);
+    for (const candidate of candidates) {
+      hashes[candidate] = hostInputHash(candidate);
+      realpaths[candidate] = hostInputRealpath(candidate);
+    }
+    if (candidates.some(configCandidateExists)) break;
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+  }
+  return { hashes, inputs, realpaths };
+}
+
+function hostInputRealpath(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
+  }
+}
+
+/** Hash the exact candidate state observed before discovery selects a file. */
+function hostInputHash(file: string): string | null {
+  try {
+    if (fs.statSync(file).isDirectory()) {
+      return crypto
+        .createHash("sha256")
+        .update("ttsc:host-input:directory\0")
+        .digest("hex");
+    }
+    return crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(file))
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/** Match the native discovery rule: a directory is never a config file. */
+function configCandidateExists(file: string): boolean {
+  try {
+    return !fs.statSync(file).isDirectory();
+  } catch {
+    return false;
+  }
 }

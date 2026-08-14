@@ -1294,10 +1294,12 @@ func loadConfigFile(location string) (any, error) {
 }
 
 type configDependencyFingerprint struct {
-  Path   string `json:"path"`
-  Digest string `json:"digest"`
-  Kind   string `json:"kind"`
-  Scope  string `json:"scope"`
+  Path           string  `json:"path"`
+  Digest         string  `json:"digest"`
+  IdentityStable bool    `json:"identityStable"`
+  Kind           string  `json:"kind"`
+  Realpath       *string `json:"realpath"`
+  Scope          string  `json:"scope"`
 }
 
 const (
@@ -1367,10 +1369,10 @@ func loadConfigFileEvaluationWithin(
 // configCacheVersion namespaces the on-disk config cache. Bump it whenever
 // the shape of a cached config object changes so that entries written by an
 // older @ttsc/lint binary are treated as a miss rather than silently reused.
-// v6 adds the `entry` dependency kind. A v5 cache records a resolution trace's
-// ancestors as directory digests, so reusing it would keep republishing the
-// filesystem root as a watch input for as long as the entry survives.
-const configCacheVersion = "v6"
+// v8 also rejects content-restoring A-B-A replacement during evaluation. A v7
+// cache can otherwise pair output from the transient state with the restored
+// state's equal digest and physical path.
+const configCacheVersion = "v8"
 
 // configEvalCache memoizes evaluated .ts/.js lint config objects for the
 // lifetime of one process; the on-disk cache (configCacheDir) extends the
@@ -1557,6 +1559,10 @@ func configDependencyDigestsAreCurrent(
   dependencies []configDependencyFingerprint,
 ) bool {
   for _, dependency := range dependencies {
+    if !dependency.IdentityStable ||
+      !sameConfigDependencyRealpath(dependency.Realpath, configDependencyRealpath(dependency.Path)) {
+      return false
+    }
     digest, err := configDependencyDigest(dependency)
     if err != nil {
       return false
@@ -1566,6 +1572,19 @@ func configDependencyDigestsAreCurrent(
     }
   }
   return true
+}
+
+func configDependencyRealpath(location string) *string {
+  absolute, err := filepath.Abs(location)
+  if err != nil {
+    return nil
+  }
+  resolved := realProjectPath(absolute)
+  if _, statErr := os.Stat(resolved); statErr != nil {
+    return nil
+  }
+  resolved = filepath.Clean(resolved)
+  return &resolved
 }
 
 func configDependencyDigest(
@@ -1848,7 +1867,8 @@ func normalizeConfigDependencyFingerprints(
   for _, dependency := range input {
     if strings.TrimSpace(dependency.Path) == "" ||
       !filepath.IsAbs(dependency.Path) ||
-      len(dependency.Digest) != sha256.Size*2 ||
+      (dependency.Realpath != nil && !filepath.IsAbs(*dependency.Realpath)) ||
+      (dependency.Digest != "" && len(dependency.Digest) != sha256.Size*2) ||
       strings.ToLower(dependency.Digest) != dependency.Digest ||
       (dependency.Kind != configDependencyFile &&
         dependency.Kind != configDependencyDir &&
@@ -1858,24 +1878,30 @@ func normalizeConfigDependencyFingerprints(
         dependency.Scope != configDependencyWatch) {
       return nil, false
     }
-    if _, err := hex.DecodeString(dependency.Digest); err != nil {
-      return nil, false
+    if dependency.Digest != "" {
+      if _, err := hex.DecodeString(dependency.Digest); err != nil {
+        return nil, false
+      }
     }
     absolute := filepath.Clean(dependency.Path)
     key := dependency.Kind + "\x00" + absolute
     if previous, exists := seen[key]; exists {
       if previous.Digest != dependency.Digest ||
+        previous.IdentityStable != dependency.IdentityStable ||
         previous.Kind != dependency.Kind ||
+        !sameConfigDependencyRealpath(previous.Realpath, dependency.Realpath) ||
         previous.Scope != dependency.Scope {
         return nil, false
       }
       continue
     }
     fingerprint := configDependencyFingerprint{
-      Path:   absolute,
-      Digest: dependency.Digest,
-      Kind:   dependency.Kind,
-      Scope:  dependency.Scope,
+      Path:           absolute,
+      Digest:         dependency.Digest,
+      IdentityStable: dependency.IdentityStable,
+      Kind:           dependency.Kind,
+      Realpath:       cloneConfigDependencyRealpath(dependency.Realpath),
+      Scope:          dependency.Scope,
     }
     seen[key] = fingerprint
     normalized = append(normalized, fingerprint)
@@ -1884,6 +1910,21 @@ func normalizeConfigDependencyFingerprints(
     return normalized[left].Path < normalized[right].Path
   })
   return normalized, true
+}
+
+func cloneConfigDependencyRealpath(value *string) *string {
+  if value == nil {
+    return nil
+  }
+  cloned := filepath.Clean(*value)
+  return &cloned
+}
+
+func sameConfigDependencyRealpath(left, right *string) bool {
+  if left == nil || right == nil {
+    return left == nil && right == nil
+  }
+  return filepath.Clean(*left) == filepath.Clean(*right)
 }
 
 // loadScriptConfigFile evaluates a .js/.cjs/.mjs config file by running a
@@ -1919,12 +1960,18 @@ func loadScriptConfigEvaluationWithin(
   cmd := exec.CommandContext(
     ctx,
     node,
-    "-e",
-    script,
+    "--input-type=commonjs",
+    "-",
     location,
     outputPath,
     resolutionRoot,
   )
+  // Windows limits the whole process command line to roughly 32 KiB. The
+  // dependency-tracking loader is intentionally larger than that, so keep only
+  // an explicit CommonJS stdin program and remove Node's stdin sentinel before
+  // the loader runs. This preserves the historical process.argv layout seen by
+  // both the loader and the imported user config without using string eval.
+  cmd.Stdin = strings.NewReader("process.argv.splice(1, 1);\n" + script)
   return runConfigLoaderCommand(cmd, location, "config file", outputPath)
 }
 
@@ -2104,17 +2151,76 @@ function isObject(value) {
   return value !== null && typeof value === "object";
 }
 
+function missingPathError(error) {
+  return error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function dependencyMetadataSignature(location) {
+  const requested = path.resolve(location);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch { return undefined; }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function currentDependencyDigest(kind, location) {
+  try {
+    if (kind === "directory") return directoryDigest(location);
+    if (kind === "entry") return entryDigest(location);
+    if (kind === "optional-file") return optionalFileDigest(location);
+    return createHash("sha256").update(fs.readFileSync(location)).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
 function recordDependency(kind, location, digest, owners) {
   const key = kind + "\0" + location;
   const previous = dependencies.get(key);
   const mergedOwners = previous ? previous.owners : new Set();
   for (const owner of owners) mergedOwners.add(owner);
+  const beforeSignature = dependencyMetadataSignature(location);
+  const observedDigest = currentDependencyDigest(kind, location);
+  const realpath = dependencyRealpath(location);
+  const afterSignature = dependencyMetadataSignature(location);
+  const identityStable =
+    (!previous || previous.identityStable) &&
+    beforeSignature !== undefined &&
+    afterSignature !== undefined &&
+    beforeSignature === afterSignature &&
+    digest === observedDigest &&
+    (!previous || previous.realpath === realpath) &&
+    (!previous || previous.signature === afterSignature);
   dependencies.set(key, {
-    digest: previous && previous.digest !== digest ? "" : digest,
+    digest: !identityStable || (previous && previous.digest !== digest) ? "" : digest,
+    identityStable,
     kind,
     owners: mergedOwners,
     path: location,
+    realpath,
+    signature: afterSignature,
   });
+}
+
+function dependencyRealpath(location) {
+  try {
+    return realPath(location);
+  } catch {
+    return null;
+  }
 }
 
 function isLocalModuleSpecifier(specifier) {
@@ -2874,10 +2980,22 @@ function realPath(location) {
 }
 
 function finalizeDependencies() {
+  for (const dependency of [...dependencies.values()]) {
+    recordDependency(
+      dependency.kind,
+      dependency.path,
+      currentDependencyDigest(dependency.kind, dependency.path),
+      [...dependency.owners],
+    );
+  }
   const watched = graphWatchReachability();
-  return [...dependencies.values()].map(({ owners, ...dependency }) => ({
-    ...dependency,
-    scope: [...owners].some((owner) => watched.has(owner))
+  return [...dependencies.values()].map((dependency) => ({
+    digest: dependency.digest,
+    identityStable: dependency.identityStable,
+    kind: dependency.kind,
+    path: dependency.path,
+    realpath: dependency.realpath,
+    scope: [...dependency.owners].some((owner) => watched.has(owner))
       ? "watch"
       : "cache",
   }));
@@ -3121,9 +3239,12 @@ const resolutionRoot = path.resolve(%s);
 const CONFIG_KEYS = new Set<string>([%s]);
 const dependencies = new Map<string, {
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "entry" | "file" | "optional-file";
   path: string;
   owners: Set<string>;
+  realpath: string | null;
+  signature: string | undefined;
 }>();
 const graphNodes = new Map<string, string>();
 const graphEdges: Array<{
@@ -3296,6 +3417,48 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
+function missingPathError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function dependencyMetadataSignature(
+  location: string,
+): string | undefined {
+  const requested = path.resolve(location);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      if (link.isSymbolicLink()) {
+        try { target = fs.statSync(current, { bigint: true }); }
+        catch { return undefined; }
+      }
+      return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs].join(":");
+    } catch (error) {
+      if (!missingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function currentDependencyDigest(
+  kind: "directory" | "entry" | "file" | "optional-file",
+  location: string,
+): string {
+  try {
+    if (kind === "directory") return directoryDigest(location);
+    if (kind === "entry") return entryDigest(location);
+    if (kind === "optional-file") return optionalFileDigest(location);
+    return createHash("sha256").update(fs.readFileSync(location)).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
 function recordDependency(
   kind: "directory" | "entry" | "file" | "optional-file",
   location: string,
@@ -3306,12 +3469,39 @@ function recordDependency(
   const previous = dependencies.get(key);
   const mergedOwners = previous?.owners ?? new Set<string>();
   for (const owner of owners) mergedOwners.add(owner);
+  const beforeSignature = dependencyMetadataSignature(location);
+  const observedDigest = currentDependencyDigest(kind, location);
+  const realpath = dependencyRealpath(location);
+  const afterSignature = dependencyMetadataSignature(location);
+  const identityStable =
+    previous?.identityStable !== false &&
+    beforeSignature !== undefined &&
+    afterSignature !== undefined &&
+    beforeSignature === afterSignature &&
+    digest === observedDigest &&
+    (previous === undefined || previous.realpath === realpath) &&
+    (previous === undefined || previous.signature === afterSignature);
   dependencies.set(key, {
-    digest: previous !== undefined && previous.digest !== digest ? "" : digest,
+    digest:
+      !identityStable ||
+      (previous !== undefined && previous.digest !== digest)
+        ? ""
+        : digest,
+    identityStable,
     kind,
     owners: mergedOwners,
     path: location,
+    realpath,
+    signature: afterSignature,
   });
+}
+
+function dependencyRealpath(location: string): string | null {
+  try {
+    return realPath(location);
+  } catch {
+    return null;
+  }
 }
 
 function isLocalModuleSpecifier(specifier: string): boolean {
@@ -4115,10 +4305,20 @@ function realPath(location: string): string {
 
 function finalizeDependencies(): Array<{
   digest: string;
+  identityStable: boolean;
   kind: "directory" | "entry" | "file" | "optional-file";
   path: string;
+  realpath: string | null;
   scope: "cache" | "watch";
 }> {
+  for (const dependency of [...dependencies.values()]) {
+    recordDependency(
+      dependency.kind,
+      dependency.path,
+      currentDependencyDigest(dependency.kind, dependency.path),
+      [...dependency.owners],
+    );
+  }
   const watched = graphWatchReachability();
   // Opt-in diagnostics for a graph that comes back empty. The only channel this
   // loader may use is stderr, because the result travels through a private file
@@ -4136,9 +4336,13 @@ function finalizeDependencies(): Array<{
         "\n",
     );
   }
-  return [...dependencies.values()].map(({ owners, ...dependency }) => ({
-    ...dependency,
-    scope: [...owners].some((owner) => watched.has(owner))
+  return [...dependencies.values()].map((dependency) => ({
+    digest: dependency.digest,
+    identityStable: dependency.identityStable,
+    kind: dependency.kind,
+    path: dependency.path,
+    realpath: dependency.realpath,
+    scope: [...dependency.owners].some((owner) => watched.has(owner))
       ? "watch"
       : "cache",
   }));
@@ -4251,6 +4455,7 @@ func typeScriptConfigLoaderTsconfig(loader, location, outDir string) string {
       // resolving either way.
       "module":                          configModuleOption(location),
       "moduleResolution":                "bundler",
+      "jsx":                             "preserve",
       "noImplicitAny":                   false,
       "outDir":                          filepath.ToSlash(filepath.Join(outDir, "out")),
       "rewriteRelativeImportExtensions": true,

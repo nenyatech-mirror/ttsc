@@ -1,11 +1,10 @@
 /**
  * Reproduces the @ttsc/unplugin per-module cache cost on a synthetic project.
  *
- * The real Rollup plugin object (`unplugin.rollup(...)`) is driven directly
- * over a generated `N`-file project, mirroring how Rollup invokes `buildStart`
- * once and `transform` once per module. We count native plugin spawns
- * (whole-project re-transforms) and `fs.readFileSync` traffic to expose the
- * super-linear cost.
+ * The real transform core is driven over a generated `N`-file project with the
+ * same cache lifecycle Rollup supplies. Cache-owned filesystem operations count
+ * native plugin spawns, validation reads, metadata probes, and identity probes
+ * without changing process-global `node:fs` behavior.
  */
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -19,10 +18,14 @@ const requireFromTtsc = createRequire(
   path.join(root, "packages", "ttsc", "package.json"),
 );
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    fs.rmSync(tmpRoot, { force: true, recursive: true });
+  });
 
 async function main(): Promise<void> {
   fs.rmSync(tmpRoot, { force: true, recursive: true });
@@ -81,20 +84,26 @@ async function main(): Promise<void> {
     "\nScenario D — graph envelope without a build boundary (Vite serve):",
   );
   console.log(
-    "  measurement only: per-module complete-validation cost with a large",
+    "  invariant: validation reads and synchronous stats stay bounded per module,",
   );
-  console.log("  external input set (no invariant gate)\n");
-  await measureServeValidation(adapter, {
-    count: 50,
-    emitExternalKey: false,
-    graphFanout: 100,
-  });
+  console.log("  not the whole input union or project directory count\n");
+  recordFailure(
+    failures,
+    await measureServeValidation(adapter, {
+      count: 50,
+      emitExternalKey: false,
+      graphFanout: 50,
+      partitionExternalInputs: true,
+      unrelatedDirectoryCount: 100,
+    }),
+  );
 
   if (failures.length !== 0) {
     console.error(
       `\nFAIL: a scenario violated its invariant:\n  ${failures.join("\n  ")}`,
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   console.log(
     "\nOK: every build ran exactly one whole-project transform and watch-input" +
@@ -109,21 +118,24 @@ function recordFailure(failures: string[], failure: string | undefined): void {
 }
 
 interface Adapter {
-  rollup: (options: unknown) => {
-    buildStart: (this: unknown) => void | Promise<void>;
-    transformInclude: (this: unknown, id: string) => boolean;
-    transform: (
-      this: unknown,
-      code: string,
-      id: string,
-    ) => unknown | Promise<unknown>;
-  };
+  beginTtscTransformBuild(cache: Map<string, Promise<unknown>>): void;
+  createTtscTransformCache(
+    operations?: Record<string, unknown>,
+  ): Map<string, Promise<unknown>>;
+  resolveOptions(options?: unknown): unknown;
+  transformTtsc(
+    id: string,
+    source: string,
+    options: unknown,
+    aliases?: unknown,
+    cache?: Map<string, Promise<unknown>>,
+    hooks?: { addWatchFile?: (file: string) => void },
+  ): Promise<unknown>;
 }
 
 /**
- * Bundle the real adapter source with esbuild (keeping `ttsc`/`unplugin`
- * external) so the production transform pipeline runs unmodified without a
- * rebuilt `lib`.
+ * Bundle the real core source with esbuild (keeping `ttsc`/`unplugin` external)
+ * so the production transform pipeline runs unmodified without a rebuilt lib.
  */
 async function loadAdapter(): Promise<Adapter> {
   const esbuild = requireFromUnplugin("esbuild") as typeof import("esbuild");
@@ -147,7 +159,7 @@ async function loadAdapter(): Promise<Adapter> {
   });
   const mod = await import(pathToFileURL(outfile).href);
   fs.rmSync(outfile, { force: true });
-  return mod.default as Adapter;
+  return mod as Adapter;
 }
 
 function requireFromUnplugin(specifier: string): unknown {
@@ -166,6 +178,64 @@ interface MeasureOptions {
    * graph-bearing shape typia >= 13.1.19 produces.
    */
   graphFanout?: number;
+  /** Give each module one disjoint external edge instead of the whole union. */
+  partitionExternalInputs?: boolean;
+  /** Unrelated nested project directories used to gate membership-stat cost. */
+  unrelatedDirectoryCount?: number;
+}
+
+interface TransformHarness {
+  adapter: Adapter;
+  cache: Map<string, Promise<unknown>>;
+  counters: {
+    bytes: number;
+    probes: number;
+    reads: number;
+    stats: number;
+  };
+  options: unknown;
+}
+
+function createTransformHarness(
+  adapter: Adapter,
+  project: string,
+): TransformHarness {
+  const counters = { bytes: 0, probes: 0, reads: 0, stats: 0 };
+  const cache = adapter.createTtscTransformCache({
+    readFile: (location: string) => {
+      const contents = fs.readFileSync(location);
+      counters.bytes += contents.length;
+      counters.reads += 1;
+      return contents;
+    },
+    realpath: (location: string) => {
+      counters.probes += 1;
+      return fs.realpathSync.native(location);
+    },
+    stat: (location: string) => {
+      counters.stats += 1;
+      return fs.statSync(location);
+    },
+    statBigInt: (location: string) => {
+      counters.stats += 1;
+      return fs.statSync(location, { bigint: true });
+    },
+  });
+  return {
+    adapter,
+    cache,
+    counters,
+    options: adapter.resolveOptions({
+      project: path.join(project, "tsconfig.json"),
+    }),
+  };
+}
+
+function resetCounters(harness: TransformHarness): void {
+  harness.counters.bytes = 0;
+  harness.counters.probes = 0;
+  harness.counters.reads = 0;
+  harness.counters.stats = 0;
 }
 
 async function measure(
@@ -173,32 +243,29 @@ async function measure(
   options: MeasureOptions,
 ): Promise<string | undefined> {
   const project = createProject(options);
-  const plugin = adapter.rollup({
-    project: path.join(project, "tsconfig.json"),
-  });
-  const runLog = path.join(project, ".plugin-runs");
+  const harness = createTransformHarness(adapter, project);
+  const runLog = pluginRunLog(project);
 
   // Warm-up build: pays the one-time Go plugin compile + native program load so
   // the timed run reflects steady-state per-module cost, not toolchain startup.
-  await runBuild(plugin, project, runLog);
+  await runBuild(harness, project, runLog);
 
-  const counter = instrumentReadFileSync();
+  resetCounters(harness);
   fs.writeFileSync(runLog, "");
   const started = process.hrtime.bigint();
-  await runBuild(plugin, project, runLog);
+  await runBuild(harness, project, runLog);
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-  counter.restore();
 
   const pluginRuns = fs.existsSync(runLog)
     ? fs.readFileSync(runLog, "utf8").length
     : 0;
-  const perFileReads = (counter.calls / options.count).toFixed(1);
+  const perFileReads = (harness.counters.reads / options.count).toFixed(1);
   console.log(
     `  N=${String(options.count).padStart(3)}  ` +
       `pluginRuns=${String(pluginRuns).padStart(3)}  ` +
-      `reads=${String(counter.calls).padStart(7)}  ` +
+      `reads=${String(harness.counters.reads).padStart(7)}  ` +
       `reads/file=${perFileReads.padStart(7)}  ` +
-      `readMiB=${(counter.bytes / 1048576).toFixed(1).padStart(6)}  ` +
+      `readMiB=${(harness.counters.bytes / 1048576).toFixed(1).padStart(6)}  ` +
       `${elapsedMs.toFixed(0).padStart(6)}ms`,
   );
 
@@ -220,22 +287,20 @@ const GRAPH_PROBES_PER_MODULE_BUDGET = 64;
 /**
  * Drive a build-scoped run over a graph-bearing envelope and count the fs
  * probes a macOS host would pay for watch-input derivation. The first module
- * delivery compiles (and therefore needs the real platform for the native
- * spawn); the remaining deliveries are pure cache hits, so `process.platform`
- * is flipped to `darwin` only for them, making the per-delivery probe volume of
- * the macOS `pathIdentityKey` branch observable on any host.
+ * delivery compiles; the remaining deliveries are pure cache hits. The shared
+ * path-identity resolver performs a physical-path probe on every supported
+ * host, so the counter observes the real platform without mutating global
+ * process identity after a Windows binary has already been selected.
  */
 async function measureGraphBuild(
   adapter: Adapter,
   options: MeasureOptions,
 ): Promise<string | undefined> {
   const project = createProject(options);
-  const plugin = adapter.rollup({
-    project: path.join(project, "tsconfig.json"),
-  });
-  const runLog = path.join(project, ".plugin-runs");
+  const harness = createTransformHarness(adapter, project);
+  const runLog = pluginRunLog(project);
 
-  await runBuild(plugin, project, runLog);
+  await runBuild(harness, project, runLog);
 
   const modules = projectModules(project);
   const context = {
@@ -246,21 +311,28 @@ async function measureGraphBuild(
   };
   fs.writeFileSync(runLog, "");
   process.env.PLUGIN_RUN_LOG = runLog;
-  await plugin.buildStart.call(context);
+  adapter.beginTtscTransformBuild(harness.cache);
   const [first, ...rest] = modules;
-  await plugin.transform.call(context, fs.readFileSync(first!, "utf8"), first!);
+  await adapter.transformTtsc(
+    first!,
+    fs.readFileSync(first!, "utf8"),
+    harness.options,
+    undefined,
+    harness.cache,
+    context,
+  );
 
-  const probes = instrumentFsProbes();
-  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", { value: "darwin" });
+  resetCounters(harness);
   const started = process.hrtime.bigint();
-  try {
-    for (const id of rest) {
-      await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
-    }
-  } finally {
-    Object.defineProperty(process, "platform", platform);
-    probes.restore();
+  for (const id of rest) {
+    await adapter.transformTtsc(
+      id,
+      fs.readFileSync(id, "utf8"),
+      harness.options,
+      undefined,
+      harness.cache,
+      context,
+    );
   }
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
 
@@ -268,12 +340,12 @@ async function measureGraphBuild(
     ? fs.readFileSync(runLog, "utf8").length
     : 0;
   const edges = options.count * (options.graphFanout ?? 0) + options.count - 1;
-  const probesPerModule = probes.calls / rest.length;
+  const probesPerModule = harness.counters.probes / rest.length;
   console.log(
     `  N=${String(options.count).padStart(3)}  ` +
       `E=${String(edges).padStart(6)}  ` +
       `pluginRuns=${String(pluginRuns).padStart(3)}  ` +
-      `probes=${String(probes.calls).padStart(9)}  ` +
+      `probes=${String(harness.counters.probes).padStart(9)}  ` +
       `probes/file=${probesPerModule.toFixed(1).padStart(9)}  ` +
       `${elapsedMs.toFixed(0).padStart(7)}ms`,
   );
@@ -287,21 +359,18 @@ async function measureGraphBuild(
 }
 
 /**
- * Measure the serve-mode path: with no `buildStart` boundary the cache stays in
- * persistent-validation mode, so every delivered module re-walks the project
- * and re-reads the recorded external input set. Measurement only — the path is
- * the deliberate #980 freshness contract; this quantifies how the graph
- * envelope's external set multiplies it.
+ * Gate the serve-mode path: with no `buildStart` boundary the cache stays in
+ * persistent-validation mode. Each module owns one disjoint external graph
+ * input, so rereading the envelope union is visible as linear reads per module
+ * while per-file validation stays under a fixed budget.
  */
 async function measureServeValidation(
   adapter: Adapter,
   options: MeasureOptions,
-): Promise<void> {
+): Promise<string | undefined> {
   const project = createProject(options);
-  const plugin = adapter.rollup({
-    project: path.join(project, "tsconfig.json"),
-  });
-  const runLog = path.join(project, ".plugin-runs");
+  const harness = createTransformHarness(adapter, project);
+  const runLog = pluginRunLog(project);
   const context = {
     addWatchFile: () => undefined,
     error: (message: unknown) => {
@@ -314,63 +383,62 @@ async function measureServeValidation(
   process.env.PLUGIN_RUN_LOG = runLog;
   const modules = projectModules(project);
   for (const id of modules) {
-    await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+    await adapter.transformTtsc(
+      id,
+      fs.readFileSync(id, "utf8"),
+      harness.options,
+      undefined,
+      harness.cache,
+      context,
+    );
   }
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
-  const counter = instrumentReadFileSync();
+  resetCounters(harness);
   const started = process.hrtime.bigint();
   for (const id of modules) {
-    await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+    await adapter.transformTtsc(
+      id,
+      fs.readFileSync(id, "utf8"),
+      harness.options,
+      undefined,
+      harness.cache,
+      context,
+    );
   }
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-  counter.restore();
+  const pluginRuns = fs.existsSync(runLog)
+    ? fs.readFileSync(runLog, "utf8").length
+    : 0;
 
   console.log(
     `  N=${String(options.count).padStart(3)}  ` +
       `externals=${String(options.graphFanout ?? 0).padStart(4)}  ` +
-      `reads=${String(counter.calls).padStart(8)}  ` +
-      `reads/file=${(counter.calls / options.count).toFixed(1).padStart(8)}  ` +
+      `pluginRuns=${String(pluginRuns).padStart(3)}  ` +
+      `reads=${String(harness.counters.reads).padStart(8)}  ` +
+      `reads/file=${(harness.counters.reads / options.count).toFixed(1).padStart(8)}  ` +
+      `stats/file=${(harness.counters.stats / options.count).toFixed(1).padStart(6)}  ` +
       `${elapsedMs.toFixed(0).padStart(7)}ms`,
   );
+  const readsPerFile = harness.counters.reads / options.count;
+  const statsPerFile = harness.counters.stats / options.count;
+  if (pluginRuns !== 1) {
+    return `scenario D N=${options.count} K=${options.graphFanout}: pluginRuns=${pluginRuns} (expected 1)`;
+  }
+  if (readsPerFile > 16) {
+    return `scenario D N=${options.count} K=${options.graphFanout}: reads/file=${readsPerFile.toFixed(1)} exceeds the per-file validation budget of 16`;
+  }
+  return statsPerFile <= 8
+    ? undefined
+    : `scenario D N=${options.count} dirs=${options.unrelatedDirectoryCount}: stats/file=${statsPerFile.toFixed(1)} exceeds the shared membership budget of 8`;
 }
 
 /**
- * Wrap the two fs calls the macOS `pathIdentityKey` branch pays per call
- * (`existsSync` and `realpathSync.native`) with pass-through counters.
- */
-function instrumentFsProbes(): { calls: number; restore: () => void } {
-  const counter = { calls: 0, restore: () => undefined };
-  const originalExists = fs.existsSync;
-  const originalRealpath = fs.realpathSync.native;
-  (fs as { existsSync: typeof fs.existsSync }).existsSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.existsSync>
-  ) {
-    counter.calls += 1;
-    return originalExists.apply(this, args as never);
-  } as typeof fs.existsSync;
-  (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
-    function (
-      this: unknown,
-      ...args: Parameters<typeof fs.realpathSync.native>
-    ) {
-      counter.calls += 1;
-      return originalRealpath.apply(this, args as never);
-    } as typeof fs.realpathSync.native;
-  counter.restore = () => {
-    (fs as { existsSync: typeof fs.existsSync }).existsSync = originalExists;
-    (fs.realpathSync as { native: typeof fs.realpathSync.native }).native =
-      originalRealpath;
-  };
-  return counter;
-}
-
-/**
- * Drive the real Rollup plugin like the bundler would: `buildStart` once, then
- * `transform` for every included module, in module order.
+ * Drive the transform core with Rollup's lifecycle: one build start, then one
+ * transform for every project module in module order.
  */
 async function runBuild(
-  plugin: ReturnType<Adapter["rollup"]>,
+  harness: TransformHarness,
   project: string,
   runLog: string,
 ): Promise<void> {
@@ -381,12 +449,16 @@ async function runBuild(
     },
   };
   process.env.PLUGIN_RUN_LOG = runLog;
-  await plugin.buildStart.call(context);
+  harness.adapter.beginTtscTransformBuild(harness.cache);
   for (const id of projectModules(project)) {
-    if (!plugin.transformInclude.call(context, id)) {
-      continue;
-    }
-    await plugin.transform.call(context, fs.readFileSync(id, "utf8"), id);
+    await harness.adapter.transformTtsc(
+      id,
+      fs.readFileSync(id, "utf8"),
+      harness.options,
+      undefined,
+      harness.cache,
+      context,
+    );
   }
 }
 
@@ -399,29 +471,9 @@ function projectModules(project: string): string[] {
     .map((name) => path.join(srcDir, name));
 }
 
-/** Wrap `fs.readFileSync` to count calls and bytes for one timed build. */
-function instrumentReadFileSync(): {
-  calls: number;
-  bytes: number;
-  restore: () => void;
-} {
-  const original = fs.readFileSync;
-  const counter = { calls: 0, bytes: 0, restore: () => undefined };
-  (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (
-    this: unknown,
-    ...args: Parameters<typeof fs.readFileSync>
-  ) {
-    counter.calls += 1;
-    const result = original.apply(this, args as never);
-    // `.length` is bytes for a Buffer and characters for a string; either is a
-    // fine order-of-magnitude signal for this experiment.
-    counter.bytes += result.length;
-    return result;
-  } as typeof fs.readFileSync;
-  counter.restore = () => {
-    (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = original;
-  };
-  return counter;
+/** Keep the observer outside the project snapshot it is measuring. */
+function pluginRunLog(project: string): string {
+  return path.join(tmpRoot, `${path.basename(project)}.plugin-runs`);
 }
 
 function createProject(options: MeasureOptions): string {
@@ -440,6 +492,20 @@ function createProject(options: MeasureOptions): string {
     JSON.stringify({ private: true, type: "commonjs" }, null, 2),
     "utf8",
   );
+  for (
+    let index = 0;
+    index < (options.unrelatedDirectoryCount ?? 0);
+    index += 1
+  ) {
+    const directory = path.join(
+      project,
+      "fixtures",
+      `unused-${index}`,
+      "nested",
+    );
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "asset.txt"), "fixture\n", "utf8");
+  }
   fs.writeFileSync(
     path.join(project, "tsconfig.json"),
     JSON.stringify(
@@ -497,6 +563,9 @@ function createProject(options: MeasureOptions): string {
   // The Go sidecar keys its extra output entry only when asked.
   process.env.TTSC_PERF_EMIT_EXTERNAL = options.emitExternalKey ? "1" : "0";
   process.env.TTSC_PERF_GRAPH_FANOUT = String(graphFanout);
+  process.env.TTSC_PERF_PARTITION_EXTERNAL = options.partitionExternalInputs
+    ? "1"
+    : "0";
   return project;
 }
 
@@ -520,6 +589,7 @@ function writeGoPlugin(project: string): void {
       "package main",
       "",
       "import (",
+      '  "crypto/sha256"',
       '  "encoding/json"',
       '  "flag"',
       '  "fmt"',
@@ -535,6 +605,8 @@ function writeGoPlugin(project: string): void {
       '  Globals    []string            `json:"globals"`',
       '  Configs    []string            `json:"configs"`',
       '  Candidates map[string][]string `json:"candidates,omitempty"`',
+      '  InputHashes map[string]*string `json:"inputHashes,omitempty"`',
+      '  InputRealpaths map[string]*string `json:"inputRealpaths,omitempty"`',
       "}",
       "",
       "type transformResult struct {",
@@ -607,12 +679,16 @@ function writeGoPlugin(project: string): void {
       "    for i, name := range names {",
       '      key := "src/" + name',
       "      targets := []string{}",
-      "      if i+1 < len(names) {",
-      '        targets = append(targets, "src/"+names[i+1])',
+      '      if os.Getenv("TTSC_PERF_PARTITION_EXTERNAL") == "1" {',
+      "        targets = append(targets, externals[i%len(externals)])",
+      "      } else {",
+      "        if i+1 < len(names) {",
+      '          targets = append(targets, "src/"+names[i+1])',
+      "        }",
+      "        targets = append(targets, externals...)",
       "      }",
-      "      targets = append(targets, externals...)",
       "      edges[key] = targets",
-      "      deps[key] = externals",
+      "      deps[key] = targets",
       "      // A missing superseding probe, mirroring an unsuccessful",
       "      // module-resolution candidate the compiler records.",
       '      candidates[key] = []string{fmt.Sprintf("node_modules/dep%d/index.ts", i%fanout)}',
@@ -623,12 +699,53 @@ function writeGoPlugin(project: string): void {
       "      Globals:    []string{},",
       '      Configs:    []string{"tsconfig.json"},',
       "      Candidates: candidates,",
+      "      InputHashes: map[string]*string{},",
+      "      InputRealpaths: map[string]*string{},",
       "    }",
+      "    addGraphInputProofs(result.Graph, root)",
       "  }",
       "",
       "  data, _ := json.Marshal(result)",
       "  fmt.Fprintln(os.Stdout, string(data))",
       "  return 0",
+      "}",
+      "",
+      "func addGraphInputProofs(graph *referenceGraph, root string) {",
+      "  inputs := map[string]struct{}{}",
+      "  for source, targets := range graph.Edges {",
+      "    inputs[source] = struct{}{}",
+      "    for _, target := range targets { inputs[target] = struct{}{} }",
+      "  }",
+      "  for _, input := range graph.Globals { inputs[input] = struct{}{} }",
+      "  for _, input := range graph.Configs { inputs[input] = struct{}{} }",
+      "  for source, candidates := range graph.Candidates {",
+      "    inputs[source] = struct{}{}",
+      "    for _, candidate := range candidates { inputs[candidate] = struct{}{} }",
+      "  }",
+      "  for input := range inputs { addGraphInputProof(graph, root, input) }",
+      "}",
+      "",
+      "func addGraphInputProof(graph *referenceGraph, root, input string) {",
+      "  file := filepath.FromSlash(input)",
+      "  if !filepath.IsAbs(file) { file = filepath.Join(root, file) }",
+      "  data, err := os.ReadFile(file)",
+      "  if err != nil {",
+      "    info, statErr := os.Stat(file)",
+      "    if statErr != nil || !info.IsDir() {",
+      "      graph.InputHashes[input] = nil",
+      "      graph.InputRealpaths[input] = nil",
+      "      return",
+      "    }",
+      '    data = []byte("ttsc:host-input:directory\\x00")',
+      "  }",
+      "  realpath, err := filepath.EvalSymlinks(file)",
+      "  if err != nil { return }",
+      "  absolute, err := filepath.Abs(realpath)",
+      "  if err != nil { return }",
+      "  digest := sha256.Sum256(data)",
+      '  hash := fmt.Sprintf("%x", digest[:])',
+      "  graph.InputHashes[input] = &hash",
+      "  graph.InputRealpaths[input] = &absolute",
       "}",
       "",
     ].join("\n"),

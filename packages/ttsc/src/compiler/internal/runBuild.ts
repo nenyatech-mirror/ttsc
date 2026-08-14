@@ -6,6 +6,7 @@ import {
   type ProjectInputPathIdentityContext,
   createProjectInputPathIdentityContext,
 } from "../../internal/projectInputPathIdentity";
+import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import {
   hasProjectPluginEntries,
   loadProjectPlugins,
@@ -104,13 +105,18 @@ type BuildTiming = {
  * `TTSC_NODE_BINARY` so child processes can re-invoke the same Node.js binary
  * without searching `PATH`.
  */
-function mergeEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const base = {
+function mergeEnv(
+  extra?: NodeJS.ProcessEnv,
+  cwd: string = process.cwd(),
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TTSC_NODE_BINARY: process.env.TTSC_NODE_BINARY ?? process.execPath,
+    ...extra,
   };
-  if (!extra) return base;
-  return { ...base, ...extra };
+  const node = resolveNodeBinary(env, cwd);
+  if (node === undefined) delete env.TTSC_NODE_BINARY;
+  else env.TTSC_NODE_BINARY = node;
+  return env;
 }
 
 function createBuildTiming(options: TtscCommonOptions): BuildTiming {
@@ -203,16 +209,19 @@ function nativePluginEnv(
   plugin?: ITtscLoadedNativePlugin,
   tsgoArgs?: string,
 ): NodeJS.ProcessEnv {
-  const env = mergeEnv({
-    ...(execution.pluginConfigDir === undefined
-      ? {}
-      : { TTSC_PLUGIN_CONFIG_DIR: execution.pluginConfigDir }),
-    TTSC_TSGO_BINARY: process.env.TTSC_TSGO_BINARY ?? execution.tsgo.binary,
-    TTSC_TTSX_BINARY:
-      process.env.TTSC_TTSX_BINARY ??
-      path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
-    ...extra,
-  });
+  const env = mergeEnv(
+    {
+      ...(execution.pluginConfigDir === undefined
+        ? {}
+        : { TTSC_PLUGIN_CONFIG_DIR: execution.pluginConfigDir }),
+      TTSC_TSGO_BINARY: process.env.TTSC_TSGO_BINARY ?? execution.tsgo.binary,
+      TTSC_TTSX_BINARY:
+        process.env.TTSC_TTSX_BINARY ??
+        path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
+      ...extra,
+    },
+    execution.projectRoot,
+  );
   // Forwarded tsgo argv is per-invocation state this host owns, exactly like
   // the config anchor below: publish this run's payload, or drop whatever an
   // ancestor ttsc process left behind when this lane forwards nothing.
@@ -852,7 +861,7 @@ function runProjectFreeTerminalFlag(
   const tsgo = resolveTsgo({ ...options, cwd });
   const res = spawnNative(tsgo.binary, [...(options.passthrough ?? [])], {
     cwd,
-    env: mergeEnv(options.env),
+    env: mergeEnv(options.env, cwd),
     encoding: "utf8",
   });
   if (res.error) {
@@ -1173,7 +1182,7 @@ function runTsgo(
     ],
     {
       cwd: execution.projectRoot,
-      env: mergeEnv(options.env),
+      env: mergeEnv(options.env, execution.projectRoot),
       encoding: "utf8",
     },
   );
@@ -1207,7 +1216,7 @@ function runTsgoBuild(
 ): TtscBuildResult {
   const res = spawnNative(execution.tsgo.binary, args, {
     cwd: execution.projectRoot,
-    env: mergeEnv(options.env),
+    env: mergeEnv(options.env, execution.projectRoot),
     encoding: "utf8",
   });
   if (res.error) {

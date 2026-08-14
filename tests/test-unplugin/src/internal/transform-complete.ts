@@ -34,6 +34,13 @@ const GRAPH = {
   configs: ["tsconfig.json"],
 };
 
+/** Universal descriptor/config files loaded by the fixture host. */
+function fixtureHostInputs(root: string): string[] {
+  return ["package.json", "plugin.cjs", "tsconfig.json"].map((file) =>
+    member(root, file),
+  );
+}
+
 /** Plugin entry reporting `dependencies` for `src/main.ts`. */
 function reportDependencies(dependencies: string[]): unknown {
   return {
@@ -99,7 +106,7 @@ export async function assertCompleteFileNarrowsToDeclaredAndUniversalInputs(): P
     [
       member(root, "src/consulted.d.ts"),
       member(root, "src/only-declared.d.ts"),
-      member(root, "tsconfig.json"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
@@ -117,7 +124,7 @@ export async function assertCompleteFileWithoutDependenciesKeepsOnlyUniversalInp
     declareComplete(["src/main.ts"]),
   ]);
 
-  assert.deepEqual(watched, [member(root, "tsconfig.json")]);
+  assert.deepEqual(watched, fixtureHostInputs(root).sort());
 }
 
 /**
@@ -164,14 +171,14 @@ export async function assertMixedCompletenessEnvelopeComposesPerFile(): Promise<
 
   assert.deepEqual(
     await collect(TestUnpluginProject.mainFile(root)),
-    [member(root, "src/consulted.d.ts"), member(root, "tsconfig.json")].sort(),
+    [member(root, "src/consulted.d.ts"), ...fixtureHostInputs(root)].sort(),
   );
   assert.deepEqual(
     await collect(other),
     [
       member(root, "src/other-type.d.ts"),
       member(root, "src/ambient.d.ts"),
-      member(root, "tsconfig.json"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
@@ -203,20 +210,18 @@ export async function assertVolatileFileIgnoresItsCompletenessDeclaration(): Pro
       member(root, "src/unread.d.ts"),
       member(root, "src/deep.d.ts"),
       member(root, "src/ambient.d.ts"),
-      member(root, "tsconfig.json"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
 
 /**
- * Asserts a completeness declaration does not narrow the project transform
- * cache's own out-of-walk validation: an undeclared external graph member still
- * replaces the cached generation. That layer replays one whole envelope rather
- * than one file, and it is what re-runs the plugin's analysis so a widened
- * declaration can ever be learned; the narrowing lands at the bundler boundary
- * only.
+ * Asserts a completeness declaration narrows persistent transform validation as
+ * well as bundler watch registration. The plugin has transferred ownership of
+ * the file's complete dependency set, so an undeclared graph member cannot keep
+ * imposing whole-envelope reads on every delivery.
  */
-export async function assertCompletenessKeepsExternalCacheValidation(): Promise<void> {
+export async function assertCompletenessNarrowsPersistentCacheValidation(): Promise<void> {
   const { resolveOptions, transformTtsc, createTtscTransformCache } =
     await TestUnpluginRuntime.loadUnpluginApi();
   const shared = TestProject.tmpdir("ttsc-unplugin-external-");
@@ -251,5 +256,5 @@ export async function assertCompletenessKeepsExternalCacheValidation(): Promise<
     cache,
   );
   assert.ok(after);
-  assert.notStrictEqual(cacheEntry(cache), generation);
+  assert.strictEqual(cacheEntry(cache), generation);
 }

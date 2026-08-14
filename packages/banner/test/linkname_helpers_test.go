@@ -87,6 +87,9 @@ func bannerNodePlatformPairFor(goos, goarch string) (string, string)
 //go:linkname bannerRealpathIfPossible github.com/samchon/ttsc/packages/banner/driver.realpathIfPossible
 func bannerRealpathIfPossible(location string) string
 
+//go:linkname bannerPhysicalHostInput github.com/samchon/ttsc/packages/banner/driver.physicalHostInput
+func bannerPhysicalHostInput(location string) *string
+
 //go:linkname bannerNodeConfigLoaderEnv github.com/samchon/ttsc/packages/banner/driver.nodeConfigLoaderEnv
 func bannerNodeConfigLoaderEnv(location string) []string
 

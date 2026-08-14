@@ -197,6 +197,7 @@ type Program struct {
   checkerRelease  func()
   Host            shimcompiler.CompilerHost
   FS              vfs.FS
+  inputObserver   *inputObservationFS
   SourcePreamble  string
   plugins         linkedPluginState
   pluginsApplied  bool
@@ -374,6 +375,8 @@ func LoadProgram(cwd, tsconfigPath string, options LoadProgramOptions) (*Program
   if fs == nil {
     fs = DefaultFS()
   }
+  inputObserver := newInputObservationFS(fs)
+  fs = inputObserver
   if options.SourcePreamble != "" {
     fs = sourcePreambleFS{
       FS:       fs,
@@ -422,6 +425,7 @@ func LoadProgram(cwd, tsconfigPath string, options LoadProgramOptions) (*Program
     checkerRelease: done,
     Host:           host,
     FS:             fs,
+    inputObserver:  inputObserver,
     SourcePreamble: options.SourcePreamble,
   }
   prog.plugins = pluginState
@@ -582,6 +586,34 @@ func (p *Program) ApplyLinkedPlugins() error {
 // a fresh Program rather than Session's incremental source replacement.
 func (p *Program) HasLinkedProgramPlugins() bool {
   return p != nil && p.plugins.hasProgramPlugins()
+}
+
+// PluginHostInputs returns the generation-wide native configuration files
+// reported by linked plugins while this Program was loaded or transformed.
+func (p *Program) PluginHostInputs() []string {
+  if p == nil {
+    return nil
+  }
+  return p.plugins.hostInputs()
+}
+
+// PluginHostInputHashes returns evaluation-time fingerprints for the subset of
+// native host inputs whose exact state plugins reported without conflict.
+func (p *Program) PluginHostInputHashes() map[string]*string {
+  if p == nil {
+    return nil
+  }
+  return p.plugins.hostInputHashes()
+}
+
+// PluginHostInputRealpaths returns evaluation-time physical identities for the
+// subset of native host inputs whose symlink or junction target was observed
+// without conflict.
+func (p *Program) PluginHostInputRealpaths() map[string]*string {
+  if p == nil {
+    return nil
+  }
+  return p.plugins.hostInputRealpaths()
 }
 
 // Diagnostics returns project diagnostics that must block compilation or

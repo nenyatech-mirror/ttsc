@@ -23,9 +23,10 @@ const bundledScheme = "bundled:///"
 //
 //   - Edges maps each file to its direct resolved references — imports,
 //     re-exports, `/// <reference>` targets, type reference directives, and
-//     ambient-module declaration files, type-only edges included. Direct
-//     edges are the minimal sufficient statistic; consumers that need a flat
-//     per-file list compute the reachability closure themselves.
+//     ambient-module declaration files, type-only edges included. A leaf file
+//     has an empty list so the node and its compiler-time input proof remain
+//     explicit. Direct edges are the minimal sufficient statistic; consumers
+//     that need a flat per-file list compute the reachability closure themselves.
 //   - Globals lists the files that contribute to the global scope (ambient
 //     declaration files, script files, global augmentations, `typeRoots`
 //     entries). A change to any of them can affect every file.
@@ -39,10 +40,12 @@ const bundledScheme = "bundled:///"
 // map: project-relative slash paths, falling back to slash-normalized
 // absolute paths outside the project root (see TransformOutputKey).
 type TransformGraph struct {
-  Edges      map[string][]string `json:"edges"`
-  Globals    []string            `json:"globals"`
-  Configs    []string            `json:"configs"`
-  Candidates map[string][]string `json:"candidates,omitempty"`
+  Edges          map[string][]string `json:"edges"`
+  Globals        []string            `json:"globals"`
+  Configs        []string            `json:"configs"`
+  Candidates     map[string][]string `json:"candidates,omitempty"`
+  InputHashes    map[string]*string  `json:"inputHashes,omitempty"`
+  InputRealpaths map[string]*string  `json:"inputRealpaths,omitempty"`
 }
 
 // NewTransformGraph computes the reference graph of a loaded program, keyed
@@ -69,14 +72,64 @@ func NewTransformGraph(prog *Program, cwd string) *TransformGraph {
     if shimcompiler.FileAffectsGlobalScope(file) {
       graph.Globals = append(graph.Globals, key)
     }
-    targets := referenceTargets(prog, cwd, file)
-    if len(targets) != 0 {
-      graph.Edges[key] = targets
-    }
+    // Keep leaf modules as empty adjacency-list entries. Besides making the
+    // graph's node universe explicit, this lets attachInputProof bind every
+    // source file to the bytes TypeScript-Go actually read. Omitting a leaf
+    // would let an A-B-A edit during compilation pair B's output with identical
+    // pre/post project snapshots for A.
+    graph.Edges[key] = referenceTargets(prog, cwd, file)
   }
   sort.Strings(graph.Globals)
   graph.Configs = configChain(prog, cwd)
+  graph.attachInputProof(prog, cwd)
   return graph
+}
+
+// attachInputProof pairs every graph path with the state the compiler
+// filesystem actually returned while constructing the resident Program. A
+// missing entry means proof was incomplete or contradictory; persistent hosts
+// then keep the fresh result but decline cross-build reuse.
+func (graph *TransformGraph) attachInputProof(prog *Program, cwd string) {
+  if prog == nil || prog.inputObserver == nil {
+    return
+  }
+  inputs := map[string]struct{}{}
+  for source, targets := range graph.Edges {
+    inputs[source] = struct{}{}
+    for _, target := range targets {
+      inputs[target] = struct{}{}
+    }
+  }
+  for _, input := range graph.Globals {
+    inputs[input] = struct{}{}
+  }
+  for _, input := range graph.Configs {
+    inputs[input] = struct{}{}
+  }
+  for source, candidates := range graph.Candidates {
+    inputs[source] = struct{}{}
+    for _, candidate := range candidates {
+      inputs[candidate] = struct{}{}
+    }
+  }
+  hashes := map[string]*string{}
+  realpaths := map[string]*string{}
+  for input := range inputs {
+    file := filepath.FromSlash(input)
+    if !filepath.IsAbs(file) {
+      file = filepath.Join(cwd, file)
+    }
+    hash, realpath, ok := prog.inputObserver.proof(file)
+    if !ok {
+      continue
+    }
+    hashes[input] = hash
+    realpaths[input] = realpath
+  }
+  if len(hashes) != 0 {
+    graph.InputHashes = hashes
+    graph.InputRealpaths = realpaths
+  }
 }
 
 // referenceTargets resolves one file's direct reference set to sorted envelope

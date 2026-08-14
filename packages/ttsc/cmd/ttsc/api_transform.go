@@ -26,6 +26,11 @@ type apiTransformResult struct {
   // content can influence a transformed module, so bundler caches invalidate
   // soundly without per-plugin reporting.
   Graph *driver.TransformGraph `json:"graph,omitempty"`
+  // HostInputs are absolute native plugin config files evaluated while this
+  // generation loaded. JavaScript hosts merge them with descriptor inputs.
+  HostInputs         []string           `json:"hostInputs,omitempty"`
+  HostInputHashes    map[string]*string `json:"hostInputHashes,omitempty"`
+  HostInputRealpaths map[string]*string `json:"hostInputRealpaths,omitempty"`
 }
 
 // runAPITransform implements the `api-transform` sub-command. It loads the
@@ -70,6 +75,9 @@ func runAPITransform(args []string) int {
   }
   typescript := map[string]string{}
   var graph *driver.TransformGraph
+  var hostInputs []string
+  var hostInputHashes map[string]*string
+  var hostInputRealpaths map[string]*string
   if prog != nil {
     defer prog.Close()
     // Compute the reference graph before SourceFiles() runs linked plugin
@@ -81,12 +89,18 @@ func runAPITransform(args []string) int {
       typescript[apiOutputKey(cwd, file.FileName())] = file.Text()
     }
     diags = append(diags, prog.Diagnostics()...)
+    hostInputs = prog.PluginHostInputs()
+    hostInputHashes = prog.PluginHostInputHashes()
+    hostInputRealpaths = prog.PluginHostInputRealpaths()
   }
 
   result := apiTransformResult{
-    Diagnostics: make([]apiCompileDiagnostic, 0, len(diags)),
-    TypeScript:  typescript,
-    Graph:       graph,
+    Diagnostics:        make([]apiCompileDiagnostic, 0, len(diags)),
+    Graph:              graph,
+    HostInputs:         hostInputs,
+    HostInputHashes:    hostInputHashes,
+    HostInputRealpaths: hostInputRealpaths,
+    TypeScript:         typescript,
   }
   for _, diag := range diags {
     result.Diagnostics = append(result.Diagnostics, toAPICompileDiagnostic(diag))

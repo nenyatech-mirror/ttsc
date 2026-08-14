@@ -14,9 +14,16 @@ declare function createTtscStrip(context: {
    * it.
    */
   dirname: string;
+  /** Host-declared anchor for implicit strip config discovery. */
+  pluginConfigDir?: string;
   /** Original tsconfig plugin entry, validated for unsupported keys. */
   plugin?: Record<string, unknown>;
+  /** Absolute resolved tsconfig path. */
+  tsconfig: string;
 }): {
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  hostInputs: string[];
   name: string;
   source: string;
   stage: "transform";

@@ -88,6 +88,13 @@ function emitDependenciesPlugins(dependencies: string[]): unknown[] {
   ];
 }
 
+/** Exact compiler/descriptor inputs that affect every transformed module. */
+function universalHostInputs(root: string): string[] {
+  return ["package.json", "plugin.cjs", "tsconfig.json"].map((file) =>
+    path.join(root, file),
+  );
+}
+
 /**
  * Asserts the loader transforms TypeScript source through the webpack loader
  * contract using the project's own tsconfig-declared plugins — the exact way
@@ -174,6 +181,7 @@ async function assertTurbopackLoaderRegistersPluginDependencies(): Promise<void>
   assert.deepEqual(dependencies, [
     path.join(root, "src", "types.d.ts"),
     absolute,
+    ...universalHostInputs(root),
   ]);
 }
 
@@ -191,7 +199,10 @@ async function assertTurbopackLoaderRegistersDependenciesOnCacheHit(): Promise<v
   const options = {
     plugins: emitDependenciesPlugins(["src/types.d.ts"]),
   };
-  const expected = [path.join(root, "src", "types.d.ts")];
+  const expected = [
+    path.join(root, "src", "types.d.ts"),
+    ...universalHostInputs(root),
+  ];
 
   const first = await runTurbopackLoaderWithContext({
     resourcePath: TestUnpluginProject.mainFile(root),
@@ -211,10 +222,11 @@ async function assertTurbopackLoaderRegistersDependenciesOnCacheHit(): Promise<v
 }
 
 /**
- * Asserts the negative twin: a transform whose plugin reports no `dependencies`
- * envelope field registers nothing, while still transforming the module. A
- * loader that fabricated dependencies would pollute Turbopack's invalidation
- * graph.
+ * Asserts the negative twin: a transform whose plugin reports no per-file
+ * `dependencies` registers only the compiler/descriptor inputs that affect
+ * every module. A loader that fabricated other paths would pollute Turbopack's
+ * invalidation graph, while omitting these universal inputs would serve stale
+ * transforms after a descriptor or config edit.
  */
 async function assertTurbopackLoaderRegistersNoDependenciesWithoutReport(): Promise<void> {
   const root = TestUnpluginProject.createProject();
@@ -223,7 +235,7 @@ async function assertTurbopackLoaderRegistersNoDependenciesWithoutReport(): Prom
     source: TestUnpluginProject.mainSource(root),
   });
   TestUnpluginProject.assertTransformedToPlugin(content);
-  assert.deepEqual(dependencies, []);
+  assert.deepEqual(dependencies, universalHostInputs(root));
 }
 
 /**

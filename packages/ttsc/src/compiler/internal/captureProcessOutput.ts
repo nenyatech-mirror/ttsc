@@ -1,6 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 
 export interface CapturedProcessOutput {
   /** Close the descriptors and remove the backing files. */
@@ -32,7 +33,7 @@ export interface CapturedProcessOutput {
  * bytes.
  */
 export function captureProcessOutput(): CapturedProcessOutput {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-spawn-"));
+  const directory = createCanonicalTempDirectory("ttsc-spawn-");
   const stdoutPath = path.join(directory, "stdout");
   const stderrPath = path.join(directory, "stderr");
   const stdoutFd = fs.openSync(stdoutPath, "w+");

@@ -2,6 +2,7 @@ import {
   type SpawnSyncOptionsWithStringEncoding,
   type SpawnSyncReturns,
   type StdioOptions,
+  spawn,
   spawnSync,
 } from "node:child_process";
 import crypto from "node:crypto";
@@ -10,9 +11,11 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 
 import { captureProcessOutput } from "../../compiler/internal/captureProcessOutput";
 import { findNearestGoMod } from "../../compiler/internal/paths";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
 
 const GO_MOD_SEARCH_MAX_DEPTH = 3;
 const TTSC_GO_MODULE_PATH = "github.com/samchon/ttsc/packages/ttsc";
@@ -149,6 +152,27 @@ const PLUGIN_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const PLUGIN_CACHE_TARGET_BYTES = Math.floor(PLUGIN_CACHE_MAX_BYTES * 0.8);
 const PLUGIN_CACHE_PROTECTED_AGE_MS = 60 * 60 * 1000;
 
+// Go's own object-cache trim is age-based and has no size ceiling. The default
+// ttsc-owned cache therefore keeps up to 8 GiB and trims oldest objects toward
+// 6 GiB. The newest target-sized set used within an hour remains protected so
+// crossing the ceiling cannot immediately force another cold build.
+const GO_BUILD_CACHE_GC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const GO_BUILD_CACHE_MAX_BYTES = 8 * 1024 * 1024 * 1024;
+const GO_BUILD_CACHE_TARGET_BYTES = 6 * 1024 * 1024 * 1024;
+const GO_BUILD_CACHE_PROTECTED_AGE_MS = 60 * 60 * 1000;
+const GO_BUILD_CACHE_GC_MARKER_FILE = ".ttsc-gc";
+const GO_BUILD_CACHE_LEASE_DIR = ".ttsc-build-leases";
+const GO_BUILD_CACHE_MAINTENANCE_DIR = ".ttsc-maintenance";
+const GO_BUILD_CACHE_COORDINATION_STALE_MS = 60 * 60 * 1000;
+const GO_BUILD_CACHE_MAINTENANCE_STALE_MS = 60 * 1000;
+const GO_BUILD_CACHE_COORDINATION_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const GO_BUILD_CACHE_COORDINATION_HEARTBEAT_MS = 5_000;
+const GO_BUILD_CACHE_COORDINATION_POLL_MS = 25;
+// Go amortizes cache-hit mtime writes over one hour. An object used inside
+// ttsc's one-hour protection window may therefore still carry an mtime almost
+// one additional hour old.
+const GO_BUILD_CACHE_ACCESS_MTIME_GRANULARITY_MS = 60 * 60 * 1000;
+
 /** One contributor's resolved Go source plus its target sub-package name. */
 export interface ITtscBuildContributor {
   /** Sub-package suffix: scratch lands at `<host>/contrib/<name>/`. */
@@ -169,6 +193,16 @@ export interface ITtscSourceBuildCachePaths {
   goBuildRootSource: "ttsc-cache" | "TTSC_GO_CACHE_DIR" | "GOCACHE";
 }
 
+/** Synchronous filesystem reads used to fingerprint external Go toolchains. */
+export interface SourceBuildFilesystemOperations {
+  readFile(location: string): Buffer;
+}
+
+const DEFAULT_SOURCE_BUILD_FILESYSTEM: SourceBuildFilesystemOperations =
+  Object.freeze({
+    readFile: (location: string) => fs.readFileSync(location),
+  });
+
 /**
  * Build one Go source plugin into a cached executable.
  *
@@ -186,6 +220,7 @@ export function buildSourcePlugin(opts: {
   cacheDir?: string;
   contributors?: readonly ITtscBuildContributor[];
   env?: NodeJS.ProcessEnv;
+  filesystem?: Partial<SourceBuildFilesystemOperations>;
   label?: string;
   overlayDirs?: readonly string[];
   quiet?: boolean;
@@ -196,21 +231,34 @@ export function buildSourcePlugin(opts: {
   const { dir, entry, source } = resolveSourceBuildTarget(opts);
   const overlayDirs = [...(opts.overlayDirs ?? findTtscOverlayDirs())].sort();
   const contributors = opts.contributors ?? [];
-  const goBinary = resolveGoToolForBuild(resolveGoCompiler(env), env, dir);
-  ensureExecutableGoToolchain(goBinary);
+  const compiler = resolveGoCompiler(env);
+  const goBinary = resolveGoToolForBuild(compiler.binary, env, dir);
+  ensureExecutableGoToolchain(goBinary, compiler.bundled);
   const key = computeCacheKey({
     contributors,
     dir,
     entry,
     env,
+    filesystem: opts.filesystem,
     goBinary,
     overlayDirs,
     ttscVersion: opts.ttscVersion,
     tsgoVersion: opts.tsgoVersion,
   });
   const paths = resolveSourceBuildCachePaths(opts.baseDir, opts.cacheDir, env);
-  maybePrunePluginCache(paths, opts.cacheDir, env);
-  const cacheDir = path.join(paths.pluginRoot, key);
+  const managePluginCache = !opts.cacheDir && !env.TTSC_CACHE_DIR;
+  const manageGoBuildCache = shouldManageSourceBuildCaches(
+    paths,
+    opts.cacheDir,
+    env,
+  );
+  const pluginRoot = managePluginCache
+    ? canonicalPluginCacheRoot(paths.pluginRoot)
+    : paths.pluginRoot;
+  maybePruneSourceBuildCaches({ ...paths, pluginRoot }, opts.cacheDir, env);
+  const cacheDir = managePluginCache
+    ? canonicalPluginCacheEntry(pluginRoot, key)
+    : path.join(pluginRoot, key);
   const binaryName = process.platform === "win32" ? "plugin.exe" : "plugin";
   const binaryPath = path.join(cacheDir, binaryName);
   if (fs.existsSync(binaryPath)) {
@@ -220,7 +268,7 @@ export function buildSourcePlugin(opts: {
   fs.mkdirSync(cacheDir, { recursive: true });
   const label = opts.label ?? "source plugin";
   const quiet = opts.quiet === true;
-  return buildUnderPluginLock(
+  const built = buildUnderPluginLock(
     cacheDir,
     binaryPath,
     { label, pluginName: opts.pluginName, quiet },
@@ -233,15 +281,27 @@ export function buildSourcePlugin(opts: {
         entry,
         env,
         goBinary,
+        normalizeGoToolPermissions: compiler.bundled,
         key,
         label,
         goBuildCacheRoot: paths.goBuildRoot,
+        manageGoBuildCache,
         overlayDirs,
         pluginName: opts.pluginName,
         quiet,
         source,
       }),
   );
+  if (managePluginCache) {
+    // The pre-build daily pass cannot account for the binary this cold build
+    // just published. Enforce the size policy after publication, once this
+    // process has released its per-key build lock.
+    prunePluginCacheRoot(pluginRoot, {
+      force: true,
+      protectedEntries: [cacheDir],
+    });
+  }
+  return built;
 }
 
 /** Run the actual `go build` and publish the binary; assumes the lock is held. */
@@ -254,6 +314,8 @@ function compileSourcePlugin(opts: {
   env: NodeJS.ProcessEnv;
   goBinary: string;
   goBuildCacheRoot: string;
+  manageGoBuildCache: boolean;
+  normalizeGoToolPermissions: boolean;
   key: string;
   label: string;
   overlayDirs: readonly string[];
@@ -275,9 +337,7 @@ function compileSourcePlugin(opts: {
     );
   }
 
-  const scratchDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `ttsc-plugin-${opts.key}-`),
-  );
+  const scratchDir = createCanonicalTempDirectory(`ttsc-plugin-${opts.key}-`);
   try {
     materializeScratchDir(opts.dir, scratchDir);
     const goModReader = createGoModReader(
@@ -303,15 +363,34 @@ function compileSourcePlugin(opts: {
     );
     const scratchBinaryName =
       process.platform === "win32" ? ".ttsc-plugin.exe" : ".ttsc-plugin";
-    runGoBuild(
-      scratchDir,
-      opts.entry,
-      scratchBinaryName,
-      opts.pluginName,
-      opts.goBinary,
-      opts.goBuildCacheRoot,
-      opts.env,
-    );
+    let attemptedGoBuildCacheRoot: string | undefined;
+    try {
+      withGoBuildCacheLease(
+        opts.goBuildCacheRoot,
+        opts.manageGoBuildCache,
+        (goBuildCacheRoot) => {
+          attemptedGoBuildCacheRoot = goBuildCacheRoot;
+          runGoBuild(
+            scratchDir,
+            opts.entry,
+            scratchBinaryName,
+            opts.pluginName,
+            opts.goBinary,
+            goBuildCacheRoot,
+            opts.env,
+            opts.normalizeGoToolPermissions,
+          );
+        },
+      );
+    } finally {
+      if (opts.manageGoBuildCache && attemptedGoBuildCacheRoot !== undefined) {
+        // The daily pre-build pass cannot see objects the build is about to
+        // add, including objects left behind by a failed compile. Enforce the
+        // size policy after every actual cold-build attempt so churn cannot
+        // grow the cache unchecked behind a fresh daily marker.
+        pruneGoBuildCacheRoot(attemptedGoBuildCacheRoot, { force: true });
+      }
+    }
     const builtBinary = path.join(scratchDir, scratchBinaryName);
     publishBuiltBinary(builtBinary, opts.binaryPath);
     touchCacheEntry(opts.cacheDir);
@@ -553,6 +632,8 @@ function ensurePluginBuildLockProtocol(protocolDir: string): void {
 
 function isPluginBuildLockProtocolV2(lockDir: string): boolean {
   try {
+    const stats = fs.lstatSync(lockDir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
     return (
       fs.readFileSync(
         path.join(lockDir, PLUGIN_BUILD_LOCK_PROTOCOL_FILE),
@@ -1055,7 +1136,10 @@ function pluginBuildLockAgeMs(lockDir: string, now: number): number | null {
 
 function pluginBuildLockPathExists(lockDir: string): boolean {
   try {
-    fs.statSync(lockDir);
+    const stats = fs.lstatSync(lockDir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`ttsc: unsafe plugin build lock path: ${lockDir}`);
+    }
     return true;
   } catch (error) {
     if (isMissingPathError(error)) return false;
@@ -1732,8 +1816,9 @@ function runGoBuild(
   goBinary: string,
   goBuildCacheRoot: string,
   env: NodeJS.ProcessEnv,
+  normalizeGoToolPermissions: boolean,
 ): void {
-  ensureExecutableGoToolchain(goBinary);
+  ensureExecutableGoToolchain(goBinary, normalizeGoToolPermissions);
   const result = spawnGoTool(goBinary, ["build", "-o", binaryName, entry], {
     cwd,
     encoding: "utf8",
@@ -1907,22 +1992,40 @@ function inferGoRoot(goBinary: string): string | null {
   return fs.existsSync(path.join(goRoot, "src", "runtime")) ? goRoot : null;
 }
 
-function ensureExecutableGoToolchain(goBinary: string): void {
+export function ensureExecutableGoToolchain(
+  goBinary: string,
+  normalizeBundledPermissions: boolean,
+): void {
   if (process.platform === "win32") return;
   if (!path.isAbsolute(goBinary) || !fs.existsSync(goBinary)) return;
   try {
-    fs.chmodSync(goBinary, 0o755);
+    ensureExecutableFile(goBinary, normalizeBundledPermissions);
     const goRoot = inferGoRoot(goBinary);
     if (!goRoot) return;
     const gofmt = path.join(path.dirname(goBinary), "gofmt");
-    if (fs.existsSync(gofmt)) fs.chmodSync(gofmt, 0o755);
+    if (fs.existsSync(gofmt)) {
+      ensureExecutableFile(gofmt, normalizeBundledPermissions);
+    }
     const toolDir = path.join(goRoot, "pkg", "tool");
     if (!fs.existsSync(toolDir)) return;
     for (const file of walkToolFiles(toolDir)) {
-      fs.chmodSync(file, 0o755);
+      ensureExecutableFile(file, normalizeBundledPermissions);
     }
   } catch {
     // Let the subsequent go build spawn fail with the real OS error.
+  }
+}
+
+/** Repair tool execution without widening an explicitly selected toolchain. */
+function ensureExecutableFile(
+  file: string,
+  normalizeBundledPermissions: boolean,
+): void {
+  const mode = fs.statSync(file).mode & 0o7777;
+  if (normalizeBundledPermissions) {
+    if (mode !== 0o755) fs.chmodSync(file, 0o755);
+  } else if ((mode & 0o111) === 0) {
+    fs.chmodSync(file, mode | 0o100);
   }
 }
 
@@ -1995,7 +2098,7 @@ export function resolvePluginCacheRoot(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const paths = resolveSourceBuildCachePaths(projectRoot, cacheDir, env);
-  maybePrunePluginCache(paths, cacheDir, env);
+  maybePruneSourceBuildCaches(paths, cacheDir, env);
   return paths.pluginRoot;
 }
 
@@ -2003,9 +2106,9 @@ export function resolvePluginCacheRoot(
  * Resolve all source-plugin build cache directories for one invocation.
  *
  * `pluginRoot` stores compiled plugin binaries; `goBuildRoot` is the Go object
- * cache passed as `GOCACHE` while ttsc builds those binaries. Both live under a
- * single `root`, so persisting one directory covers the whole source-build
- * cache without depending on ttsc internals.
+ * cache passed as `GOCACHE` while ttsc builds those binaries. The default Go
+ * cache lives under `root`; an explicit `TTSC_GO_CACHE_DIR` or `GOCACHE` keeps
+ * its independently resolved location and ownership policy.
  */
 export function resolveSourceBuildCachePaths(
   projectRoot: string,
@@ -2158,7 +2261,7 @@ function resolveGoBuildCacheRoot(
   };
 }
 
-function maybePrunePluginCache(
+function maybePruneSourceBuildCaches(
   paths: ITtscSourceBuildCachePaths,
   cacheDir: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -2170,7 +2273,21 @@ function maybePrunePluginCache(
   // `context.env` is honored without leaning on the shared `process.env`.
   if (!cacheDir && !env.TTSC_CACHE_DIR) {
     prunePluginCacheRoot(paths.pluginRoot);
+    if (paths.goBuildRootSource === "ttsc-cache") {
+      pruneGoBuildCacheRoot(paths.goBuildRoot);
+    }
   }
+}
+
+/** Report whether this invocation owns and automatically maintains both caches. */
+function shouldManageSourceBuildCaches(
+  paths: ITtscSourceBuildCachePaths,
+  cacheDir: string | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return (
+    !cacheDir && !env.TTSC_CACHE_DIR && paths.goBuildRootSource === "ttsc-cache"
+  );
 }
 
 /**
@@ -2252,14 +2369,22 @@ export function isPathWithin(child: string, parent: string): boolean {
   );
 }
 
-function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
+function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): {
+  binary: string;
+  bundled: boolean;
+} {
   const explicit = env.TTSC_GO_BINARY;
-  if (explicit && explicit.length > 0) return explicit;
+  if (explicit && explicit.length > 0) {
+    return { binary: explicit, bundled: false };
+  }
 
   try {
-    return createRequire(__filename).resolve(
-      `@ttsc/${process.platform}-${process.arch}/bin/go/bin/${process.platform === "win32" ? "go.exe" : "go"}`,
-    );
+    return {
+      binary: createRequire(__filename).resolve(
+        `@ttsc/${process.platform}-${process.arch}/bin/go/bin/${process.platform === "win32" ? "go.exe" : "go"}`,
+      ),
+      bundled: true,
+    };
   } catch {
     /* fall through */
   }
@@ -2276,7 +2401,9 @@ function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
     "bin",
     process.platform === "win32" ? "go.exe" : "go",
   );
-  if (fs.existsSync(platformPackage)) return platformPackage;
+  if (fs.existsSync(platformPackage)) {
+    return { binary: platformPackage, bundled: true };
+  }
 
   const local = path.resolve(
     __dirname,
@@ -2289,7 +2416,7 @@ function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
     "bin",
     process.platform === "win32" ? "go.exe" : "go",
   );
-  if (fs.existsSync(local)) return local;
+  if (fs.existsSync(local)) return { binary: local, bundled: true };
 
   const homeSdk = path.join(
     env.HOME ?? "",
@@ -2298,9 +2425,9 @@ function resolveGoCompiler(env: NodeJS.ProcessEnv = process.env): string {
     "bin",
     process.platform === "win32" ? "go.exe" : "go",
   );
-  if (fs.existsSync(homeSdk)) return homeSdk;
+  if (fs.existsSync(homeSdk)) return { binary: homeSdk, bundled: false };
 
-  return "go";
+  return { binary: "go", bundled: false };
 }
 
 /**
@@ -2319,12 +2446,17 @@ export function computeCacheKey(inputs: {
   dir: string;
   entry: string;
   env?: NodeJS.ProcessEnv;
+  filesystem?: Partial<SourceBuildFilesystemOperations>;
   goBinary?: string;
   overlayDirs?: readonly string[];
   ttscVersion: string;
   tsgoVersion: string;
 }): string {
   const env = inputs.env ?? process.env;
+  const filesystem: SourceBuildFilesystemOperations = {
+    readFile:
+      inputs.filesystem?.readFile ?? DEFAULT_SOURCE_BUILD_FILESYSTEM.readFile,
+  };
   const goBinary =
     inputs.goBinary === undefined
       ? undefined
@@ -2337,7 +2469,7 @@ export function computeCacheKey(inputs: {
   if (goBinary !== undefined) {
     hash.update(`go=${resolveGoCompilerIdentity(goBinary, env, inputs.dir)}\n`);
   }
-  hashGoBuildEnvironment(hash, goBinary, inputs.dir, env);
+  hashGoBuildEnvironment(hash, goBinary, inputs.dir, env, filesystem);
   hashExternalGoBuildEnvironment(hash, env);
   hashSourceDirectory(hash, "plugin", inputs.dir);
   for (const [index, dir] of [...(inputs.overlayDirs ?? [])].sort().entries()) {
@@ -2426,8 +2558,9 @@ function isHashableFile(name: string): boolean {
 // binary hashes for a value that does not change between plugins. The result
 // is a pure function of the go binary's resolved real path plus its on-disk
 // content; the memo key therefore mixes the resolved real path with a cheap
-// content signature (byte size + nanosecond mtime). That signature changes if
-// a long-lived host rewrites the binary in place between calls, so the memo
+// content signature (filesystem identity, mode, byte size, and nanosecond
+// change/modify times). That signature changes if a long-lived host rewrites
+// or atomically replaces the binary between calls, so the memo
 // re-derives the identity exactly as the un-memoized code would and the
 // cache-key bytes stay byte-for-byte identical to today. The selected compiler
 // path is shared by every build subprocess on Windows, while `go version` uses
@@ -2481,7 +2614,7 @@ function goCompilerIdentityMemoKey(
   cwd: string,
 ): string | null {
   try {
-    const stat = fs.statSync(resolved);
+    const stat = fs.statSync(resolved, { bigint: true });
     const context = crypto.createHash("sha256");
     context.update(cwd);
     for (const [key, value] of Object.entries(env).sort(([left], [right]) =>
@@ -2490,7 +2623,17 @@ function goCompilerIdentityMemoKey(
       if (value === undefined) continue;
       context.update(`\0${key.length}:${key}${value.length}:${value}`);
     }
-    return `${goBinary}\0${resolved}\0${stat.size}\0${stat.mtimeMs}\0${context.digest("hex")}`;
+    return [
+      goBinary,
+      resolved,
+      stat.dev,
+      stat.ino,
+      stat.mode,
+      stat.size,
+      stat.mtimeNs,
+      stat.ctimeNs,
+      context.digest("hex"),
+    ].join("\0");
   } catch {
     return null;
   }
@@ -2744,8 +2887,9 @@ function hashGoBuildEnvironment(
   goBinary: string | undefined,
   cwd: string,
   env: NodeJS.ProcessEnv,
+  filesystem: SourceBuildFilesystemOperations,
 ): void {
-  const values = resolveGoBuildEnvironment(goBinary, cwd, env);
+  const values = resolveGoBuildEnvironment(goBinary, cwd, env, filesystem);
   for (const key of GO_BUILD_ENV_KEYS) {
     const value = values.get(key);
     if (value !== undefined && value !== "") {
@@ -2758,6 +2902,7 @@ function resolveGoBuildEnvironment(
   goBinary: string | undefined,
   cwd: string,
   env: NodeJS.ProcessEnv,
+  filesystem: SourceBuildFilesystemOperations,
 ): Map<string, string> {
   const values = new Map<string, string>();
   if (goBinary !== undefined) {
@@ -2777,7 +2922,10 @@ function resolveGoBuildEnvironment(
         for (const key of GO_BUILD_ENV_KEYS) {
           const raw = parsed[key];
           if (typeof raw === "string" && raw !== "") {
-            values.set(key, normalizeGoBuildEnvValue(key, raw, env));
+            values.set(
+              key,
+              normalizeGoBuildEnvValue(key, raw, env, filesystem),
+            );
           }
         }
       } catch {
@@ -2790,7 +2938,7 @@ function resolveGoBuildEnvironment(
     if (values.has(key)) continue;
     const value = env[key];
     if (value !== undefined && value !== "") {
-      values.set(key, normalizeGoBuildEnvValue(key, value, env));
+      values.set(key, normalizeGoBuildEnvValue(key, value, env, filesystem));
     }
   }
   return values;
@@ -2800,9 +2948,10 @@ function normalizeGoBuildEnvValue(
   key: string,
   value: string,
   env: NodeJS.ProcessEnv,
+  filesystem: SourceBuildFilesystemOperations,
 ): string {
   if (key === "GOROOT") {
-    return resolveGoRootCacheIdentity(value);
+    return resolveGoRootCacheIdentity(value, filesystem);
   }
   if (GO_BUILD_COMMAND_ENV_KEYS.has(key)) {
     return `${value}\0${resolveCommandCacheIdentity(value, env)}`;
@@ -2854,33 +3003,103 @@ function hashExternalGoBuildEnvironment(
   }
 }
 
-function resolveGoRootCacheIdentity(goRoot: string): string {
+interface GoRootIdentitySnapshot {
+  complete: boolean;
+  files: string[];
+  signature: string;
+}
+
+interface GoRootIdentityCacheEntry {
+  identity: string;
+  signature: string;
+}
+
+// GOROOT is immutable during normal use but contributes roughly 140 MiB of
+// source/tool content to every plugin key. Retain only the final pathless
+// content identity, guarded by a fresh metadata manifest on every call. A
+// changed or incomplete manifest falls through to the historical full read.
+const goRootIdentityCache = new Map<string, GoRootIdentityCacheEntry>();
+
+function resolveGoRootCacheIdentity(
+  goRoot: string,
+  filesystem: SourceBuildFilesystemOperations,
+): string {
   const resolved = resolveRealPath(goRoot);
   if (!fs.existsSync(resolved)) {
     return `missing:${goRoot}`;
   }
+  const snapshot = collectGoRootIdentitySnapshot(resolved);
+  if (snapshot.complete) {
+    const cached = goRootIdentityCache.get(resolved);
+    if (cached?.signature === snapshot.signature) {
+      return cached.identity;
+    }
+  }
   const hash = crypto.createHash("sha256");
-  for (const file of collectGoRootIdentityFiles(resolved)) {
+  for (const file of snapshot.files) {
     const relative = path.relative(resolved, file).replace(/\\/g, "/");
     hash.update(`f=${relative}\n`);
-    hash.update(fs.readFileSync(file));
+    hash.update(filesystem.readFile(file));
     hash.update("\n");
   }
-  return `sha256:${hash.digest("hex")}`;
+  const identity = `sha256:${hash.digest("hex")}`;
+  if (snapshot.complete) {
+    goRootIdentityCache.set(resolved, {
+      identity,
+      signature: snapshot.signature,
+    });
+  }
+  return identity;
 }
 
-function collectGoRootIdentityFiles(root: string): string[] {
+function collectGoRootIdentitySnapshot(root: string): GoRootIdentitySnapshot {
   const out: string[] = [];
-  walkGoRootIdentity(root, root, out);
+  const state = { complete: true };
+  walkGoRootIdentity(root, root, out, state);
   out.sort();
-  return out;
+  const signature = crypto.createHash("sha256");
+  for (const file of out) {
+    const relative = path.relative(root, file).replace(/\\/g, "/");
+    try {
+      const stats = fs.statSync(file, { bigint: true });
+      if (!stats.isFile()) {
+        state.complete = false;
+        continue;
+      }
+      signature.update(
+        [
+          relative,
+          stats.dev,
+          stats.ino,
+          stats.mode,
+          stats.size,
+          stats.mtimeNs,
+          stats.ctimeNs,
+        ].join("\0"),
+      );
+      signature.update("\n");
+    } catch {
+      state.complete = false;
+    }
+  }
+  return {
+    complete: state.complete,
+    files: out,
+    signature: signature.digest("hex"),
+  };
 }
 
-function walkGoRootIdentity(root: string, dir: string, out: string[]): void {
+function walkGoRootIdentity(
+  root: string,
+  dir: string,
+  out: string[],
+  state: { complete: boolean },
+): void {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
+    state.complete = false;
     return;
   }
   for (const entry of entries) {
@@ -2888,7 +3107,7 @@ function walkGoRootIdentity(root: string, dir: string, out: string[]): void {
     const rel = path.relative(root, file).replace(/\\/g, "/");
     if (entry.isDirectory()) {
       if (shouldHashGoRootPath(rel, true)) {
-        walkGoRootIdentity(root, file, out);
+        walkGoRootIdentity(root, file, out, state);
       }
     } else if (entry.isFile() && shouldHashGoRootPath(rel, false)) {
       out.push(file);
@@ -2936,7 +3155,7 @@ function shouldHashGoRootPath(rel: string, isDir: boolean): boolean {
 function touchCacheEntry(cacheDir: string): void {
   try {
     fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(
+    replaceCacheMetadataFile(
       path.join(cacheDir, CACHE_LAST_USED_FILE),
       `${Date.now()}\n`,
     );
@@ -2945,45 +3164,709 @@ function touchCacheEntry(cacheDir: string): void {
   }
 }
 
-function prunePluginCacheRoot(root: string): void {
+/** Test/internal controls for deterministic plugin-binary cache maintenance. */
+export interface IPluginCachePruneOptions {
+  /** Ignore the once-daily marker. */
+  force?: boolean;
+  /** Size that triggers LRU pruning. */
+  maxBytes?: number;
+  /** Injected clock for deterministic tests. */
+  now?: number;
+  /** Recent-entry protection window. */
+  protectedAgeMs?: number;
+  /** Entries whose binary was returned by the current cold build. */
+  protectedEntries?: readonly string[];
+  /** Size to prune toward once the ceiling is crossed. */
+  targetBytes?: number;
+}
+
+export function prunePluginCacheRoot(
+  root: string,
+  options: IPluginCachePruneOptions = {},
+): void {
   try {
-    fs.mkdirSync(root, { recursive: true });
-    const marker = path.join(root, CACHE_GC_MARKER_FILE);
-    const now = Date.now();
+    const cacheRoot = canonicalPluginCacheRoot(root);
+    const marker = path.join(cacheRoot, CACHE_GC_MARKER_FILE);
+    const now = options.now ?? Date.now();
     const lastRun = readTimestamp(marker);
-    if (lastRun !== null && now - lastRun < PLUGIN_CACHE_GC_INTERVAL_MS) {
+    if (
+      options.force !== true &&
+      lastRun !== null &&
+      lastRun <= now &&
+      now - lastRun < PLUGIN_CACHE_GC_INTERVAL_MS
+    ) {
       return;
     }
-    fs.writeFileSync(marker, `${now}\n`);
-    prunePluginCacheEntries(root, now);
+    const remainingBytes = prunePluginCacheEntries(cacheRoot, {
+      maxBytes: options.maxBytes ?? PLUGIN_CACHE_MAX_BYTES,
+      now,
+      protectedEntries: canonicalPluginCacheProtectedEntries(
+        cacheRoot,
+        options.protectedEntries ?? [],
+      ),
+      protectedAgeMs: options.protectedAgeMs ?? PLUGIN_CACHE_PROTECTED_AGE_MS,
+      targetBytes: options.targetBytes ?? PLUGIN_CACHE_TARGET_BYTES,
+    });
+    const maxBytes = options.maxBytes ?? PLUGIN_CACHE_MAX_BYTES;
+    const protectedAgeMs =
+      options.protectedAgeMs ?? PLUGIN_CACHE_PROTECTED_AGE_MS;
+    const markerTimestamp =
+      remainingBytes > maxBytes
+        ? now - PLUGIN_CACHE_GC_INTERVAL_MS + protectedAgeMs
+        : now;
+    replaceCacheMetadataFile(marker, `${markerTimestamp}\n`);
   } catch {
     // Plugin-cache GC is opportunistic; builds still proceed when it fails.
   }
 }
 
-function prunePluginCacheEntries(root: string, now: number): void {
-  const entries = collectPluginCacheEntries(root, now);
+/** Resolve explicit GC exclusions without allowing an alias outside root. */
+function canonicalPluginCacheProtectedEntries(
+  root: string,
+  entries: readonly string[],
+): Set<string> {
+  const protectedEntries = new Set<string>();
   for (const entry of entries) {
-    if (now - entry.lastUsedAt <= PLUGIN_CACHE_ENTRY_MAX_AGE_MS) {
+    const candidate = path.resolve(entry);
+    const stats = fs.lstatSync(candidate);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(`ttsc: unsafe protected plugin cache entry: ${entry}`);
+    }
+    const physical = fs.realpathSync.native(candidate);
+    if (path.dirname(physical) !== root) {
+      throw new Error(
+        `ttsc: protected plugin cache entry escaped root: ${entry}`,
+      );
+    }
+    protectedEntries.add(physical);
+  }
+  return protectedEntries;
+}
+
+/** Pin the default plugin cache to one ordinary physical directory. */
+function canonicalPluginCacheRoot(root: string): string {
+  fs.mkdirSync(root, { recursive: true });
+  const physicalParent = fs.realpathSync.native(path.dirname(root));
+  const stats = fs.lstatSync(root);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`ttsc: unsafe plugin cache root: ${root}`);
+  }
+  // If an ancestor alias is retargeted after this point, all later cache work
+  // stays on the original physical directory rather than following it.
+  const physicalRoot = fs.realpathSync.native(root);
+  if (path.dirname(physicalRoot) !== physicalParent) {
+    throw new Error(`ttsc: plugin cache root escaped its parent: ${root}`);
+  }
+  return physicalRoot;
+}
+
+/** Create one content-addressed cache entry without following a leaf alias. */
+function canonicalPluginCacheEntry(root: string, key: string): string {
+  const directory = path.join(root, key);
+  fs.mkdirSync(directory, { recursive: true });
+  const stats = fs.lstatSync(directory);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`ttsc: unsafe plugin cache entry: ${directory}`);
+  }
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== root) {
+    throw new Error(`ttsc: plugin cache entry escaped its root: ${directory}`);
+  }
+  return physicalDirectory;
+}
+
+function prunePluginCacheEntries(
+  root: string,
+  options: {
+    maxBytes: number;
+    now: number;
+    protectedAgeMs: number;
+    protectedEntries: ReadonlySet<string>;
+    targetBytes: number;
+  },
+): number {
+  const entries = collectPluginCacheEntries(root, options.now);
+  for (const entry of entries) {
+    if (
+      options.now - entry.lastUsedAt <= PLUGIN_CACHE_ENTRY_MAX_AGE_MS ||
+      options.protectedEntries.has(entry.dir) ||
+      pluginCacheEntryHasActiveBuild(entry, options.now)
+    ) {
       continue;
     }
     removeCacheEntry(entry);
   }
 
-  const remaining = collectPluginCacheEntries(root, now);
+  const remaining = collectPluginCacheEntries(root, options.now);
   let total = remaining.reduce((sum, entry) => sum + entry.size, 0);
-  if (total <= PLUGIN_CACHE_MAX_BYTES) {
-    return;
+  if (total <= options.maxBytes) {
+    return total;
   }
-  for (const entry of remaining.sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
-    if (total <= PLUGIN_CACHE_TARGET_BYTES) {
-      return;
-    }
-    if (now - entry.lastUsedAt <= PLUGIN_CACHE_PROTECTED_AGE_MS) {
+  const protectedEntries = new Set<string>(options.protectedEntries);
+  let protectedBytes = 0;
+  for (const entry of [...remaining].sort(
+    (a, b) => b.lastUsedAt - a.lastUsedAt,
+  )) {
+    if (pluginCacheEntryHasActiveBuild(entry, options.now)) {
+      protectedEntries.add(entry.dir);
       continue;
     }
-    removeCacheEntry(entry);
-    total -= entry.size;
+    if (options.now - entry.lastUsedAt > options.protectedAgeMs) continue;
+    if (protectedBytes >= options.targetBytes) continue;
+    if (protectedBytes + entry.size > options.targetBytes) continue;
+    protectedEntries.add(entry.dir);
+    protectedBytes += entry.size;
+  }
+  for (const entry of remaining.sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
+    if (total <= options.targetBytes) {
+      return total;
+    }
+    if (protectedEntries.has(entry.dir)) continue;
+    if (removeCacheEntry(entry)) total -= entry.size;
+  }
+  return total;
+}
+
+/** Conservatively protect an entry while any build generation owns its key. */
+function pluginCacheEntryHasActiveBuild(
+  entry: PluginCacheEntry,
+  now: number,
+): boolean {
+  const lockDir = `${entry.dir}.lock`;
+  try {
+    return inspectPluginBuildLock(lockDir, now).state === "active";
+  } catch {
+    // Malformed or unreadable coordination state cannot disprove ownership.
+    return true;
+  }
+}
+
+/** Test/internal controls for deterministic Go object-cache maintenance. */
+export interface IGoBuildCachePruneOptions {
+  /** Ignore the once-daily marker. */
+  force?: boolean;
+  /** Size that triggers LRU pruning. */
+  maxBytes?: number;
+  /** Size to prune toward once the ceiling is crossed. */
+  targetBytes?: number;
+  /** Injected clock for deterministic tests. */
+  now?: number;
+  /** Recent-file protection window. */
+  protectedAgeMs?: number;
+}
+
+/**
+ * Opportunistically bound one ttsc-owned Go object cache.
+ *
+ * A maintenance intent blocks new build leases. If any existing lease remains,
+ * maintenance yields without touching the cache; the next invocation retries.
+ * Only Go's two-hex object directories are scanned, so coordination metadata
+ * and Go's own trim marker remain outside the size policy.
+ */
+export function pruneGoBuildCacheRoot(
+  root: string,
+  options: IGoBuildCachePruneOptions = {},
+): void {
+  let intent: GoBuildCacheCoordinationRecord | undefined;
+  try {
+    const cacheRoot = canonicalGoBuildCacheRoot(root);
+    const marker = path.join(cacheRoot, GO_BUILD_CACHE_GC_MARKER_FILE);
+    const now = options.now ?? Date.now();
+    const lastRun = readTimestamp(marker);
+    if (
+      options.force !== true &&
+      lastRun !== null &&
+      lastRun <= now &&
+      now - lastRun < GO_BUILD_CACHE_GC_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    intent = createGoBuildCacheCoordinationRecord(
+      cacheRoot,
+      GO_BUILD_CACHE_MAINTENANCE_DIR,
+    );
+    if (!intent.startHeartbeat()) {
+      // Maintenance is opportunistic. Without an independent heartbeat a
+      // synchronous scan could look abandoned while it is still deleting, so
+      // yield instead of weakening the build/maintenance exclusion.
+      return;
+    }
+    if (
+      collectLiveGoBuildCacheCoordinationRecords(
+        cacheRoot,
+        GO_BUILD_CACHE_LEASE_DIR,
+        now,
+      ).length !== 0
+    ) {
+      return;
+    }
+
+    const remainingBytes = pruneGoBuildCacheEntries(cacheRoot, {
+      maxBytes: options.maxBytes ?? GO_BUILD_CACHE_MAX_BYTES,
+      now,
+      protectedAgeMs: options.protectedAgeMs ?? GO_BUILD_CACHE_PROTECTED_AGE_MS,
+      targetBytes: options.targetBytes ?? GO_BUILD_CACHE_TARGET_BYTES,
+    });
+    // If recent protection or a transient delete failure left the cache above
+    // the ceiling, retry after the protection window instead of suppressing
+    // every maintenance attempt for a full day.
+    const maxBytes = options.maxBytes ?? GO_BUILD_CACHE_MAX_BYTES;
+    const protectedAgeMs =
+      options.protectedAgeMs ?? GO_BUILD_CACHE_PROTECTED_AGE_MS;
+    const markerTimestamp =
+      remainingBytes > maxBytes
+        ? now - GO_BUILD_CACHE_GC_INTERVAL_MS + protectedAgeMs
+        : now;
+    replaceCacheMetadataFile(marker, `${markerTimestamp}\n`);
+  } catch {
+    // Go-cache GC is opportunistic; builds still proceed when it fails.
+  } finally {
+    intent?.finish();
+  }
+}
+
+/**
+ * Run one Go build under a cross-process cache lease when ttsc owns the cache.
+ *
+ * The lease is published before checking maintenance. A maintenance process
+ * that arrived first keeps its intent visible, so this builder withdraws and
+ * retries; one that arrives second sees the lease and yields. That ordering
+ * closes the scan/start race without serializing independent Go builds.
+ */
+export function withGoBuildCacheLease<T>(
+  root: string,
+  managed: boolean,
+  callback: (cacheRoot: string) => T,
+): T {
+  if (!managed) {
+    return callback(root);
+  }
+  const cacheRoot = canonicalGoBuildCacheRoot(root);
+  const started = Date.now();
+  for (;;) {
+    const lease = createGoBuildCacheCoordinationRecord(
+      cacheRoot,
+      GO_BUILD_CACHE_LEASE_DIR,
+    );
+    const maintenance = collectLiveGoBuildCacheCoordinationRecords(
+      cacheRoot,
+      GO_BUILD_CACHE_MAINTENANCE_DIR,
+      Date.now(),
+    );
+    if (maintenance.length === 0) {
+      try {
+        if (!lease.startHeartbeat()) {
+          throw new Error(
+            `ttsc: unable to start Go build cache lease heartbeat at ${cacheRoot}`,
+          );
+        }
+        return callback(cacheRoot);
+      } finally {
+        lease.finish();
+      }
+    }
+    lease.finish();
+    if (Date.now() - started > PLUGIN_BUILD_LOCK_STEAL_MS) {
+      throw new Error(
+        `ttsc: timed out waiting for Go build cache maintenance at ${cacheRoot}`,
+      );
+    }
+    sleepSync(GO_BUILD_CACHE_COORDINATION_POLL_MS);
+  }
+}
+
+/**
+ * Create and pin the owned Go cache to an ordinary physical directory.
+ *
+ * The leaf may be user-controlled inside `node_modules/.cache`; accepting a
+ * symlink or junction there would let LRU deletion escape into an arbitrary
+ * two-hex directory. Returning the canonical spelling also keeps the build,
+ * leases, and maintenance on the same directory if an ancestor alias moves.
+ */
+function canonicalGoBuildCacheRoot(root: string): string {
+  fs.mkdirSync(root, { recursive: true });
+  const physicalParent = fs.realpathSync.native(path.dirname(root));
+  const stats = fs.lstatSync(root);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`ttsc: unsafe Go build cache root: ${root}`);
+  }
+  const physicalRoot = fs.realpathSync.native(root);
+  if (path.dirname(physicalRoot) !== physicalParent) {
+    throw new Error(`ttsc: Go build cache root escaped its parent: ${root}`);
+  }
+  return physicalRoot;
+}
+
+interface GoBuildCacheObject {
+  file: string;
+  lastUsedAt: number;
+  size: number;
+}
+
+/** Prune oldest Go cache objects to the requested deterministic size target. */
+function pruneGoBuildCacheEntries(
+  root: string,
+  options: {
+    maxBytes: number;
+    now: number;
+    protectedAgeMs: number;
+    targetBytes: number;
+  },
+): number {
+  const entries = collectGoBuildCacheObjects(root);
+  let total = entries.reduce((sum, entry) => sum + entry.size, 0);
+  if (total <= options.maxBytes) {
+    return total;
+  }
+  // Protect the newest recent objects only up to one target-sized cohort
+  // reserve. Protecting every object younger than an hour would let repeated
+  // 2.9 GiB cold builds grow without bound during that hour.
+  const protectedFiles = new Set<string>();
+  let protectedBytes = 0;
+  for (const entry of [...entries].sort(
+    (a, b) => b.lastUsedAt - a.lastUsedAt,
+  )) {
+    if (
+      options.now - entry.lastUsedAt >
+      options.protectedAgeMs + GO_BUILD_CACHE_ACCESS_MTIME_GRANULARITY_MS
+    ) {
+      continue;
+    }
+    if (protectedBytes >= options.targetBytes) {
+      break;
+    }
+    if (protectedBytes + entry.size > options.targetBytes) {
+      break;
+    }
+    protectedFiles.add(entry.file);
+    protectedBytes += entry.size;
+  }
+  for (const entry of entries.sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
+    if (total <= options.targetBytes) {
+      return total;
+    }
+    if (protectedFiles.has(entry.file)) {
+      continue;
+    }
+    try {
+      fs.rmSync(entry.file, { force: true });
+      total -= entry.size;
+    } catch {
+      // A concurrent antivirus/indexer can transiently hold a file on Windows.
+    }
+  }
+  return total;
+}
+
+function collectGoBuildCacheObjects(root: string): GoBuildCacheObject[] {
+  const output: GoBuildCacheObject[] = [];
+  let buckets: fs.Dirent[];
+  try {
+    buckets = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return output;
+  }
+  for (const bucket of buckets) {
+    if (!bucket.isDirectory() || !/^[0-9a-f]{2}$/.test(bucket.name)) {
+      continue;
+    }
+    const directory = path.join(root, bucket.name);
+    let files: fs.Dirent[];
+    try {
+      files = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.isFile()) {
+        continue;
+      }
+      const absolute = path.join(directory, file.name);
+      try {
+        const stats = fs.statSync(absolute);
+        output.push({
+          file: absolute,
+          lastUsedAt: stats.mtimeMs,
+          size: stats.size,
+        });
+      } catch {}
+    }
+  }
+  return output;
+}
+
+interface GoBuildCacheCoordinationRecord {
+  file: string;
+  finish: () => void;
+  startHeartbeat: () => boolean;
+}
+
+function createGoBuildCacheCoordinationRecord(
+  root: string,
+  directoryName: string,
+): GoBuildCacheCoordinationRecord {
+  const directory = goBuildCacheCoordinationDirectory(
+    root,
+    directoryName,
+    true,
+  )!;
+  const record = path.join(
+    directory,
+    `${process.pid}-${crypto.randomBytes(16).toString("hex")}.json`,
+  );
+  const metadata = {
+    directoryName,
+    hostname: os.hostname(),
+    pid: process.pid,
+    startedAt: Date.now(),
+  };
+  writeGoBuildCacheCoordinationRecord(record, metadata, "active");
+  let heartbeat: GoBuildCacheHeartbeat | undefined;
+  return {
+    file: record,
+    finish: () => {
+      heartbeat?.stop();
+      heartbeat = undefined;
+      // A failed unlink must not leave a completed task looking active until
+      // its stale timeout. Persist completion first; collectors discard it.
+      try {
+        writeGoBuildCacheCoordinationRecord(record, metadata, "complete");
+      } catch {}
+      try {
+        fs.rmSync(record, { force: true });
+      } catch {}
+    },
+    startHeartbeat: () => {
+      heartbeat ??= startGoBuildCacheHeartbeat(record);
+      return heartbeat !== undefined;
+    },
+  };
+}
+
+function writeGoBuildCacheCoordinationRecord(
+  file: string,
+  metadata: {
+    directoryName: string;
+    hostname: string;
+    pid: number;
+    startedAt: number;
+  },
+  status: "active" | "complete",
+): void {
+  replaceCacheMetadataFile(
+    file,
+    `${JSON.stringify({ ...metadata, status, version: 1 })}\n`,
+  );
+}
+
+interface GoBuildCacheHeartbeat {
+  stop: () => void;
+}
+
+/** Refresh one synchronous cache task's record from a background worker. */
+function startGoBuildCacheHeartbeat(
+  file: string,
+): GoBuildCacheHeartbeat | undefined {
+  const control = new SharedArrayBuffer(4);
+  const state = new Int32Array(control);
+  try {
+    const worker = new Worker(
+      [
+        'const fs = process.getBuiltinModule("node:fs");',
+        'const { workerData } = process.getBuiltinModule("node:worker_threads");',
+        "const state = new Int32Array(workerData.control);",
+        "for (;;) {",
+        "  const result = Atomics.wait(state, 0, 0, workerData.interval);",
+        '  if (result !== "timed-out" || Atomics.load(state, 0) !== 0) break;',
+        "  try {",
+        "    const now = new Date();",
+        "    fs.utimesSync(workerData.file, now, now);",
+        "  } catch {}",
+        "}",
+      ].join("\n"),
+      {
+        eval: true,
+        workerData: {
+          control,
+          file,
+          interval: GO_BUILD_CACHE_COORDINATION_HEARTBEAT_MS,
+        },
+      },
+    );
+    worker.unref();
+    return {
+      stop: () => {
+        Atomics.store(state, 0, 1);
+        Atomics.notify(state, 0);
+        void worker.terminate();
+      },
+    };
+  } catch {}
+
+  // Node's permission model can deny Worker construction while still allowing
+  // the child process required for `go build`. An IPC-bound helper provides
+  // the same independent heartbeat and exits automatically if its parent dies.
+  try {
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          'const fs = require("node:fs");',
+          "const file = process.argv[1];",
+          "const interval = Number(process.argv[2]);",
+          "const timer = setInterval(() => {",
+          "  try {",
+          "    const now = new Date();",
+          "    fs.utimesSync(file, now, now);",
+          "  } catch {}",
+          "}, interval);",
+          'process.on("disconnect", () => {',
+          "  clearInterval(timer);",
+          "  process.exit(0);",
+          "});",
+        ].join("\n"),
+        file,
+        String(GO_BUILD_CACHE_COORDINATION_HEARTBEAT_MS),
+      ],
+      {
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+        windowsHide: true,
+      },
+    );
+    child.unref();
+    child.channel?.unref();
+    return {
+      stop: () => {
+        if (child.connected) child.disconnect();
+        child.kill();
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function collectLiveGoBuildCacheCoordinationRecords(
+  root: string,
+  directoryName: string,
+  now: number,
+): string[] {
+  const directory = goBuildCacheCoordinationDirectory(
+    root,
+    directoryName,
+    false,
+  );
+  if (directory === undefined) return [];
+  let records: fs.Dirent[];
+  try {
+    records = fs.readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const live: string[] = [];
+  for (const record of records) {
+    if (!record.isFile()) {
+      continue;
+    }
+    const file = path.join(directory, record.name);
+    if (goBuildCacheCoordinationRecordIsLive(file, directoryName, now)) {
+      live.push(file);
+      continue;
+    }
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {}
+  }
+  return live;
+}
+
+/**
+ * Resolve one private coordination directory without following a project-
+ * supplied symlink or junction outside the owned Go cache.
+ */
+function goBuildCacheCoordinationDirectory(
+  root: string,
+  directoryName: string,
+  create: boolean,
+): string | undefined {
+  if (create) fs.mkdirSync(root, { recursive: true });
+  const directory = path.join(root, directoryName);
+  if (create) {
+    try {
+      fs.mkdirSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  let stats: fs.Stats;
+  try {
+    stats = fs.lstatSync(directory);
+  } catch (error) {
+    if (!create && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(
+      `ttsc: unsafe Go build cache coordination directory: ${directory}`,
+    );
+  }
+  const physicalRoot = fs.realpathSync.native(root);
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== physicalRoot) {
+    throw new Error(
+      `ttsc: Go build cache coordination directory escaped its root: ${directory}`,
+    );
+  }
+  return physicalDirectory;
+}
+
+function goBuildCacheCoordinationRecordIsLive(
+  file: string,
+  directoryName: string,
+  now: number,
+): boolean {
+  let contents: string | undefined;
+  try {
+    contents = fs.readFileSync(file, "utf8");
+    const parsed = JSON.parse(contents) as Record<string, unknown>;
+    if (parsed.status === "complete") return false;
+    // Parse valid records for forward compatibility, but do not equate a PID's
+    // lifetime with one task. A failed unlink can leave a record owned by a
+    // still-running Vite process, while a dead Node parent can leave its
+    // spawnSync Go child alive. The heartbeat/grace below models the task.
+    void parsed;
+  } catch {}
+  try {
+    const age = now - fs.statSync(file).mtimeMs;
+    if (age < -GO_BUILD_CACHE_COORDINATION_CLOCK_SKEW_MS) {
+      // A restored cache can carry a far-future timestamp, but the same state
+      // also occurs when the system clock moves backward during a real build.
+      // Rebase the record and grant one ordinary grace period; an active
+      // heartbeat keeps refreshing it, while an orphan then expires normally.
+      // Treat a failed rebase as live too: the safe failure mode is to defer
+      // opportunistic maintenance, never to delete under a possibly live Go.
+      // Replace the directory entry rather than changing its inode in place.
+      // A restored or user-modified cache can contain a hard-linked record;
+      // utimesSync(file) would then mutate metadata outside the owned cache.
+      if (contents !== undefined) {
+        try {
+          replaceCacheMetadataFile(file, contents);
+        } catch {}
+      }
+      return true;
+    }
+    const staleMs =
+      directoryName === GO_BUILD_CACHE_MAINTENANCE_DIR
+        ? GO_BUILD_CACHE_MAINTENANCE_STALE_MS
+        : GO_BUILD_CACHE_COORDINATION_STALE_MS;
+    return age <= staleMs;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 
@@ -3055,6 +3938,26 @@ function readTimestamp(file: string): number | null {
   }
 }
 
+/** Replace cache metadata without following a pre-existing link or hard link. */
+function replaceCacheMetadataFile(file: string, contents: string): void {
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}-${crypto
+      .randomBytes(16)
+      .toString("hex")}.tmp`,
+  );
+  try {
+    fs.writeFileSync(temporary, contents, { encoding: "utf8", flag: "wx" });
+    // rename replaces the directory entry itself. Unlike writeFile(file), it
+    // cannot follow a symlink or mutate another hard link to the old inode.
+    fs.renameSync(temporary, file);
+  } finally {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {}
+  }
+}
+
 function directorySize(dir: string): number {
   let total = 0;
   let entries: fs.Dirent[];
@@ -3076,10 +3979,12 @@ function directorySize(dir: string): number {
   return total;
 }
 
-function removeCacheEntry(entry: PluginCacheEntry): void {
+function removeCacheEntry(entry: PluginCacheEntry): boolean {
   try {
     fs.rmSync(entry.dir, { recursive: true, force: true });
+    return !fs.existsSync(entry.dir);
   } catch {
     // Windows may reject removal while a plugin binary is still running.
+    return false;
   }
 }

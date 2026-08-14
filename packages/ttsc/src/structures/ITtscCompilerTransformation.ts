@@ -65,6 +65,17 @@ export namespace ITtscCompilerTransformation {
      * the same observation on the wire and after decoding.
      */
     candidates?: Record<string, string[]>;
+
+    /**
+     * SHA-256/null states returned by the compiler filesystem while this graph
+     * was being resolved, keyed in the same vocabulary as {@link edges}.
+     * Persistent hosts use them to reject a graph whose external file or
+     * superseding candidate changed during compilation.
+     */
+    inputHashes?: Record<string, string | null>;
+
+    /** Compiler-time physical identities paired with {@link inputHashes}. */
+    inputRealpaths?: Record<string, string | null>;
   }
 
   /** Successful source-to-source transformation result. */
@@ -141,6 +152,25 @@ export namespace ITtscCompilerTransformation {
     graph?: IReferenceGraph;
 
     /**
+     * Host-wide files consulted before the native transform starts, such as
+     * JavaScript plugin descriptors and explicitly selected plugin config
+     * files. Unlike {@link dependencies}, these affect every transformed file.
+     * Bundler adapters register and validate them as universal inputs without
+     * treating arbitrary unclassified project files as configuration.
+     */
+    hostInputs?: string[];
+
+    /**
+     * SHA-256 fingerprints captured by the plugin loader at the instant each
+     * host input influenced this generation. Internal cache validators use
+     * these to reject a result raced by a concurrent config/module change.
+     */
+    hostInputHashes?: Record<string, string | null>;
+
+    /** Evaluation-time physical identities paired with {@link hostInputs}. */
+    hostInputRealpaths?: Record<string, string | null>;
+
+    /**
      * Transformed files (keyed like {@link typescript}) whose output depends on
      * non-file inputs (environment, time, network) as declared by the transform
      * plugin via the envelope's optional `volatile` list. No file-dependency
@@ -187,6 +217,15 @@ export namespace ITtscCompilerTransformation {
      * from loading the program.
      */
     graph?: IReferenceGraph;
+
+    /** Host-wide transform inputs; same contract as {@link ISuccess.hostInputs}. */
+    hostInputs?: string[];
+
+    /** Generation-time host-input fingerprints. */
+    hostInputHashes?: Record<string, string | null>;
+
+    /** Generation-time physical host-input identities. */
+    hostInputRealpaths?: Record<string, string | null>;
 
     /**
      * Volatile transformed files. Same shape and semantics as

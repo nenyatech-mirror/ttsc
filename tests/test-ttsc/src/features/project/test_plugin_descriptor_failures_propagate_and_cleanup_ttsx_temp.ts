@@ -7,9 +7,11 @@ import path from "node:path";
  * Verifies descriptor failures propagate across setup surfaces and clean up.
  *
  * The generated loader lives in a private temporary directory and executable
- * descriptor evaluation precedes CLI, API, and LSP setup. Each returned failure
- * must therefore preserve its cause without leaving loader artifacts; a
- * successful evaluator must clean up before later descriptor validation too.
+ * descriptor evaluation precedes CLI, API, and LSP setup. The fixture imports
+ * an unsupported extension so Node itself emits the loader-classified error
+ * that forces the `ttsx` fallback. Each returned failure must preserve its
+ * cause without leaving loader artifacts; a successful evaluator must clean up
+ * before later descriptor validation too.
  *
  * 1. Drive non-zero, stdout-only, enveloped, foreign-result, missing, malformed,
  *    and successful results.
@@ -28,17 +30,17 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
       "utf8",
     );
     fs.writeFileSync(
-      path.join(descriptorRoot, "runtime.ts"),
-      'export const runtime = "descriptor";\n',
-      "utf8",
-    );
-    fs.writeFileSync(
       path.join(descriptorRoot, "index.ts"),
       [
-        'export * from "./runtime";',
+        'import "./unsupported.xyz";',
         'export default { name: "unreached", source: "./absent" };',
         "",
       ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(descriptorRoot, "unsupported.xyz"),
+      "export default 1;\n",
       "utf8",
     );
     const tsconfig = path.join(root, "tsconfig.json");
@@ -60,6 +62,12 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
         'const path = require("node:path");',
         "const loaderDir = path.dirname(process.argv.at(-1));",
         'fs.writeFileSync(process.env.TTSC_FAKE_DESCRIPTOR_MARKER, loaderDir, "utf8");',
+        "if (process.env.TTSC_EXPECT_PLUGIN_CONFIG_DIR) {",
+        "  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);",
+        "  if (context.pluginConfigDir !== process.env.TTSC_EXPECT_PLUGIN_CONFIG_DIR) {",
+        "    throw new Error(`pluginConfigDir mismatch: ${JSON.stringify(context.pluginConfigDir)}`);",
+        "  }",
+        "}",
         "switch (process.env.TTSC_FAKE_DESCRIPTOR_MODE) {",
         '  case "nonzero":',
         "    for (let i = 1; i <= 7; i++) console.error(`descriptor failure ${i}`);",
@@ -111,6 +119,7 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
         "  new TtscCompiler({",
         `    cwd: ${JSON.stringify(root)},`,
         "    env: process.env,",
+        `    pluginConfigDir: ${JSON.stringify(root)},`,
         `    tsconfig: ${JSON.stringify(tsconfig)},`,
         "  }).prepare();",
         '  process.stderr.write("NO_ERROR\\n");',
@@ -174,6 +183,11 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
       });
       assert.equal(result.status, 1, testCase.mode);
       assert.match(result.stderr, testCase.pattern, testCase.mode);
+      assert.doesNotMatch(
+        result.stderr,
+        /ERR_UNKNOWN_FILE_EXTENSION|Unknown file extension/,
+        `${testCase.mode} leaked the discarded direct-loader diagnostic`,
+      );
       if ("absent" in testCase) {
         assert.doesNotMatch(result.stderr, testCase.absent, testCase.mode);
       }
@@ -223,7 +237,98 @@ export const test_plugin_descriptor_failures_propagate_and_cleanup_ttsx_temp =
       /ttscserver: plugin descriptor .* failed with exit code 2/,
     );
     assertLoaderRemoved(lspMarker, "LSP");
+
+    assertEvaluatorCleanupPinsPhysicalTempDirectory(root);
   };
+
+/** Cleanup must not follow a TEMP/TMPDIR alias retargeted by the descriptor. */
+function assertEvaluatorCleanupPinsPhysicalTempDirectory(root: string): void {
+  const safeTemp = path.join(root, "cleanup-safe-temp");
+  const retargetTemp = path.join(root, "cleanup-retarget-temp");
+  const tempAlias = path.join(root, "cleanup-temp-alias");
+  const marker = path.join(root, "cleanup-evaluator-dir.txt");
+  const sentinel = path.join(root, "cleanup-victim-sentinel.txt");
+  fs.mkdirSync(safeTemp);
+  fs.mkdirSync(retargetTemp);
+  fs.symlinkSync(
+    safeTemp,
+    tempAlias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  const descriptor = path.join(root, "cleanup-descriptor.cjs");
+  fs.writeFileSync(
+    descriptor,
+    [
+      'const fs = require("node:fs");',
+      'const path = require("node:path");',
+      "const evaluatorDir = path.dirname(process.env.TTSC_PLUGIN_DESCRIPTOR_OUT);",
+      'fs.writeFileSync(process.env.TTSC_TEST_EVALUATOR_MARKER, evaluatorDir, "utf8");',
+      "fs.rmSync(process.env.TTSC_TEST_TEMP_ALIAS, { force: true, recursive: true });",
+      'fs.symlinkSync(process.env.TTSC_TEST_TEMP_RETARGET, process.env.TTSC_TEST_TEMP_ALIAS, process.platform === "win32" ? "junction" : "dir");',
+      "const victim = path.join(process.env.TTSC_TEST_TEMP_RETARGET, path.basename(evaluatorDir));",
+      "fs.mkdirSync(victim, { recursive: true });",
+      'fs.writeFileSync(process.env.TTSC_TEST_TEMP_SENTINEL, "owned", "utf8");',
+      'fs.writeFileSync(path.join(victim, "sentinel.txt"), "owned", "utf8");',
+      `module.exports = { name: "cleanup", source: ${JSON.stringify(path.join(root, "absent-cleanup-source"))} };`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const tsconfig = path.join(root, "cleanup-tsconfig.json");
+  fs.writeFileSync(
+    tsconfig,
+    JSON.stringify({
+      compilerOptions: { plugins: [{ transform: descriptor }] },
+    }),
+    "utf8",
+  );
+  const worker = path.join(root, "cleanup-worker.cjs");
+  fs.writeFileSync(
+    worker,
+    [
+      `const { TtscCompiler } = require(${JSON.stringify(path.join(TestProject.WORKSPACE_ROOT, "packages", "ttsc", "lib", "index.js"))});`,
+      "try {",
+      `  new TtscCompiler({ cwd: ${JSON.stringify(root)}, env: process.env, tsconfig: ${JSON.stringify(tsconfig)} }).prepare();`,
+      "  process.exitCode = 2;",
+      "} catch (error) {",
+      '  process.stderr.write(String(error?.message ?? error) + "\\n");',
+      "  process.exitCode = 1;",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const result = TestProject.spawn(process.execPath, [worker], {
+    cwd: root,
+    env: {
+      TEMP: tempAlias,
+      TMP: tempAlias,
+      TMPDIR: tempAlias,
+      TTSC_NODE_BINARY: process.execPath,
+      TTSC_TEST_EVALUATOR_MARKER: marker,
+      TTSC_TEST_TEMP_ALIAS: tempAlias,
+      TTSC_TEST_TEMP_RETARGET: retargetTemp,
+      TTSC_TEST_TEMP_SENTINEL: sentinel,
+    },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(fs.existsSync(marker), true, "direct evaluator did not run");
+  const evaluatorDir = fs.readFileSync(marker, "utf8");
+  assert.equal(fs.existsSync(evaluatorDir), false, evaluatorDir);
+  assert.equal(
+    fs.existsSync(sentinel),
+    true,
+    "descriptor did not retarget TEMP",
+  );
+  assert.equal(
+    fs.existsSync(
+      path.join(retargetTemp, path.basename(evaluatorDir), "sentinel.txt"),
+    ),
+    true,
+    "cleanup followed the retargeted TEMP alias into an unrelated directory",
+  );
+}
 
 function runNodeSurface(options: {
   args: string[];
@@ -234,7 +339,10 @@ function runNodeSurface(options: {
 }): ReturnType<typeof TestProject.spawn> {
   return TestProject.spawn(process.execPath, options.args, {
     cwd: options.root,
-    env: fakeEnvironment(options.fakeTtsx, options.marker, options.mode),
+    env: {
+      ...fakeEnvironment(options.fakeTtsx, options.marker, options.mode),
+      TTSC_EXPECT_PLUGIN_CONFIG_DIR: options.root,
+    },
   });
 }
 

@@ -1,3 +1,4 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,6 +10,7 @@ import type {
 import { TtscCompiler } from "ttsc";
 import {
   type FilesystemPathIdentityContext,
+  type FilesystemPathIdentityOperations,
   createFilesystemPathIdentityContext,
 } from "ttsc/path-identity";
 import type { TransformResult } from "unplugin";
@@ -43,15 +45,31 @@ export interface TtscTransformAlias {
   replacement: string;
 }
 
+/** One directory's cheap project-membership identity at generation time. */
+interface TtscProjectDirectorySnapshot {
+  /** Absolute directory spelling used by the project walk. */
+  path: string;
+  /** Metadata signature that changes when its immediate membership changes. */
+  signature: string;
+}
+
+/** Generation-scoped directory watchers used to detect membership changes. */
+interface TtscProjectMutationTracker {
+  close: () => void;
+  failed: boolean;
+  membershipChanged: boolean;
+  settle?: Promise<void>;
+}
+
 /**
  * A single entry in the project transform cache.
  *
  * Stores the full compiler result together with SHA-256 hashes of every project
  * input file. In a cache with an explicit build lifecycle, the first delivery
  * of each compiled module compares its supplied source with the generation
- * snapshot in constant time; a repeated delivery re-hashes the complete input
- * set. Persistent caches without that boundary perform complete validation on
- * every hit.
+ * snapshot in constant time. Later graph-bearing deliveries validate only the
+ * requested file's derived inputs plus exact host descriptor/config inputs;
+ * graph-free envelopes retain complete-snapshot validation.
  */
 export interface TtscCachedProjectTransform {
   /**
@@ -69,6 +87,12 @@ export interface TtscCachedProjectTransform {
    */
   externalInputHashes?: Record<string, string>;
   /**
+   * Compiler-time physical identities for graph-owned entries in
+   * {@link externalInputHashes}. Dependency-only paths have no generation
+   * realpath protocol and therefore omit this evidence.
+   */
+  externalInputRealpaths?: Record<string, string | null>;
+  /**
    * Original absolute spellings of {@link externalInputHashes} inputs. These
    * stay separate from their identity keys so validation reads the paths the
    * compiler reported rather than a normalized replacement spelling.
@@ -79,13 +103,25 @@ export interface TtscCachedProjectTransform {
    * transform.
    */
   inputHashes: Record<string, string>;
+  /** Metadata snapshot of every directory in the stable generation walk. */
+  projectDirectories?: TtscProjectDirectorySnapshot[];
+  /** Live notification state for universal host-input changes. */
+  hostInputMutationTracker?: TtscProjectMutationTracker;
+  /** Live notification state for file/directory creation, deletion, and rename. */
+  projectMutationTracker?: TtscProjectMutationTracker;
+  /**
+   * Whether the generation-time project walk observed every directory and file
+   * it attempted to snapshot. An incomplete walk may never authorize narrow
+   * validation; a later complete walk must be allowed to replace it.
+   */
+  projectSnapshotComplete?: boolean;
   /** Absolute path to the directory that owns the tsconfig. */
   projectRoot: string;
   /** Raw compiler output returned by {@link TtscCompiler.transform}. */
   result: ITtscCompilerTransformation;
   /**
    * Files already delivered from this generation, keyed by filesystem identity.
-   * Build-scoped caches use this to skip complete validation only for a
+   * Build-scoped caches use this to skip persistent validation only for a
    * module's first delivery inside the current build.
    */
   servedFiles?: Set<string>;
@@ -111,21 +147,112 @@ export type TtscTransformCache = Map<
   Promise<TtscCachedProjectTransform>
 >;
 
+/** Cache-owned synchronous filesystem reads used by transform validation. */
+export interface TtscTransformFilesystemOperations {
+  /** Override the case policy when the observed filesystem is not the host. */
+  caseSensitive?: FilesystemPathIdentityOperations["caseSensitive"];
+  /** Test whether a validation or resolution candidate currently exists. */
+  exists(location: string): boolean;
+  /** Read link metadata without following a symbolic link. */
+  lstat(location: string): fs.BigIntStats;
+  /** Read bytes used by project, graph, and host-input fingerprints. */
+  readFile(location: string): Buffer;
+  /** Enumerate one project or missing-input proof directory. */
+  readdir(location: string): fs.Dirent[];
+  /** Resolve one lexical path to its current physical target. */
+  realpath(location: string): string;
+  /** Read ordinary metadata for file-kind and missing-path checks. */
+  stat(location: string): fs.Stats;
+  /** Read nanosecond metadata for stable file and directory signatures. */
+  statBigInt(location: string): fs.BigIntStats;
+  /** Override path parsing when the observed filesystem is not the host. */
+  platform?: NodeJS.Platform;
+}
+
+const DEFAULT_FILESYSTEM_OPERATIONS: TtscTransformFilesystemOperations =
+  Object.freeze({
+    exists: fs.existsSync,
+    lstat: (location: string) => fs.lstatSync(location, { bigint: true }),
+    readFile: (location: string) => fs.readFileSync(location),
+    readdir: (location: string) =>
+      fs.readdirSync(location, { withFileTypes: true }),
+    realpath: fs.realpathSync.native,
+    stat: fs.statSync,
+    statBigInt: (location: string) => fs.statSync(location, { bigint: true }),
+  });
+
+const TRANSFORM_CACHE_FILESYSTEM = new WeakMap<
+  TtscTransformCache,
+  TtscTransformFilesystemOperations
+>();
+const TRANSFORM_RESULT_FILESYSTEM = new WeakMap<
+  ITtscCompilerTransformation,
+  TtscTransformFilesystemOperations
+>();
+
 /**
  * Caches whose owner has declared a real per-build lifecycle by calling
  * {@link beginTtscTransformBuild} before transforms begin.
  */
 const BUILD_SCOPED_TRANSFORM_CACHES = new WeakSet<TtscTransformCache>();
 
-function createHostPathIdentityContext(): FilesystemPathIdentityContext {
+function createHostPathIdentityContext(
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): FilesystemPathIdentityContext {
   return createFilesystemPathIdentityContext({
+    caseSensitive: filesystem.caseSensitive,
+    lstat: filesystem.lstat,
+    platform: filesystem.platform,
+    readdir: (directory) =>
+      filesystem.readdir(directory).map((entry) => entry.name),
+    realpath: filesystem.realpath,
     throwOnRealpathError: false,
   });
 }
 
-/** Create an empty persistent transform cache. */
-export function createTtscTransformCache(): TtscTransformCache {
-  return new Map();
+/** Normalize one directory entry under the owning filesystem's case policy. */
+export function normalizeHostInputName(
+  name: string,
+  caseSensitive: boolean,
+): string {
+  return caseSensitive ? name : name.toLowerCase();
+}
+
+/** Create an empty persistent transform cache with isolated filesystem reads. */
+export function createTtscTransformCache(
+  operations: Partial<TtscTransformFilesystemOperations> = {},
+): TtscTransformCache {
+  const cache: TtscTransformCache = new Map();
+  TRANSFORM_CACHE_FILESYSTEM.set(cache, {
+    caseSensitive: operations.caseSensitive,
+    exists: operations.exists ?? DEFAULT_FILESYSTEM_OPERATIONS.exists,
+    lstat: operations.lstat ?? DEFAULT_FILESYSTEM_OPERATIONS.lstat,
+    readFile: operations.readFile ?? DEFAULT_FILESYSTEM_OPERATIONS.readFile,
+    readdir: operations.readdir ?? DEFAULT_FILESYSTEM_OPERATIONS.readdir,
+    realpath: operations.realpath ?? DEFAULT_FILESYSTEM_OPERATIONS.realpath,
+    stat: operations.stat ?? DEFAULT_FILESYSTEM_OPERATIONS.stat,
+    statBigInt:
+      operations.statBigInt ?? DEFAULT_FILESYSTEM_OPERATIONS.statBigInt,
+    platform: operations.platform,
+  });
+  return cache;
+}
+
+function transformFilesystem(
+  cache: TtscTransformCache | undefined,
+): TtscTransformFilesystemOperations {
+  return (
+    (cache === undefined ? undefined : TRANSFORM_CACHE_FILESYSTEM.get(cache)) ??
+    DEFAULT_FILESYSTEM_OPERATIONS
+  );
+}
+
+function resultFilesystem(
+  result: ITtscCompilerTransformation,
+): TtscTransformFilesystemOperations {
+  return (
+    TRANSFORM_RESULT_FILESYSTEM.get(result) ?? DEFAULT_FILESYSTEM_OPERATIONS
+  );
 }
 
 /**
@@ -137,7 +264,7 @@ export function createTtscTransformCache(): TtscTransformCache {
  * defines one process-scoped module-loading session.
  */
 export function beginTtscTransformBuild(cache: TtscTransformCache): void {
-  cache.clear();
+  clearTtscTransformCache(cache);
   BUILD_SCOPED_TRANSFORM_CACHES.add(cache);
 }
 
@@ -149,8 +276,17 @@ export function beginTtscTransformBuild(cache: TtscTransformCache): void {
  * many edits, so that callback cannot authorize build-scoped shortcuts.
  */
 export function resetTtscTransformCache(cache: TtscTransformCache): void {
-  cache.clear();
+  clearTtscTransformCache(cache);
   BUILD_SCOPED_TRANSFORM_CACHES.delete(cache);
+}
+
+/** Dispose generation-owned filesystem resources before clearing a cache. */
+function clearTtscTransformCache(cache: TtscTransformCache): void {
+  const generations = [...cache.values()];
+  cache.clear();
+  for (const generation of generations) {
+    void generation.then(disposeCachedTransform, () => undefined);
+  }
 }
 
 /**
@@ -215,6 +351,7 @@ export async function transformTtsc(
   cache?: TtscTransformCache,
   hooks?: TtscTransformHooks,
 ): Promise<TtscTransformResult | undefined> {
+  const filesystem = transformFilesystem(cache);
   const clean = stripQuery(id);
   if (clean.includes("\0")) {
     return undefined;
@@ -227,7 +364,7 @@ export async function transformTtsc(
     return undefined;
   }
 
-  const tsconfig = resolveTsconfig(file, options.project);
+  const tsconfig = resolveTsconfig(file, options.project, filesystem);
   const aliasPaths = createAliasPaths(aliases);
   const key = createTransformCacheKey({
     aliasPaths,
@@ -242,10 +379,19 @@ export async function transformTtsc(
       // A rejected in-flight generation must not stay cached: evict it (only if
       // it is still the current entry) so a later call re-runs the transform.
       const cached = await awaitOrEvict(cache, key, transformed);
+      TRANSFORM_RESULT_FILESYSTEM.set(cached.result, filesystem);
       // While this caller awaited the old Promise, another caller may have
       // invalidated it and installed a newer authoritative generation.
       if (cache?.get(key) !== transformed) {
         continue;
+      }
+      const buildScoped =
+        cache !== undefined && BUILD_SCOPED_TRANSFORM_CACHES.has(cache);
+      if (!buildScoped) {
+        await settleProjectMutationEvents(cached);
+        if (cache?.get(key) !== transformed) {
+          continue;
+        }
       }
       if (
         // A file the plugin declared volatile must never be served from the
@@ -256,12 +402,7 @@ export async function transformTtsc(
           projectRoot: cached.projectRoot,
           result: cached.result,
         }) &&
-        matchesCachedSource(
-          cached,
-          file,
-          source,
-          cache !== undefined && BUILD_SCOPED_TRANSFORM_CACHES.has(cache),
-        )
+        matchesCachedSource(cached, file, source, buildScoped)
       ) {
         reportSuccessDiagnostics(cached.result);
         // A resolved `"exception"` / `"failure"` envelope makes this throw;
@@ -296,7 +437,9 @@ export async function transformTtsc(
         compilerOptions: options.compilerOptions,
         currentFile: file,
         currentSource: source,
+        filesystem,
         plugins: options.plugins,
+        trackProjectMembership: cache !== undefined,
         tsconfig,
       });
       cache?.set(key, transformed);
@@ -383,7 +526,19 @@ function evictGeneration(
 ): void {
   if (cache?.get(key) === generation) {
     cache.delete(key);
+    void generation.then(disposeCachedTransform, () => undefined);
   }
+}
+
+/** Close one generation's directory watchers exactly once. */
+function disposeCachedTransform(cached: TtscCachedProjectTransform): void {
+  const trackers = [
+    cached.projectMutationTracker,
+    cached.hostInputMutationTracker,
+  ];
+  cached.projectMutationTracker = undefined;
+  cached.hostInputMutationTracker = undefined;
+  for (const tracker of trackers) tracker?.close();
 }
 
 /**
@@ -431,6 +586,8 @@ interface TtscEnvelopeDerivation {
    * files, `undefined` until the first completeness predicate.
    */
   dependenciesComplete?: Set<string>;
+  /** Universal inputs validated once at generation time and then by metadata. */
+  hostInputValidation?: TtscHostInputValidation;
   /**
    * Lazily built identity -> output source index of the `typescript` map (first
    * match wins, mirroring the historical scan). `undefined` until the first
@@ -446,6 +603,26 @@ interface TtscEnvelopeDerivation {
   readonly watchInputs: Map<string, string[]>;
 }
 
+interface TtscHostInputValidation {
+  /** Lexical input spellings that existed when the generation was captured. */
+  readonly entries: Map<
+    string,
+    {
+      path: string;
+      realpath: string | null;
+      signature: string;
+      strict?: true;
+    }
+  >;
+  /** Identities omitted from the per-module dependency loop below. */
+  readonly identities: Set<string>;
+  /**
+   * Missing paths grouped by the nearest directory whose listing proves them
+   * absent.
+   */
+  readonly missing: Map<string, Set<string>>;
+}
+
 /** Reference-graph indexes shared by every watch-input derivation. */
 interface TtscEnvelopeGraphIndexes {
   /** Identity of each direct-edge source -> its resolved absolute targets. */
@@ -457,6 +634,15 @@ interface TtscEnvelopeGraphIndexes {
   /** Resolved absolute `graph.globals` and `graph.configs` members. */
   readonly globals: string[];
   readonly configs: string[];
+  /** Every realized/candidate graph path, keyed by filesystem identity. */
+  readonly members: Set<string>;
+  /** Compiler-time proof for graph members, keyed by filesystem identity. */
+  readonly inputProofs: Map<
+    string,
+    { hash: string | null; path: string; realpath: string | null }
+  >;
+  /** Aliased graph proof keys that reported contradictory generation states. */
+  readonly inputProofConflicts: Set<string>;
 }
 
 /**
@@ -479,7 +665,9 @@ function envelopeDerivation(props: {
     return existing;
   }
   const created: TtscEnvelopeDerivation = {
-    identityContext: createHostPathIdentityContext(),
+    identityContext: createHostPathIdentityContext(
+      resultFilesystem(props.result),
+    ),
     identities: new Map(),
     watchInputs: new Map(),
   };
@@ -508,6 +696,9 @@ function envelopeGraphIndexes(
     candidates: [],
     globals: [],
     configs: [],
+    members: new Set(),
+    inputProofs: new Map(),
+    inputProofConflicts: new Set(),
   };
   const graph =
     props.result.type === "exception" ? undefined : props.result.graph;
@@ -518,6 +709,7 @@ function envelopeGraphIndexes(
       }
       const absolute = path.resolve(props.projectRoot, source);
       const identity = derivationIdentity(state, absolute);
+      built.members.add(identity);
       built.spellings.set(identity, absolute);
       const entries = built.edges.get(identity) ?? [];
       entries.push(
@@ -526,23 +718,84 @@ function envelopeGraphIndexes(
             (target): target is string =>
               typeof target === "string" && target.length !== 0,
           )
-          .map((target) => path.resolve(props.projectRoot, target)),
+          .map((target) => {
+            const absoluteTarget = path.resolve(props.projectRoot, target);
+            built.members.add(derivationIdentity(state, absoluteTarget));
+            return absoluteTarget;
+          }),
       );
       built.edges.set(identity, entries);
     }
     built.globals.push(...selectListedFiles(props.projectRoot, graph.globals));
     built.configs.push(...selectListedFiles(props.projectRoot, graph.configs));
+    for (const input of [...built.globals, ...built.configs]) {
+      built.members.add(derivationIdentity(state, input));
+    }
     for (const [source, candidates] of Object.entries(graph.candidates ?? {})) {
       if (!Array.isArray(candidates)) {
         continue;
       }
+      const sourceIdentity = derivationIdentity(
+        state,
+        path.resolve(props.projectRoot, source),
+      );
+      built.members.add(sourceIdentity);
       built.candidates.push({
-        source: derivationIdentity(
-          state,
-          path.resolve(props.projectRoot, source),
-        ),
+        source: sourceIdentity,
         files: selectListedFiles(props.projectRoot, candidates),
       });
+      for (const candidate of candidates) {
+        if (typeof candidate !== "string" || candidate.length === 0) continue;
+        built.members.add(
+          derivationIdentity(state, path.resolve(props.projectRoot, candidate)),
+        );
+      }
+    }
+    for (const [input, hash] of Object.entries(graph.inputHashes ?? {})) {
+      if (
+        hash !== null &&
+        (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash))
+      ) {
+        continue;
+      }
+      if (
+        graph.inputRealpaths === undefined ||
+        !Object.prototype.hasOwnProperty.call(graph.inputRealpaths, input)
+      ) {
+        continue;
+      }
+      const reportedRealpath = graph.inputRealpaths[input];
+      if (
+        reportedRealpath !== null &&
+        (typeof reportedRealpath !== "string" ||
+          !path.isAbsolute(reportedRealpath))
+      ) {
+        continue;
+      }
+      const absolute = path.resolve(props.projectRoot, input);
+      const identity = derivationIdentity(state, absolute);
+      if (!built.members.has(identity)) continue;
+      const proof = {
+        hash,
+        path: absolute,
+        realpath:
+          reportedRealpath === null ? null : path.resolve(reportedRealpath),
+      };
+      const previous = built.inputProofs.get(identity);
+      if (
+        previous !== undefined &&
+        (previous.hash !== proof.hash ||
+          !sameHostInputRealpath(
+            previous.realpath,
+            proof.realpath,
+            state.identityContext,
+          ))
+      ) {
+        built.inputProofs.delete(identity);
+        built.inputProofConflicts.add(identity);
+      } else if (!built.inputProofConflicts.has(identity)) {
+        built.inputProofs.set(identity, proof);
+      }
     }
   }
   state.graph = built;
@@ -677,29 +930,63 @@ function deriveWatchInputs(
 ): string[] {
   const graph = envelopeGraphIndexes(state, props);
   const output: string[] = [];
-  const seen = new Set<string>();
+  const physicalSeen = new Set<string>();
+  const lexicalSeen = new Set<string>();
   const excluded = new Set([fileIdentity]);
   if (props.temporaryTsconfig !== undefined) {
     excluded.add(derivationIdentity(state, props.temporaryTsconfig));
   }
-  for (const absolute of [
-    ...selectFileDependencies(props),
-    ...selectGraphInputs(graph, state, {
-      ...props,
-      complete:
-        declaresCompleteDependencies(state, props) &&
-        !isVolatileFile(state, props),
-    }),
-    ...selectResolutionCandidateInputs(graph, state, props),
-  ]) {
-    const identity = derivationIdentity(state, absolute);
-    if (excluded.has(identity) || seen.has(identity)) {
-      continue;
+  const currentSpelling = path.resolve(props.file);
+  const temporarySpelling =
+    props.temporaryTsconfig === undefined
+      ? undefined
+      : path.resolve(props.temporaryTsconfig);
+  const appendLexical = (input: string): void => {
+    const spelling = path.resolve(input);
+    if (
+      spelling === currentSpelling ||
+      spelling === temporarySpelling ||
+      lexicalSeen.has(spelling)
+    ) {
+      return;
     }
-    seen.add(identity);
-    output.push(absolute);
-  }
+    lexicalSeen.add(spelling);
+    physicalSeen.add(derivationIdentity(state, input));
+    output.push(input);
+  };
+  const appendPhysical = (input: string): void => {
+    const identity = derivationIdentity(state, input);
+    if (excluded.has(identity) || physicalSeen.has(identity)) return;
+    physicalSeen.add(identity);
+    lexicalSeen.add(path.resolve(input));
+    output.push(input);
+  };
+  for (const input of selectFileDependencies(props)) appendLexical(input);
+  for (const input of selectGraphInputs(graph, state, {
+    ...props,
+    complete:
+      declaresCompleteDependencies(state, props) &&
+      !isVolatileFile(state, props),
+  }))
+    appendPhysical(input);
+  // Resolution candidates, plugin dependencies, and universal host inputs
+  // preserve lexical aliases. Physical deduplication would collapse
+  // `alias/selection.cjs` into the selected target path, so a bundler would
+  // watch only the target and miss a symlink/junction retarget.
+  for (const input of selectResolutionCandidateInputs(graph, state, props))
+    appendLexical(input);
+  for (const input of selectHostInputs(props)) appendLexical(input);
   return output;
+}
+
+/** Return exact host-wide descriptor/config inputs for every output file. */
+function selectHostInputs(props: {
+  projectRoot: string;
+  result: ITtscCompilerTransformation;
+}): string[] {
+  return props.result.type === "exception"
+    ? []
+    : selectListedFiles(props.projectRoot, props.result.hostInputs);
 }
 
 /**
@@ -1039,14 +1326,13 @@ export function createTransformResult(
  *
  * Always compares the current module's in-memory source with the generation
  * snapshot. A cache whose owner called {@link beginTtscTransformBuild} can use
- * that comparison alone for the module's first delivery in the current build;
- * repeated requests re-hash every project and out-of-walk input. Persistent
- * caches with no guaranteed build boundary perform complete validation on every
- * hit. Any mismatch forces a complete re-transform.
- *
- * The complete validation snapshot and {@link collectInputHashes} draw their
- * keys from the exact same {@link collectProjectInputHashes} walk, so the two
- * agree on the key universe.
+ * that comparison alone for a stable generation's first module delivery in the
+ * current build. An incomplete generation may not take this shortcut: otherwise
+ * a sibling output captured during a filesystem race could still be served
+ * once. Later graph-bearing requests validate the file's derived input set and
+ * project membership; graph-free envelopes conservatively re-hash the complete
+ * project and out-of-walk snapshots. Any mismatch forces a complete
+ * re-transform.
  */
 function matchesCachedSource(
   cached: TtscCachedProjectTransform,
@@ -1061,16 +1347,410 @@ function matchesCachedSource(
   }
   if (
     buildScoped &&
+    cached.projectSnapshotComplete === true &&
     !cached.servedFiles?.has(pathIdentityKey(file, identities))
   ) {
     return true;
   }
-  const currentHashes = collectProjectInputHashes(
-    cached.projectRoot,
-    identities,
+  if (
+    cached.result.type !== "exception" &&
+    cached.result.graph !== undefined &&
+    cached.projectSnapshotComplete === true &&
+    cached.projectDirectories !== undefined &&
+    cached.projectMutationTracker !== undefined &&
+    cached.hostInputMutationTracker !== undefined
+  ) {
+    return matchesNarrowPersistentInputs(cached, file);
+  }
+  return matchesCompleteInputSnapshot(cached, currentKey, source);
+}
+
+/**
+ * Validate one graph-bearing cached output against only the inputs that can
+ * affect that file. Project membership is validated once per event-loop turn,
+ * so sibling module deliveries share one directory-metadata pass instead of
+ * multiplying it by module count.
+ */
+function matchesNarrowPersistentInputs(
+  cached: TtscCachedProjectTransform,
+  file: string,
+): boolean {
+  if (!matchesProjectMembership(cached)) {
+    return false;
+  }
+  const hostTracker = cached.hostInputMutationTracker;
+  if (
+    hostTracker === undefined ||
+    hostTracker.failed ||
+    hostTracker.membershipChanged
+  ) {
+    return false;
+  }
+  const state = envelopeDerivation(cached);
+  const hostValidation = state.hostInputValidation;
+  if (
+    hostValidation === undefined ||
+    !matchesUniversalHostInputs(cached, hostValidation)
+  ) {
+    return false;
+  }
+  const inputs = selectWatchInputs({
+    file,
+    projectRoot: cached.projectRoot,
+    result: cached.result,
+    temporaryTsconfig: cached.temporaryTsconfig,
+  });
+  for (const input of inputs) {
+    if (hostValidation.identities.has(derivationIdentity(state, input))) {
+      continue;
+    }
+    if (!matchesRecordedInput(cached, input)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Validate universal descriptor/config inputs without re-reading them for every
+ * module. Existing paths use the same nanosecond metadata manifest that guards
+ * GOROOT identity memoization; missing probes are grouped by the nearest
+ * existing directory and checked through one exact membership listing.
+ */
+function matchesUniversalHostInputs(
+  cached: TtscCachedProjectTransform,
+  validation: TtscHostInputValidation,
+): boolean {
+  const filesystem = resultFilesystem(cached.result);
+  for (const entry of validation.entries.values()) {
+    const signature = inputMetadataSignature(entry.path, filesystem);
+    if (signature === entry.signature) continue;
+    if (entry.strict === true) return false;
+    if (hostInputRealpath(entry.path, filesystem) !== entry.realpath)
+      return false;
+    if (!matchesRecordedInput(cached, entry.path)) {
+      return false;
+    }
+    if (signature === undefined) return false;
+    entry.signature = signature;
+  }
+  for (const [directory, names] of validation.missing) {
+    let entries: fs.Dirent[];
+    try {
+      entries = filesystem.readdir(directory);
+    } catch (error) {
+      // Only a provably absent/non-directory ancestor keeps every descendant
+      // unreachable. Permission and transient I/O failures cannot prove that
+      // a candidate is still missing, while replacing the proving directory
+      // with an exact file can itself redirect module resolution.
+      try {
+        if (!filesystem.stat(directory).isDirectory()) return false;
+      } catch (statError) {
+        if (!isMissingPathError(statError)) return false;
+        continue;
+      }
+      return false;
+    }
+    const identities = envelopeDerivation(cached).identityContext;
+    const caseSensitive = identities.caseSensitive(directory);
+    if (
+      entries.some((entry) =>
+        names.has(normalizeHostInputName(entry.name, caseSensitive)),
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** True only for errors that prove a path cannot currently be traversed. */
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** Capture the universal-input manifest while the generation is still fresh. */
+function captureUniversalHostInputValidation(
+  cached: TtscCachedProjectTransform,
+  currentFile: string,
+): TtscHostInputValidation | undefined {
+  const filesystem = resultFilesystem(cached.result);
+  const state = envelopeDerivation(cached);
+  const validation: TtscHostInputValidation = {
+    entries: new Map(),
+    identities: new Set(),
+    missing: new Map(),
+  };
+  for (const input of selectPersistentHostInputs({
+    filesystem,
+    projectRoot: cached.projectRoot,
+    result: cached.result,
+    temporaryTsconfig: cached.temporaryTsconfig,
+  })) {
+    const generationHashes =
+      cached.result.type === "exception"
+        ? undefined
+        : cached.result.hostInputHashes;
+    const generationRealpaths =
+      cached.result.type === "exception"
+        ? undefined
+        : cached.result.hostInputRealpaths;
+    const expected = generationHashes?.[path.resolve(input)];
+    // Every persistent universal input must carry an evaluation-time
+    // fingerprint. If a plugin/native host cannot provide one, keep the fresh
+    // result but decline narrow long-lived reuse.
+    if (expected === undefined) {
+      const current = path.resolve(currentFile);
+      if (path.resolve(input) !== current) return undefined;
+      // The current module may be supplied from an unsaved editor buffer. Its
+      // generation snapshot is overlaid below from `currentSource`, so a disk
+      // fingerprint would be both unavailable and the wrong authority.
+    } else if (expected !== hostInputStateHash(input, filesystem)) {
+      return undefined;
+    }
+    const absoluteInput = path.resolve(input);
+    if (generationRealpaths !== undefined) {
+      if (
+        !Object.prototype.hasOwnProperty.call(
+          generationRealpaths,
+          absoluteInput,
+        ) ||
+        !sameHostInputRealpath(
+          generationRealpaths[absoluteInput],
+          hostInputRealpath(input, filesystem),
+          state.identityContext,
+        )
+      ) {
+        return undefined;
+      }
+    }
+    const identity = derivationIdentity(state, input);
+    validation.identities.add(identity);
+    const before = inputMetadataSignature(input, filesystem);
+    if (!matchesRecordedInput(cached, input)) return undefined;
+    const after = inputMetadataSignature(input, filesystem);
+    if (before !== after) return undefined;
+    if (after !== undefined) {
+      // Do not key this manifest by physical identity. A symlink/junction
+      // spelling and its selected target deliberately share that identity,
+      // but both lexical paths must survive so retargeting the alias is visible.
+      validation.entries.set(path.resolve(input), {
+        path: input,
+        realpath: hostInputRealpath(input, filesystem),
+        signature: after,
+      });
+      continue;
+    }
+    const probe = missingPathProbe(input, filesystem);
+    if (probe.blocker !== undefined) {
+      const blockerIdentity = derivationIdentity(state, probe.blocker);
+      const signature = inputMetadataSignature(probe.blocker, filesystem);
+      if (signature === undefined) return undefined;
+      validation.identities.add(blockerIdentity);
+      validation.entries.set(path.resolve(probe.blocker), {
+        path: probe.blocker,
+        realpath: hostInputRealpath(probe.blocker, filesystem),
+        signature,
+        strict: true,
+      });
+      continue;
+    }
+    let names = validation.missing.get(probe.directory);
+    if (names === undefined) {
+      names = new Set<string>();
+      validation.missing.set(probe.directory, names);
+    }
+    names.add(
+      normalizeHostInputName(
+        probe.name,
+        state.identityContext.caseSensitive(probe.directory),
+      ),
+    );
+  }
+  state.hostInputValidation = validation;
+  return validation;
+}
+
+/** Metadata identity whose stability lets a generation reuse a content hash. */
+function inputMetadataSignature(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | undefined {
+  try {
+    const link = filesystem.lstat(file);
+    let target = link;
+    if (link.isSymbolicLink()) {
+      try {
+        target = filesystem.statBigInt(file);
+      } catch {
+        // Keep a broken link in the existing-input manifest. Its own metadata
+        // stays stable while the target is missing, and the first successful
+        // stat after the target appears changes this signature. Treating it as
+        // a plain missing path would watch/list only the link's parent, which
+        // cannot observe a target created in another directory.
+        return [
+          link.dev,
+          link.ino,
+          link.mode,
+          link.size,
+          link.mtimeNs,
+          link.ctimeNs,
+          "missing-target",
+        ].join(":");
+      }
+    }
+    return [
+      link.dev,
+      link.ino,
+      link.mode,
+      link.size,
+      link.mtimeNs,
+      link.ctimeNs,
+      target.dev,
+      target.ino,
+      target.mode,
+      target.size,
+      target.mtimeNs,
+      target.ctimeNs,
+    ].join(":");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Content/kind fingerprint matching the compiler host-input contract. */
+function hostInputStateHash(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | null {
+  try {
+    return hashText(filesystem.readFile(file));
+  } catch {
+    try {
+      return filesystem.stat(file).isDirectory()
+        ? hashText("ttsc:host-input:directory\0")
+        : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Fingerprint the text/kind state returned by TypeScript-Go's filesystem. */
+function graphInputStateHash(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | null {
+  try {
+    const bytes = filesystem.readFile(file);
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+      const even = bytes.subarray(
+        2,
+        2 + Math.floor((bytes.length - 2) / 2) * 2,
+      );
+      return hashText(Buffer.from(even.toString("utf16le"), "utf8"));
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+      const even = Buffer.from(
+        bytes.subarray(2, 2 + Math.floor((bytes.length - 2) / 2) * 2),
+      );
+      even.swap16();
+      return hashText(Buffer.from(even.toString("utf16le"), "utf8"));
+    }
+    const content =
+      bytes.length >= 3 &&
+      bytes[0] === 0xef &&
+      bytes[1] === 0xbb &&
+      bytes[2] === 0xbf
+        ? bytes.subarray(3)
+        : bytes;
+    return hashText(content);
+  } catch {
+    try {
+      return filesystem.stat(file).isDirectory()
+        ? hashText("ttsc:host-input:directory\0")
+        : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Physical target selected by a lexical host-input path. */
+function hostInputRealpath(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | null {
+  try {
+    return filesystem.realpath(file);
+  } catch {
+    return null;
+  }
+}
+
+/** Compare two reported realpaths by filesystem identity, not Windows spelling. */
+function sameHostInputRealpath(
+  left: string | null | undefined,
+  right: string | null,
+  identities: FilesystemPathIdentityContext,
+): boolean {
+  if (left === undefined || (left === null) !== (right === null)) return false;
+  if (left === null || right === null) return true;
+  return (
+    pathIdentityKey(left, identities) === pathIdentityKey(right, identities)
   );
-  currentHashes[currentKey] = hashText(source);
-  if (!sameHashes(cached.inputHashes, currentHashes)) {
+}
+
+/** Find one directory listing that proves an absent path is still absent. */
+function missingPathProbe(
+  file: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): {
+  blocker?: string;
+  directory: string;
+  name: string;
+} {
+  let child = path.resolve(file);
+  for (;;) {
+    const directory = path.dirname(child);
+    try {
+      const stats = filesystem.stat(directory);
+      if (stats.isDirectory()) {
+        return { directory, name: path.basename(child) };
+      }
+      return {
+        blocker: directory,
+        directory: path.dirname(directory),
+        name: path.basename(directory),
+      };
+    } catch {}
+    if (directory === child) {
+      return { directory, name: path.basename(child) };
+    }
+    child = directory;
+  }
+}
+
+/** Fall back to the historical whole-envelope validation without a graph. */
+function matchesCompleteInputSnapshot(
+  cached: TtscCachedProjectTransform,
+  currentKey: string,
+  source: string,
+): boolean {
+  if (cached.projectSnapshotComplete !== true) {
+    return false;
+  }
+  const current = collectProjectInputSnapshot(
+    cached.projectRoot,
+    envelopeDerivation(cached).identityContext,
+    resultFilesystem(cached.result),
+  );
+  if (!current.complete) {
+    return false;
+  }
+  current.hashes[currentKey] = hashText(source);
+  if (!sameHashes(cached.inputHashes, current.hashes)) {
     return false;
   }
   // Re-hash the out-of-walk inputs the compiler reported for this generation
@@ -1082,12 +1762,176 @@ function matchesCachedSource(
   // requires a tsconfig or package manifest change, both of which the project
   // walk above already detects.
   const externalHashes = cached.externalInputHashes ?? {};
-  return sameHashes(
-    externalHashes,
-    collectExternalInputHashes(
-      cached.externalInputPaths ?? Object.keys(externalHashes),
-    ),
+  return (
+    sameHashes(externalHashes, collectCachedExternalInputHashes(cached)) &&
+    matchesExternalInputRealpaths(cached)
   );
+}
+
+/** Re-check graph-owned physical identities in complete-snapshot fallback. */
+function matchesExternalInputRealpaths(
+  cached: TtscCachedProjectTransform,
+): boolean {
+  const expected = cached.externalInputRealpaths;
+  if (expected === undefined || Object.keys(expected).length === 0) return true;
+  const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
+  for (const input of cached.externalInputPaths ?? []) {
+    const identity = derivationIdentity(state, input);
+    if (!Object.prototype.hasOwnProperty.call(expected, identity)) continue;
+    if (
+      !sameHostInputRealpath(
+        expected[identity],
+        hostInputRealpath(input, filesystem),
+        state.identityContext,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Capture external-input hashes without attaching post-compile state to an
+ * earlier graph. Graph members must carry compiler-time proof and still match
+ * it now; plugin-declared dependency-only paths retain the historical
+ * post-compile snapshot because their own protocol does not claim generation
+ * fingerprints.
+ */
+function captureExternalInputSnapshot(
+  cached: TtscCachedProjectTransform,
+  paths: readonly string[],
+): {
+  complete: boolean;
+  hashes: Record<string, string>;
+  realpaths: Record<string, string | null>;
+} {
+  const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
+  const graph = envelopeGraphIndexes(state, cached);
+  const hashes: Record<string, string> = {};
+  const realpaths: Record<string, string | null> = {};
+  let complete = true;
+  for (const input of paths) {
+    const identity = derivationIdentity(state, input);
+    if (graph.members.has(identity)) {
+      const proof = graph.inputProofs.get(identity);
+      if (proof === undefined || graph.inputProofConflicts.has(identity)) {
+        complete = false;
+        continue;
+      }
+      const currentHash = graphInputStateHash(input, filesystem);
+      if (
+        currentHash !== proof.hash ||
+        !sameHostInputRealpath(
+          proof.realpath,
+          hostInputRealpath(input, filesystem),
+          state.identityContext,
+        )
+      ) {
+        complete = false;
+      }
+      hashes[identity] = proof.hash ?? "missing";
+      realpaths[identity] = proof.realpath;
+      continue;
+    }
+    hashes[identity] = hostInputStateHash(input, filesystem) ?? "missing";
+  }
+  return { complete, hashes, realpaths };
+}
+
+/** Verify every graph member still has the state read by the compiler. */
+function matchesCompilerGraphInputProofs(
+  cached: TtscCachedProjectTransform,
+): boolean {
+  if (
+    cached.result.type === "exception" ||
+    cached.result.graph === undefined ||
+    (cached.result.graph.inputHashes === undefined &&
+      cached.result.graph.inputRealpaths === undefined)
+  ) {
+    // Legacy sidecars remain compatible for ordinary in-project graphs. Their
+    // out-of-walk members are still rejected by captureExternalInputSnapshot,
+    // where a post-compile snapshot cannot prove the compiler's generation.
+    return true;
+  }
+  const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
+  const graph = envelopeGraphIndexes(state, cached);
+  if (
+    graph.inputProofConflicts.size !== 0 ||
+    graph.inputProofs.size !== graph.members.size
+  ) {
+    return false;
+  }
+  for (const identity of graph.members) {
+    const proof = graph.inputProofs.get(identity);
+    if (
+      proof === undefined ||
+      graphInputStateHash(proof.path, filesystem) !== proof.hash ||
+      !sameHostInputRealpath(
+        proof.realpath,
+        hostInputRealpath(proof.path, filesystem),
+        state.identityContext,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Compare one derived input with the snapshot that owned it at generation. */
+function matchesRecordedInput(
+  cached: TtscCachedProjectTransform,
+  input: string,
+): boolean {
+  const state = envelopeDerivation(cached);
+  const filesystem = resultFilesystem(cached.result);
+  const projectKey = toProjectKey(
+    cached.projectRoot,
+    input,
+    state.identityContext,
+  );
+  const projectHash = Object.prototype.hasOwnProperty.call(
+    cached.inputHashes,
+    projectKey,
+  )
+    ? cached.inputHashes[projectKey]
+    : undefined;
+  const identity = derivationIdentity(state, input);
+  const externalHash = (cached.externalInputHashes ?? {})[identity];
+  const externalRealpaths = cached.externalInputRealpaths;
+  const graphInput =
+    externalRealpaths !== undefined &&
+    Object.prototype.hasOwnProperty.call(externalRealpaths, identity);
+  if (
+    externalRealpaths !== undefined &&
+    Object.prototype.hasOwnProperty.call(externalRealpaths, identity) &&
+    !sameHostInputRealpath(
+      externalRealpaths[identity],
+      hostInputRealpath(input, filesystem),
+      state.identityContext,
+    )
+  ) {
+    return false;
+  }
+  // Prefer the out-of-walk spelling's own snapshot when it exists. A lexical
+  // alias can point back into the walked project, where the physical target's
+  // project hash is a different authority (and graph text uses BOM decoding).
+  const recorded = externalHash ?? projectHash;
+  if (recorded === undefined) {
+    return false;
+  }
+  try {
+    const current = graphInput
+      ? graphInputStateHash(input, filesystem)
+      : hostInputStateHash(input, filesystem);
+    return recorded === (current ?? "missing");
+  } catch {
+    return recorded === "missing";
+  }
 }
 
 /** Record a successfully selected module as delivered by this generation. */
@@ -1101,32 +1945,6 @@ function markCachedSourceServed(
 }
 
 /**
- * Build the input-hash snapshot stored alongside a fresh compiler result.
- *
- * Hashes every file under the project directory (the exact universe
- * {@link matchesCachedSource} re-hashes to validate), then overlays the
- * in-memory source for the module that triggered the compile so unsaved editor
- * content is captured correctly.
- *
- * Only the project's own files are hashed. Out-of-walk program inputs the
- * compiler also read (`node_modules` declarations, sibling-package sources) are
- * deliberately excluded: the validator never reproduces those keys, so keying
- * them here would make every snapshot comparison fail and the cache never hit.
- */
-function collectInputHashes(props: {
-  currentFile: string;
-  currentSource: string;
-  projectRoot: string;
-}): Record<string, string> {
-  const identities = createHostPathIdentityContext();
-  const hashes = collectProjectInputHashes(props.projectRoot, identities);
-  // Overlay the in-memory source so unsaved edits invalidate the cache.
-  hashes[toProjectKey(props.projectRoot, props.currentFile, identities)] =
-    hashText(props.currentSource);
-  return hashes;
-}
-
-/**
  * Hash every input file under `projectRoot` (the same walk universe
  * {@link matchesCachedSource} validates against), keyed by project-relative
  * slash path. Exported so hosts without a per-build boundary (`@ttsc/metro`)
@@ -1135,19 +1953,51 @@ function collectInputHashes(props: {
 export function collectProjectInputHashes(
   projectRoot: string,
   identities: FilesystemPathIdentityContext = createHostPathIdentityContext(),
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): Record<string, string> {
+  return collectProjectInputSnapshot(projectRoot, identities, filesystem)
+    .hashes;
+}
+
+/** Hash project files and snapshot the directory topology in one walk. */
+function collectProjectInputSnapshot(
+  projectRoot: string,
+  identities: FilesystemPathIdentityContext,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): {
+  complete: boolean;
+  fileSignatures: Record<string, string>;
+  hashes: Record<string, string>;
+  projectDirectories: TtscProjectDirectorySnapshot[];
+} {
   const hashes: Record<string, string> = {};
-  for (const file of listProjectInputFiles(projectRoot)) {
+  const fileSignatures: Record<string, string> = {};
+  const walked = walkProjectInputs(projectRoot, filesystem);
+  let complete = walked.complete;
+  for (const file of walked.files) {
     try {
-      hashes[toProjectKey(projectRoot, file, identities)] = hashText(
-        fs.readFileSync(file),
-      );
+      const before = inputMetadataSignature(file, filesystem);
+      const contents = filesystem.readFile(file);
+      const after = inputMetadataSignature(file, filesystem);
+      const key = toProjectKey(projectRoot, file, identities);
+      hashes[key] = hashText(contents);
+      if (before === undefined || after === undefined || before !== after) {
+        complete = false;
+      } else {
+        fileSignatures[key] = after;
+      }
     } catch {
       // File watchers may observe a transform while another process is moving
       // or deleting files. The missing key invalidates older cache entries.
+      complete = false;
     }
   }
-  return hashes;
+  return {
+    complete,
+    fileSignatures,
+    hashes,
+    projectDirectories: walked.directories,
+  };
 }
 
 /**
@@ -1158,17 +2008,46 @@ export function collectProjectInputHashes(
  * unbounded call-stack depth on deep project trees. The result is sorted so
  * that hash comparisons are deterministic across OS-level directory orderings.
  */
-function listProjectInputFiles(root: string): string[] {
-  const out: string[] = [];
+function walkProjectInputs(
+  root: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): {
+  complete: boolean;
+  directories: TtscProjectDirectorySnapshot[];
+  files: string[];
+} {
+  let complete = true;
+  const directories: TtscProjectDirectorySnapshot[] = [];
+  const files: string[] = [];
   const stack = [root];
   while (stack.length !== 0) {
     const current = stack.pop()!;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
+    const before = projectDirectorySignature(current, filesystem);
+    if (before === undefined) {
+      complete = false;
       continue;
     }
+    let entries: fs.Dirent[];
+    try {
+      entries = filesystem.readdir(current);
+    } catch {
+      complete = false;
+      continue;
+    }
+    const after = projectDirectorySignature(current, filesystem);
+    if (after === undefined || before !== after) {
+      complete = false;
+    }
+    directories.push({
+      path: current,
+      // If membership moved during enumeration, force the next delivery to
+      // replace this generation instead of blessing a torn directory/file
+      // snapshot as stable.
+      signature:
+        after !== undefined && before === after
+          ? after
+          : `unstable:${before}:${after ?? "missing"}`,
+    });
     for (const entry of entries) {
       if (isIgnoredProjectDirectory(entry.name)) {
         continue;
@@ -1177,34 +2056,408 @@ function listProjectInputFiles(root: string): string[] {
       if (entry.isDirectory()) {
         stack.push(file);
       } else if (entry.isFile()) {
-        out.push(file);
+        files.push(file);
       }
     }
   }
-  out.sort();
-  return out;
+  directories.sort((left, right) => left.path.localeCompare(right.path));
+  files.sort();
+  return { complete, directories, files };
+}
+
+/** Return a cheap identity for one directory's immediate membership. */
+function projectDirectorySignature(
+  directory: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string | undefined {
+  try {
+    const stats = filesystem.statBigInt(directory);
+    if (!stats.isDirectory()) {
+      return undefined;
+    }
+    return [
+      stats.dev,
+      stats.ino,
+      stats.mode,
+      stats.size,
+      stats.mtimeNs,
+      stats.ctimeNs,
+    ].join(":");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Compare two deterministic project-directory membership snapshots. */
+function sameProjectDirectories(
+  left: readonly TtscProjectDirectorySnapshot[],
+  right: readonly TtscProjectDirectorySnapshot[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (directory, index) =>
+        directory.path === right[index]?.path &&
+        directory.signature === right[index]?.signature,
+    )
+  );
+}
+
+/** Watch every walked directory for membership changes after generation. */
+async function createProjectMutationTracker(
+  directories: readonly TtscProjectDirectorySnapshot[],
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): Promise<TtscProjectMutationTracker> {
+  const tracker: TtscProjectMutationTracker = {
+    close: () => undefined,
+    failed: false,
+    membershipChanged: false,
+  };
+  if (process.platform === "win32") {
+    await registerWindowsProjectMutationTracker(
+      tracker,
+      directories.map((directory) => ({ directory: directory.path })),
+      false,
+      filesystem,
+    );
+    return tracker;
+  }
+  const watchers: fs.FSWatcher[] = [];
+  tracker.close = () => {
+    for (const watcher of watchers) watcher.close();
+    watchers.length = 0;
+  };
+  for (const directory of directories) {
+    try {
+      const watcher = fs.watch(
+        directory.path,
+        { persistent: false },
+        (eventType) => {
+          if (eventType === "rename") tracker.membershipChanged = true;
+        },
+      );
+      watcher.on("error", () => {
+        tracker.failed = true;
+      });
+      watchers.push(watcher);
+    } catch {
+      tracker.failed = true;
+    }
+  }
+  return tracker;
+}
+
+/** Watch exact universal inputs, or their nearest existing parent if missing. */
+async function createHostInputMutationTracker(
+  inputs: readonly string[],
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): Promise<TtscProjectMutationTracker> {
+  const identities = createHostPathIdentityContext(filesystem);
+  const namesByDirectory = new Map<
+    string,
+    { directory: string; names: Set<string> }
+  >();
+  for (const input of inputs) {
+    const absolute = path.resolve(input);
+    const probe = filesystem.exists(absolute)
+      ? { directory: path.dirname(absolute), name: path.basename(absolute) }
+      : missingPathProbe(absolute, filesystem);
+    const directoryIdentity = identities.resolve(probe.directory);
+    let location = namesByDirectory.get(directoryIdentity.key);
+    if (location === undefined) {
+      location = {
+        directory: directoryIdentity.path,
+        names: new Set<string>(),
+      };
+      namesByDirectory.set(directoryIdentity.key, location);
+    }
+    location.names.add(
+      normalizeHostInputName(
+        probe.name,
+        identities.caseSensitive(directoryIdentity.path),
+      ),
+    );
+  }
+  const locations = [...namesByDirectory.values()].map((location) => ({
+    directory: location.directory,
+    names: [...location.names],
+  }));
+  const tracker: TtscProjectMutationTracker = {
+    close: () => undefined,
+    failed: false,
+    membershipChanged: false,
+  };
+  if (process.platform === "win32") {
+    await registerWindowsProjectMutationTracker(
+      tracker,
+      locations,
+      true,
+      filesystem,
+    );
+    return tracker;
+  }
+  const watchers: fs.FSWatcher[] = [];
+  tracker.close = () => {
+    for (const watcher of watchers) watcher.close();
+    watchers.length = 0;
+  };
+  for (const location of locations) {
+    try {
+      const names = new Set(location.names);
+      const caseSensitive = identities.caseSensitive(location.directory);
+      const watcher = fs.watch(
+        location.directory,
+        { persistent: false },
+        (_eventType, filename) => {
+          const reported =
+            filename === null
+              ? null
+              : normalizeHostInputName(String(filename), caseSensitive);
+          if (reported === null || names.has(reported)) {
+            tracker.membershipChanged = true;
+          }
+        },
+      );
+      watcher.on("error", () => {
+        tracker.failed = true;
+      });
+      watchers.push(watcher);
+    } catch {
+      tracker.failed = true;
+    }
+  }
+  return tracker;
+}
+
+interface WindowsProjectMutationBroker {
+  child: ChildProcess;
+  nextId: number;
+  pendingRegistrations: number;
+  trackers: Map<
+    number,
+    {
+      ready: () => void;
+      tracker: TtscProjectMutationTracker;
+    }
+  >;
+}
+
+let windowsProjectMutationBroker: WindowsProjectMutationBroker | undefined;
+
+interface WindowsMutationLocation {
+  directory: string;
+  names?: string[];
+}
+
+/**
+ * Register directory watches in an isolated Windows process.
+ *
+ * Node's Windows fs-event backend can assert in native code when a watched
+ * temporary tree is deleted. Isolation turns that unrecoverable process abort
+ * into an ordinary broker exit and a conservative cache miss in the host.
+ */
+async function registerWindowsProjectMutationTracker(
+  tracker: TtscProjectMutationTracker,
+  locations: readonly WindowsMutationLocation[],
+  allEvents: boolean,
+  filesystem: TtscTransformFilesystemOperations,
+): Promise<void> {
+  const broker = getWindowsProjectMutationBroker();
+  const normalized = locations.map((location) => {
+    let directory: string;
+    try {
+      directory = filesystem.realpath(location.directory);
+    } catch {
+      directory = path.resolve(location.directory);
+    }
+    return {
+      directory,
+      ...(location.names === undefined ? {} : { names: location.names }),
+    };
+  });
+  broker.pendingRegistrations += 1;
+  broker.child.ref();
+  broker.child.channel?.ref();
+  const id = broker.nextId++;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+  broker.trackers.set(id, { ready: resolveReady, tracker });
+  tracker.close = () => {
+    const active = broker.trackers.get(id);
+    if (active === undefined) return;
+    broker.trackers.delete(id);
+    active.ready();
+    broker.child.send?.({ id, op: "remove" });
+    if (broker.trackers.size === 0) {
+      broker.child.disconnect?.();
+      broker.child.kill();
+      if (windowsProjectMutationBroker === broker) {
+        windowsProjectMutationBroker = undefined;
+      }
+    }
+  };
+  broker.child.send?.({
+    allEvents,
+    locations: normalized,
+    id,
+    op: "add",
+  });
+  try {
+    await ready;
+  } finally {
+    broker.pendingRegistrations -= 1;
+    if (broker.pendingRegistrations === 0) {
+      broker.child.unref();
+      broker.child.channel?.unref();
+    }
+  }
+}
+
+function getWindowsProjectMutationBroker(): WindowsProjectMutationBroker {
+  if (windowsProjectMutationBroker !== undefined) {
+    return windowsProjectMutationBroker;
+  }
+  const child = spawn(process.execPath, ["-e", WINDOWS_WATCH_BROKER_SOURCE], {
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    windowsHide: true,
+  });
+  const broker: WindowsProjectMutationBroker = {
+    child,
+    nextId: 1,
+    pendingRegistrations: 0,
+    trackers: new Map(),
+  };
+  const fail = (): void => {
+    for (const registration of broker.trackers.values()) {
+      registration.tracker.failed = true;
+      registration.ready();
+    }
+    broker.trackers.clear();
+    if (windowsProjectMutationBroker === broker) {
+      windowsProjectMutationBroker = undefined;
+    }
+  };
+  child.on("error", fail);
+  child.on("exit", fail);
+  child.on("message", (message: unknown) => {
+    if (message === null || typeof message !== "object") return;
+    const record = message as {
+      failed?: boolean;
+      id?: number;
+      ready?: boolean;
+    };
+    if (typeof record.id !== "number") return;
+    const registration = broker.trackers.get(record.id);
+    if (registration === undefined) return;
+    if (record.failed === true) registration.tracker.failed = true;
+    if (record.ready === true) registration.ready();
+    if (record.ready !== true && record.failed !== true) {
+      registration.tracker.membershipChanged = true;
+    }
+  });
+  windowsProjectMutationBroker = broker;
+  return broker;
+}
+
+const WINDOWS_WATCH_BROKER_SOURCE = [
+  'const fs = require("node:fs");',
+  "const groups = new Map();",
+  'process.on("message", (message) => {',
+  '  if (message.op === "remove") {',
+  "    close(message.id);",
+  "    return;",
+  "  }",
+  '  if (message.op !== "add") return;',
+  "  const watchers = [];",
+  "  let failed = false;",
+  "  for (const location of message.locations) {",
+  "    try {",
+  "      const names = location.names === undefined ? undefined : new Set(location.names.map((name) => name.toLowerCase()));",
+  "      const watcher = fs.watch(location.directory, { persistent: false }, (event, filename) => {",
+  "        const matches = names === undefined || filename === null || names.has(String(filename).toLowerCase());",
+  '        if (matches && (message.allEvents || event === "rename")) process.send?.({ id: message.id });',
+  "      });",
+  '      watcher.on("error", () => process.send?.({ failed: true, id: message.id }));',
+  "      watchers.push(watcher);",
+  "    } catch {",
+  "      failed = true;",
+  "    }",
+  "  }",
+  "  groups.set(message.id, watchers);",
+  "  process.send?.({ failed, id: message.id, ready: true });",
+  "});",
+  'process.on("disconnect", () => {',
+  "  for (const id of groups.keys()) close(id);",
+  "  process.exit(0);",
+  "});",
+  "function close(id) {",
+  "  for (const watcher of groups.get(id) ?? []) watcher.close();",
+  "  groups.delete(id);",
+  "}",
+].join("\n");
+
+/** Report whether live directory notifications preserve project membership. */
+function matchesProjectMembership(cached: TtscCachedProjectTransform): boolean {
+  const tracker = cached.projectMutationTracker;
+  return (
+    tracker !== undefined &&
+    tracker.failed === false &&
+    tracker.membershipChanged === false
+  );
+}
+
+/**
+ * Yield once before persistent validation so synchronous edits can reach the
+ * directory watchers that guard membership. Concurrent sibling deliveries share
+ * the same barrier.
+ */
+async function settleProjectMutationEvents(
+  cached: TtscCachedProjectTransform,
+): Promise<void> {
+  const trackers = [
+    cached.projectMutationTracker,
+    cached.hostInputMutationTracker,
+  ].filter(
+    (tracker): tracker is TtscProjectMutationTracker => tracker !== undefined,
+  );
+  await Promise.all(
+    trackers.map(async (tracker) => {
+      tracker.settle ??= new Promise<void>((resolve) => {
+        const settled = () => {
+          tracker.settle = undefined;
+          resolve();
+        };
+        if (process.platform === "win32") setTimeout(settled, 10);
+        else setImmediate(settled);
+      });
+      await tracker.settle;
+    }),
+  );
 }
 
 /**
  * Report whether an absolute `file` belongs to the project walk universe of
  * `root`: it lies under `root`, every component exists without traversing a
  * symbolic link, the leaf is a regular file, and no segment of the relative
- * path is ignored. The predicate mirrors {@link listProjectInputFiles} exactly,
- * so "walk-visible" here means "hashed by {@link collectProjectInputHashes}".
+ * path is ignored. The predicate mirrors {@link walkProjectInputs} exactly, so
+ * "walk-visible" here means "hashed by {@link collectProjectInputHashes}".
  * Missing paths and files reached through symlinks or Windows junctions are
  * out-of-walk inputs that only the reference graph can prove relevant.
  */
 export function isProjectWalkPath(
   root: string,
   file: string,
-  identities: FilesystemPathIdentityContext = createHostPathIdentityContext(),
+  _identities: FilesystemPathIdentityContext = createHostPathIdentityContext(),
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): boolean {
-  if (!identities.isWithin(root, file)) {
-    return false;
-  }
-  const rootKey = pathIdentityKey(root, identities);
-  const fileKey = pathIdentityKey(file, identities);
-  const relative = fileKey.slice(rootKey.length).replace(/^[/\\]+/, "");
+  // Walk membership is lexical. Resolving `file` to physical identity first
+  // would turn `root/alias/value.ts` into `root/target/value.ts`, hide the
+  // symlink segment from the lstat loop below, and falsely claim the project
+  // walk hashed a path it deliberately never followed.
+  const resolvedRoot = path.resolve(root);
+  const relative = path.relative(resolvedRoot, path.resolve(file));
   if (
     relative.length === 0 ||
     relative === ".." ||
@@ -1217,12 +2470,12 @@ export function isProjectWalkPath(
   if (segments.some(isIgnoredProjectDirectory)) {
     return false;
   }
-  let current = path.resolve(root);
+  let current = resolvedRoot;
   for (let index = 0; index < segments.length; ++index) {
     current = path.join(current, segments[index]!);
-    let stats: fs.Stats;
+    let stats: fs.BigIntStats;
     try {
-      stats = fs.lstatSync(current);
+      stats = filesystem.lstat(current);
     } catch {
       return false;
     }
@@ -1239,28 +2492,46 @@ export function isProjectWalkPath(
 
 /**
  * Hash a list of absolute out-of-walk input paths: content SHA-256 for a
- * readable file, a stable `missing` marker otherwise. Keys use filesystem
- * identity so case-only spellings share one snapshot entry, while reads retain
- * the original path supplied by the compiler. The marker is state, not an error
- * — a recorded input disappearing (or reappearing) must change the comparison
- * exactly like a content edit. Exported so `@ttsc/metro` can re-hash its
- * recorded snapshot with identical semantics at cache-key time.
+ * readable file, a stable directory-kind digest for a directory candidate, and
+ * a stable `missing` marker otherwise. Keys use filesystem identity so
+ * case-only spellings share one snapshot entry, while reads retain the original
+ * path supplied by the compiler. The marker is state, not an error — a recorded
+ * input disappearing (or reappearing) must change the comparison exactly like a
+ * content edit. Exported so `@ttsc/metro` can re-hash its recorded snapshot
+ * with identical semantics at cache-key time.
  */
 export function collectExternalInputHashes(
   paths: readonly string[],
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): Record<string, string> {
   const hashes: Record<string, string> = {};
-  const identities = createHostPathIdentityContext();
+  const identities = createHostPathIdentityContext(filesystem);
   for (const file of paths) {
     const identity = pathIdentityKey(file, identities);
     if (identity in hashes) {
       continue;
     }
-    try {
-      hashes[identity] = hashText(fs.readFileSync(file));
-    } catch {
-      hashes[identity] = "missing";
-    }
+    hashes[identity] = hostInputStateHash(file, filesystem) ?? "missing";
+  }
+  return hashes;
+}
+
+/** Re-hash a cached mixed graph/dependency input set with its owning codec. */
+function collectCachedExternalInputHashes(
+  cached: TtscCachedProjectTransform,
+): Record<string, string> {
+  const hashes: Record<string, string> = {};
+  const state = envelopeDerivation(cached);
+  const graphRealpaths = cached.externalInputRealpaths ?? {};
+  const filesystem = resultFilesystem(cached.result);
+  for (const file of cached.externalInputPaths ??
+    Object.keys(cached.externalInputHashes ?? {})) {
+    const identity = derivationIdentity(state, file);
+    if (identity in hashes) continue;
+    hashes[identity] =
+      (Object.prototype.hasOwnProperty.call(graphRealpaths, identity)
+        ? graphInputStateHash(file, filesystem)
+        : hostInputStateHash(file, filesystem)) ?? "missing";
   }
   return hashes;
 }
@@ -1274,16 +2545,14 @@ export function collectExternalInputHashes(
  * that are still missing remain in this set even under the project root: the
  * first walk cannot hash a file that has not been created yet.
  *
- * A `dependenciesComplete` declaration deliberately does not narrow this set,
- * unlike the per-file watch derivation. This cache replays one whole envelope,
- * so its validity condition is the union over every file the envelope carries
- * rather than one file's inputs; a miss here costs a re-transform, never a
- * stale output; and it is the layer that re-runs the plugin's analysis, which
- * is how a widened declaration is ever learned. The narrowing that matters
- * lands at the bundler boundary through {@link selectWatchInputs}, which is what
- * feeds persistent caches and watch graphs.
+ * A `dependenciesComplete` declaration deliberately does not narrow the stored
+ * set: other files in the same whole-project result can still own the omitted
+ * members. Persistent validation selects the requested file's subset through
+ * {@link selectWatchInputs}, while graph-free envelopes use this union as their
+ * conservative fallback.
  */
 function selectExternalInputPaths(props: {
+  filesystem?: TtscTransformFilesystemOperations;
   projectRoot: string;
   result: ITtscCompilerTransformation;
   temporaryTsconfig?: string;
@@ -1292,7 +2561,8 @@ function selectExternalInputPaths(props: {
     return [];
   }
   const members: string[] = [];
-  const identities = createHostPathIdentityContext();
+  const filesystem = props.filesystem ?? DEFAULT_FILESYSTEM_OPERATIONS;
+  const identities = createHostPathIdentityContext(filesystem);
   const resolutionCandidates = new Set<string>();
   const graph = props.result.graph;
   if (graph !== undefined) {
@@ -1326,6 +2596,19 @@ function selectExternalInputPaths(props: {
       members.push(...entries);
     }
   }
+  if (Array.isArray(props.result.hostInputs)) {
+    for (const input of props.result.hostInputs) {
+      members.push(input);
+      if (typeof input === "string" && input.length !== 0) {
+        // Plugin discovery inputs deliberately include absent config and
+        // resolution probes. A project walk cannot snapshot a path that does
+        // not exist yet, even when its spelling lies below projectRoot.
+        resolutionCandidates.add(
+          pathIdentityKey(path.resolve(props.projectRoot, input), identities),
+        );
+      }
+    }
+  }
   const excluded =
     props.temporaryTsconfig === undefined
       ? undefined
@@ -1337,18 +2620,21 @@ function selectExternalInputPaths(props: {
       continue;
     }
     const absolute = path.resolve(props.projectRoot, member);
+    const spelling = path.resolve(absolute);
     const identity = pathIdentityKey(absolute, identities);
     const missingCandidate =
-      resolutionCandidates.has(identity) && !fs.existsSync(absolute);
+      resolutionCandidates.has(identity) && !filesystem.exists(absolute);
     if (
       identity === excluded ||
-      seen.has(identity) ||
+      seen.has(spelling) ||
       (!missingCandidate &&
-        isProjectWalkPath(props.projectRoot, absolute, identities))
+        isProjectWalkPath(props.projectRoot, absolute, identities, filesystem))
     ) {
       continue;
     }
-    seen.add(identity);
+    // Preserve distinct lexical aliases even when they currently select the
+    // same physical file. A later retarget must validate the alias itself.
+    seen.add(spelling);
     output.push(absolute);
   }
   output.sort();
@@ -1396,43 +2682,103 @@ async function transformProject(props: {
   compilerOptions: Record<string, unknown>;
   currentFile: string;
   currentSource: string;
+  filesystem: TtscTransformFilesystemOperations;
   plugins?: ResolvedTtscUnpluginOptions["plugins"];
+  trackProjectMembership: boolean;
   tsconfig: string;
 }): Promise<TtscCachedProjectTransform> {
-  const configured = createTransformTsconfig(props);
   const projectRoot = path.dirname(props.tsconfig);
+  const scratchDirectory = createTransformScratchDirectory(
+    projectRoot,
+    props.filesystem,
+  );
+  let tracker: TtscProjectMutationTracker | undefined;
+  let retainTracker = false;
+  let hostInputTracker: TtscProjectMutationTracker | undefined;
   try {
-    const result = new TtscCompiler({
-      cwd: projectRoot,
-      // The generated tsconfig (if any) lives in the system temp directory,
-      // so declare the real project as the plugin config anchor: utility
-      // plugin config discovery (banner.config.*, strip.config.*,
-      // lint.config.*) and relative configFile resolution walk the project,
-      // never the temp tree. In the passthrough case this equals the
-      // tsconfig's own directory, the default anchor.
-      pluginConfigDir: projectRoot,
-      plugins: props.plugins,
-      projectRoot,
-      tsconfig: configured.path,
-    }).transform();
+    const configured = createTransformTsconfig(props, scratchDirectory);
     const temporaryTsconfig =
       configured.path === props.tsconfig ? undefined : configured.path;
-    const externalInputPaths = selectExternalInputPaths({
+    const identities = createHostPathIdentityContext(props.filesystem);
+    const before = collectProjectInputSnapshot(
+      projectRoot,
+      identities,
+      props.filesystem,
+    );
+    tracker = props.trackProjectMembership
+      ? await createProjectMutationTracker(
+          before.projectDirectories,
+          props.filesystem,
+        )
+      : undefined;
+    const result = withTransformScratchEnvironment(scratchDirectory, () =>
+      new TtscCompiler({
+        cwd: projectRoot,
+        // The generated tsconfig (if any) lives outside the project directory,
+        // so declare the real project as the plugin config anchor: utility
+        // plugin config discovery (banner.config.*, strip.config.*,
+        // lint.config.*) and relative configFile resolution walk the project,
+        // never the temp tree. In the passthrough case this equals the
+        // tsconfig's own directory, the default anchor.
+        pluginConfigDir: projectRoot,
+        plugins: props.plugins,
+        projectRoot,
+        tsconfig: configured.path,
+        env: transformScratchEnvironment(scratchDirectory),
+      }).transform(),
+    );
+    TRANSFORM_RESULT_FILESYSTEM.set(result, props.filesystem);
+    const persistentHostInputs = selectPersistentHostInputs({
+      filesystem: props.filesystem,
       projectRoot,
       result,
       temporaryTsconfig,
     });
-    return {
+    hostInputTracker = props.trackProjectMembership
+      ? await createHostInputMutationTracker(
+          persistentHostInputs,
+          props.filesystem,
+        )
+      : undefined;
+    const externalInputPaths = selectExternalInputPaths({
+      filesystem: props.filesystem,
+      projectRoot,
+      result,
+      temporaryTsconfig,
+    });
+    const inputSnapshot = collectProjectInputSnapshot(
+      projectRoot,
+      identities,
+      props.filesystem,
+    );
+    let stableProjectSnapshot =
+      before.complete &&
+      inputSnapshot.complete &&
+      sameHashes(before.hashes, inputSnapshot.hashes) &&
+      sameHashes(before.fileSignatures, inputSnapshot.fileSignatures) &&
+      sameProjectDirectories(
+        before.projectDirectories,
+        inputSnapshot.projectDirectories,
+      ) &&
+      tracker?.failed !== true &&
+      tracker?.membershipChanged !== true &&
+      hostInputTracker?.failed !== true &&
+      hostInputTracker?.membershipChanged !== true;
+    // Overlay the in-memory source only after proving the two on-disk snapshots
+    // stable; an unsaved editor buffer must not look like a compile-time race.
+    inputSnapshot.hashes[
+      toProjectKey(projectRoot, props.currentFile, identities)
+    ] = hashText(props.currentSource);
+    const cached: TtscCachedProjectTransform = {
       // Capture the out-of-walk input hashes while the generation is fresh so
       // cache validation can re-check them; computed before dispose so the
       // exclusion of the temp-dir tsconfig is the only reason it never keys.
-      externalInputHashes: collectExternalInputHashes(externalInputPaths),
+      externalInputHashes: {},
+      externalInputRealpaths: {},
       externalInputPaths,
-      inputHashes: collectInputHashes({
-        currentFile: props.currentFile,
-        currentSource: props.currentSource,
-        projectRoot,
-      }),
+      inputHashes: inputSnapshot.hashes,
+      projectDirectories: inputSnapshot.projectDirectories,
+      projectSnapshotComplete: false,
       projectRoot,
       result,
       servedFiles: new Set(),
@@ -1441,16 +2787,72 @@ async function transformProject(props: {
       // but deleted file would invalidate every persistent-cache snapshot.
       ...(temporaryTsconfig === undefined ? {} : { temporaryTsconfig }),
     };
+    const externalInputSnapshot = captureExternalInputSnapshot(
+      cached,
+      externalInputPaths,
+    );
+    cached.externalInputHashes = externalInputSnapshot.hashes;
+    cached.externalInputRealpaths = externalInputSnapshot.realpaths;
+    stableProjectSnapshot =
+      stableProjectSnapshot &&
+      matchesCompilerGraphInputProofs(cached) &&
+      externalInputSnapshot.complete &&
+      captureUniversalHostInputValidation(cached, props.currentFile) !==
+        undefined;
+    cached.projectSnapshotComplete = stableProjectSnapshot;
+    if (stableProjectSnapshot && tracker !== undefined) {
+      cached.projectMutationTracker = tracker;
+    }
+    if (stableProjectSnapshot && hostInputTracker !== undefined) {
+      cached.hostInputMutationTracker = hostInputTracker;
+    }
+    retainTracker =
+      stableProjectSnapshot &&
+      tracker !== undefined &&
+      hostInputTracker !== undefined;
+    return cached;
   } finally {
-    configured.dispose();
+    try {
+      if (!retainTracker && tracker !== undefined) {
+        tracker.close();
+      }
+    } finally {
+      try {
+        if (!retainTracker && hostInputTracker !== undefined) {
+          hostInputTracker.close();
+        }
+      } finally {
+        fs.rmSync(scratchDirectory, { force: true, recursive: true });
+      }
+    }
   }
 }
 
-function createTransformTsconfig(props: {
-  aliasPaths: Record<string, string[]>;
-  compilerOptions: Record<string, unknown>;
-  tsconfig: string;
-}): { path: string; dispose: () => void } {
+/** Exclude the disposed overlay tsconfig from live host-input tracking. */
+function selectPersistentHostInputs(props: {
+  filesystem: TtscTransformFilesystemOperations;
+  projectRoot: string;
+  result: ITtscCompilerTransformation;
+  temporaryTsconfig?: string;
+}): string[] {
+  if (props.result.type === "exception") return [];
+  const inputs = selectListedFiles(props.projectRoot, props.result.hostInputs);
+  if (props.temporaryTsconfig === undefined) return inputs;
+  const identities = createHostPathIdentityContext(props.filesystem);
+  const temporary = pathIdentityKey(props.temporaryTsconfig, identities);
+  return inputs.filter(
+    (input) => pathIdentityKey(input, identities) !== temporary,
+  );
+}
+
+function createTransformTsconfig(
+  props: {
+    aliasPaths: Record<string, string[]>;
+    compilerOptions: Record<string, unknown>;
+    tsconfig: string;
+  },
+  scratchDirectory: string,
+): { path: string } {
   const compilerOptions = normalizeCompilerOptionsForGeneratedTsconfig(
     {
       ...props.compilerOptions,
@@ -1459,14 +2861,10 @@ function createTransformTsconfig(props: {
     path.dirname(props.tsconfig),
   );
   if (Object.keys(compilerOptions).length === 0) {
-    return {
-      path: props.tsconfig,
-      dispose: () => undefined,
-    };
+    return { path: props.tsconfig };
   }
 
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-unplugin-"));
-  const file = path.join(directory, "tsconfig.json");
+  const file = path.join(scratchDirectory, "tsconfig.json");
   fs.writeFileSync(
     file,
     JSON.stringify(
@@ -1479,19 +2877,134 @@ function createTransformTsconfig(props: {
     ),
     "utf8",
   );
+  return { path: file };
+}
+
+/** Create compiler scratch storage outside the project snapshot and watchers. */
+function createTransformScratchDirectory(
+  projectRoot: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string {
+  const root = path.resolve(projectRoot);
+  const canonicalRoot = filesystem.realpath(root);
+  const platformTemp =
+    process.platform === "win32" && process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, "Temp")
+      : "/tmp";
+  const candidates = [
+    os.tmpdir(),
+    platformTemp,
+    path.dirname(root),
+    os.homedir(),
+  ];
+  const canonicalCandidates = new Set<string>();
+  let failure: unknown;
+  for (const candidate of new Set(candidates.map((dir) => path.resolve(dir)))) {
+    if (pathIsWithin(candidate, root)) continue;
+    let canonicalCandidate: string;
+    try {
+      canonicalCandidate = filesystem.realpath(candidate);
+    } catch (error) {
+      failure = error;
+      continue;
+    }
+    if (
+      pathIsWithin(canonicalCandidate, canonicalRoot) ||
+      canonicalCandidates.has(canonicalCandidate)
+    ) {
+      continue;
+    }
+    canonicalCandidates.add(canonicalCandidate);
+    let directory: string;
+    try {
+      directory = fs.mkdtempSync(
+        path.join(canonicalCandidate, "ttsc-unplugin-"),
+      );
+    } catch (error) {
+      failure = error;
+      continue;
+    }
+    let canonicalDirectory: string;
+    try {
+      canonicalDirectory = filesystem.realpath(directory);
+    } catch (error) {
+      try {
+        fs.rmdirSync(directory);
+      } catch (cleanupError) {
+        throw cleanupError;
+      }
+      failure = error;
+      continue;
+    }
+    // Use the postflight canonical spelling from this point onward. Returning
+    // the candidate-relative spelling would let another process retarget its
+    // parent symlink/junction after validation, redirecting compiler writes or
+    // the final recursive removal into the project.
+    if (!pathIsWithin(canonicalDirectory, canonicalRoot)) {
+      return canonicalDirectory;
+    }
+    // Refuse the result and synchronously remove only our empty random child
+    // through the identity that the postflight check just classified.
+    fs.rmdirSync(canonicalDirectory);
+  }
+  throw (
+    failure ??
+    new Error("ttsc: no temporary directory exists outside the project")
+  );
+}
+
+function pathIsWithin(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
+/** Route all compiler/plugin scratch to one owned directory outside project. */
+function transformScratchEnvironment(directory: string): NodeJS.ProcessEnv {
   return {
-    path: file,
-    dispose: () => fs.rmSync(directory, { force: true, recursive: true }),
+    ...process.env,
+    TEMP: directory,
+    TMP: directory,
+    TMPDIR: directory,
   };
+}
+
+/** Scope parent-process temp consumers to the same owned scratch directory. */
+function withTransformScratchEnvironment<T>(
+  scratchDirectory: string,
+  callback: () => T,
+): T {
+  const environment = transformScratchEnvironment(scratchDirectory);
+  const previous = {
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    TMPDIR: process.env.TMPDIR,
+  };
+  process.env.TEMP = environment.TEMP;
+  process.env.TMP = environment.TMP;
+  process.env.TMPDIR = environment.TMPDIR;
+  try {
+    return callback();
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 }
 
 /**
  * Resolve all relative paths inside `compilerOptions` against `tsconfigDir`.
  *
- * The generated tsconfig lives in a system temp directory, so any relative path
- * (e.g. `"outDir": "../dist"`) that was meaningful relative to the original
- * tsconfig must be converted to an absolute path before writing the generated
- * file. Otherwise TypeScript-Go resolves it against the temp dir.
+ * The generated tsconfig lives in a temporary directory outside the project, so
+ * any relative path (e.g. `"outDir": "../dist"`) that was meaningful relative
+ * to the original tsconfig must be converted to an absolute path before writing
+ * the generated file. Otherwise TypeScript-Go resolves it against the temp
+ * dir.
  *
  * `paths` targets are absolutized for the same reason, with the extra twist
  * that TypeScript-Go rejects bare non-relative targets outright (TS5090) and
@@ -1826,7 +3339,11 @@ function formatUnknownError(error: unknown): string {
  * compiler will error if that file does not exist, which is the correct
  * behavior for a mis-configured project.
  */
-function resolveTsconfig(file: string, tsconfig?: string): string {
+function resolveTsconfig(
+  file: string,
+  tsconfig?: string,
+  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+): string {
   if (tsconfig !== undefined) {
     return path.isAbsolute(tsconfig)
       ? tsconfig
@@ -1836,7 +3353,7 @@ function resolveTsconfig(file: string, tsconfig?: string): string {
   let current = path.dirname(file);
   while (true) {
     const candidate = path.join(current, "tsconfig.json");
-    if (fs.existsSync(candidate)) {
+    if (filesystem.exists(candidate)) {
       return candidate;
     }
     const parent = path.dirname(current);

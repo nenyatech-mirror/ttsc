@@ -36,7 +36,7 @@ test("the strip-types loader suppresses only the deliberate module warning", () 
     "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
     "--experimental-strip-types",
   ]);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-strip-types-"));
+  const root = createCanonicalTempDirectory("ttsc-strip-types-");
   try {
     const fixture = path.join(root, "fixture.ts");
     fs.writeFileSync(
@@ -63,6 +63,29 @@ test("the strip-types loader suppresses only the deliberate module warning", () 
     fs.rmSync(root, { force: true, recursive: true });
   }
 });
+
+/** Create fixture storage beneath the frozen physical system-temp parent. */
+function createCanonicalTempDirectory(prefix) {
+  const physicalParent = fs.realpathSync.native(os.tmpdir());
+  if (!fs.lstatSync(physicalParent).isDirectory()) {
+    throw new Error(
+      `check-flags: temporary directory parent is not a directory: ${physicalParent}`,
+    );
+  }
+  const directory = fs.mkdtempSync(path.join(physicalParent, prefix));
+  if (!fs.lstatSync(directory).isDirectory()) {
+    throw new Error(
+      `check-flags: temporary directory postflight is not a directory: ${directory}`,
+    );
+  }
+  const physicalDirectory = fs.realpathSync.native(directory);
+  if (path.dirname(physicalDirectory) !== physicalParent) {
+    throw new Error(
+      `check-flags: temporary directory escaped its physical parent: ${physicalDirectory}`,
+    );
+  }
+  return physicalDirectory;
+}
 
 test("the canonical flag generator enters through the targeted loader", () => {
   assert.equal(

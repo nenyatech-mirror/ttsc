@@ -5,7 +5,9 @@ import (
   "fmt"
   "os"
   "path/filepath"
+  "sort"
   "strings"
+  "sync"
 )
 
 // LinkedPluginsEnv is the environment variable ttsc sets to pass the JSON
@@ -98,6 +100,90 @@ type PluginContext struct {
   Cwd      string
   Entry    PluginEntry
   Tsconfig string
+
+  reportHostInput                func(string)
+  reportHostInputHash            func(string, *string)
+  reportHostInputHashUnknown     func(string)
+  reportHostInputRealpath        func(string, *string)
+  reportHostInputRealpathUnknown func(string)
+}
+
+// ReportHostInputHash declares the exact file state consumed by a native
+// plugin. hash is a lowercase SHA-256 digest for an observed file and nil for
+// a missing candidate. Conflicting observations are retained as host inputs
+// but omitted from PluginHostInputHashes, forcing persistent adapters to
+// decline narrow reuse without failing the transform.
+func (ctx PluginContext) ReportHostInputHash(file string, hash *string) {
+  if ctx.reportHostInputHash == nil || strings.TrimSpace(file) == "" {
+    return
+  }
+  if !filepath.IsAbs(file) {
+    file = filepath.Join(ctx.Cwd, file)
+  }
+  file = filepath.Clean(file)
+  if hash != nil && !isLowerSHA256(*hash) {
+    if ctx.reportHostInputHashUnknown != nil {
+      ctx.reportHostInputHashUnknown(file)
+    } else if ctx.reportHostInput != nil {
+      ctx.reportHostInput(file)
+    }
+    return
+  }
+  ctx.reportHostInputHash(file, hash)
+}
+
+// ReportHostInputRealpath declares the physical path resolved while a native
+// plugin consumed file. realpath is absolute for an observed path and nil for
+// a missing candidate. Conflicting observations remain host inputs but are
+// omitted from PluginHostInputRealpaths so adapters cannot attach an earlier
+// result to a retargeted symlink or junction.
+func (ctx PluginContext) ReportHostInputRealpath(file string, realpath *string) {
+  if ctx.reportHostInputRealpath == nil || strings.TrimSpace(file) == "" {
+    return
+  }
+  if !filepath.IsAbs(file) {
+    file = filepath.Join(ctx.Cwd, file)
+  }
+  file = filepath.Clean(file)
+  if realpath != nil {
+    if strings.TrimSpace(*realpath) == "" || !filepath.IsAbs(*realpath) {
+      if ctx.reportHostInputRealpathUnknown != nil {
+        ctx.reportHostInputRealpathUnknown(file)
+      } else if ctx.reportHostInput != nil {
+        ctx.reportHostInput(file)
+      }
+      return
+    }
+    resolved := filepath.Clean(*realpath)
+    realpath = &resolved
+  }
+  ctx.reportHostInputRealpath(file, realpath)
+}
+
+func isLowerSHA256(value string) bool {
+  if len(value) != 64 {
+    return false
+  }
+  for _, char := range value {
+    if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+      return false
+    }
+  }
+  return true
+}
+
+// ReportHostInput declares an absolute file whose content or presence was
+// consumed while the native plugin evaluated configuration. Native transform
+// envelopes expose the generation-wide union so persistent hosts can invalidate
+// without re-evaluating plugin config on the JavaScript side.
+func (ctx PluginContext) ReportHostInput(file string) {
+  if ctx.reportHostInput == nil || strings.TrimSpace(file) == "" {
+    return
+  }
+  if !filepath.IsAbs(file) {
+    file = filepath.Join(ctx.Cwd, file)
+  }
+  ctx.reportHostInput(filepath.Clean(file))
 }
 
 // SourcePreamblePlugin can inject source text before TypeScript-Go parses the
@@ -130,7 +216,242 @@ type EmitTransformPlugin interface {
 type linkedPluginState struct {
   cwd      string
   entries  []PluginEntry
+  inputs   *pluginHostInputScopes
   tsconfig string
+}
+
+// pluginHostInputScopes keeps one observation set per plugin hook. A hash from
+// one hook cannot prove another hook's same-file dependency when that hook only
+// reported the path, while ReportHostInput followed by ReportHostInputHash in
+// one hook remains one complete observation.
+type pluginHostInputScopes struct {
+  mu     sync.Mutex
+  scopes []*pluginHostInputs
+}
+
+type pluginHostInputs struct {
+  files     map[string]struct{}
+  hashes    map[string]pluginHostInputHash
+  realpaths map[string]pluginHostInputHash
+  mu        sync.Mutex
+}
+
+type pluginHostInputHash struct {
+  hash  *string
+  known bool
+}
+
+func newPluginHostInputScopes() *pluginHostInputScopes {
+  return &pluginHostInputScopes{}
+}
+
+func newPluginHostInputs() *pluginHostInputs {
+  return &pluginHostInputs{
+    files:     map[string]struct{}{},
+    hashes:    map[string]pluginHostInputHash{},
+    realpaths: map[string]pluginHostInputHash{},
+  }
+}
+
+func (inputs *pluginHostInputScopes) newScope() *pluginHostInputs {
+  scope := newPluginHostInputs()
+  if inputs == nil {
+    return scope
+  }
+  inputs.mu.Lock()
+  inputs.scopes = append(inputs.scopes, scope)
+  inputs.mu.Unlock()
+  return scope
+}
+
+func (inputs *pluginHostInputScopes) snapshot() []*pluginHostInputs {
+  if inputs == nil {
+    return nil
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  return append([]*pluginHostInputs(nil), inputs.scopes...)
+}
+
+func (inputs *pluginHostInputs) addHash(file string, hash *string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  previous, exists := inputs.hashes[file]
+  if !exists {
+    inputs.hashes[file] = pluginHostInputHash{hash: cloneStringPointer(hash), known: true}
+    return
+  }
+  if !previous.known || !sameStringPointer(previous.hash, hash) {
+    inputs.hashes[file] = pluginHostInputHash{known: false}
+  }
+}
+
+func (inputs *pluginHostInputs) invalidateHash(file string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  inputs.hashes[file] = pluginHostInputHash{known: false}
+}
+
+func (inputs *pluginHostInputs) addRealpath(file string, realpath *string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  previous, exists := inputs.realpaths[file]
+  if !exists {
+    inputs.realpaths[file] = pluginHostInputHash{hash: cloneStringPointer(realpath), known: true}
+    return
+  }
+  if !previous.known || !sameStringPointer(previous.hash, realpath) {
+    inputs.realpaths[file] = pluginHostInputHash{known: false}
+  }
+}
+
+func (inputs *pluginHostInputs) invalidateRealpath(file string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  inputs.files[file] = struct{}{}
+  inputs.realpaths[file] = pluginHostInputHash{known: false}
+}
+
+func cloneStringPointer(value *string) *string {
+  if value == nil {
+    return nil
+  }
+  cloned := *value
+  return &cloned
+}
+
+func sameStringPointer(left, right *string) bool {
+  if left == nil || right == nil {
+    return left == nil && right == nil
+  }
+  return *left == *right
+}
+
+func (inputs *pluginHostInputs) add(file string) {
+  if inputs == nil {
+    return
+  }
+  inputs.mu.Lock()
+  inputs.files[file] = struct{}{}
+  inputs.mu.Unlock()
+}
+
+func (inputs *pluginHostInputs) snapshot() (map[string]struct{}, map[string]pluginHostInputHash, map[string]pluginHostInputHash) {
+  if inputs == nil {
+    return nil, nil, nil
+  }
+  inputs.mu.Lock()
+  defer inputs.mu.Unlock()
+  files := make(map[string]struct{}, len(inputs.files))
+  for file := range inputs.files {
+    files[file] = struct{}{}
+  }
+  hashes := make(map[string]pluginHostInputHash, len(inputs.hashes))
+  for file, observation := range inputs.hashes {
+    hashes[file] = pluginHostInputHash{
+      hash:  cloneStringPointer(observation.hash),
+      known: observation.known,
+    }
+  }
+  realpaths := make(map[string]pluginHostInputHash, len(inputs.realpaths))
+  for file, observation := range inputs.realpaths {
+    realpaths[file] = pluginHostInputHash{
+      hash:  cloneStringPointer(observation.hash),
+      known: observation.known,
+    }
+  }
+  return files, hashes, realpaths
+}
+
+func (inputs *pluginHostInputScopes) list() []string {
+  union := map[string]struct{}{}
+  for _, scope := range inputs.snapshot() {
+    files, _, _ := scope.snapshot()
+    for file := range files {
+      union[file] = struct{}{}
+    }
+  }
+  files := make([]string, 0, len(union))
+  for file := range union {
+    files = append(files, file)
+  }
+  sort.Strings(files)
+  return files
+}
+
+func (inputs *pluginHostInputScopes) hashList() map[string]*string {
+  combined := map[string]pluginHostInputHash{}
+  for _, scope := range inputs.snapshot() {
+    files, hashes, _ := scope.snapshot()
+    for file := range files {
+      observation, exists := hashes[file]
+      if !exists || !observation.known {
+        combined[file] = pluginHostInputHash{known: false}
+        continue
+      }
+      previous, exists := combined[file]
+      if !exists {
+        combined[file] = observation
+      } else if !previous.known || !sameStringPointer(previous.hash, observation.hash) {
+        combined[file] = pluginHostInputHash{known: false}
+      }
+    }
+  }
+  hashes := map[string]*string{}
+  for file, observation := range combined {
+    if observation.known {
+      hashes[file] = cloneStringPointer(observation.hash)
+    }
+  }
+  if len(hashes) == 0 {
+    return nil
+  }
+  return hashes
+}
+
+func (inputs *pluginHostInputScopes) realpathList() map[string]*string {
+  combined := map[string]pluginHostInputHash{}
+  for _, scope := range inputs.snapshot() {
+    files, _, realpaths := scope.snapshot()
+    for file := range files {
+      observation, exists := realpaths[file]
+      if !exists || !observation.known {
+        combined[file] = pluginHostInputHash{known: false}
+        continue
+      }
+      previous, exists := combined[file]
+      if !exists {
+        combined[file] = observation
+      } else if !previous.known || !sameStringPointer(previous.hash, observation.hash) {
+        combined[file] = pluginHostInputHash{known: false}
+      }
+    }
+  }
+  realpaths := map[string]*string{}
+  for file, observation := range combined {
+    if observation.known {
+      realpaths[file] = cloneStringPointer(observation.hash)
+    }
+  }
+  if len(realpaths) == 0 {
+    return nil
+  }
+  return realpaths
 }
 
 var pluginRegistry []any
@@ -151,7 +472,7 @@ func RegisterPlugin(plugin any) {
 func loadLinkedPluginState(cwd, tsconfigPath string) (linkedPluginState, error) {
   input := strings.TrimSpace(os.Getenv(LinkedPluginsEnv))
   if input == "" {
-    return linkedPluginState{cwd: cwd, tsconfig: tsconfigPath}, nil
+    return linkedPluginState{cwd: cwd, inputs: newPluginHostInputScopes(), tsconfig: tsconfigPath}, nil
   }
   var entries []PluginEntry
   if err := json.Unmarshal([]byte(input), &entries); err != nil {
@@ -160,6 +481,7 @@ func loadLinkedPluginState(cwd, tsconfigPath string) (linkedPluginState, error) 
   return linkedPluginState{
     cwd:      cwd,
     entries:  entries,
+    inputs:   newPluginHostInputScopes(),
     tsconfig: tsconfigPath,
   }, nil
 }
@@ -256,9 +578,29 @@ func registeredPlugin(index int) (any, bool) {
 
 // context builds the PluginContext the driver passes to each plugin hook.
 func (state linkedPluginState) context(entry PluginEntry) PluginContext {
+  inputs := state.inputs.newScope()
   return PluginContext{
-    Cwd:      state.cwd,
-    Entry:    entry,
-    Tsconfig: state.tsconfig,
+    Cwd:                            state.cwd,
+    Entry:                          entry,
+    Tsconfig:                       state.tsconfig,
+    reportHostInput:                inputs.add,
+    reportHostInputHash:            inputs.addHash,
+    reportHostInputHashUnknown:     inputs.invalidateHash,
+    reportHostInputRealpath:        inputs.addRealpath,
+    reportHostInputRealpathUnknown: inputs.invalidateRealpath,
   }
+}
+
+// hostInputs returns the exact native configuration inputs reported in this
+// generation.
+func (state linkedPluginState) hostInputs() []string {
+  return state.inputs.list()
+}
+
+func (state linkedPluginState) hostInputHashes() map[string]*string {
+  return state.inputs.hashList()
+}
+
+func (state linkedPluginState) hostInputRealpaths() map[string]*string {
+  return state.inputs.realpathList()
 }

@@ -234,10 +234,10 @@ export class TtscCompiler {
    * The effective environment for this instance's source-plugin builds and
    * clean targets: `context.env` merged over `process.env`, matching the
    * documented {@link ITtscCompilerContext.env} contract that child compiler,
-   * native-plugin, and native-host processes already receive. Returned as a
-   * fresh object so callers never mutate the shared `process.env`; when no
-   * `context.env` was supplied this is a plain copy of `process.env`, so CLI /
-   * default behavior is unchanged.
+   * native-plugin, native-host, and isolated descriptor processes already
+   * receive. Returned as a fresh object so callers never mutate the shared
+   * `process.env`; when no `context.env` was supplied this is a plain copy of
+   * `process.env`, so CLI / default behavior is unchanged.
    */
   private resolveEffectiveEnv(): NodeJS.ProcessEnv {
     return { ...process.env, ...this.context.env };
@@ -265,6 +265,9 @@ interface ProjectTransformation {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
+  hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
@@ -382,6 +385,9 @@ function toCompilerTransformation(
     dependencies,
     dependenciesComplete,
     graph,
+    hostInputHashes,
+    hostInputRealpaths,
+    hostInputs,
     result,
     typescript,
     volatile,
@@ -390,6 +396,9 @@ function toCompilerTransformation(
     ...(dependencies === undefined ? {} : { dependencies }),
     ...(dependenciesComplete === undefined ? {} : { dependenciesComplete }),
     ...(graph === undefined ? {} : { graph }),
+    ...(hostInputHashes === undefined ? {} : { hostInputHashes }),
+    ...(hostInputRealpaths === undefined ? {} : { hostInputRealpaths }),
+    ...(hostInputs === undefined ? {} : { hostInputs }),
     ...(volatile === undefined ? {} : { volatile }),
   };
   if (result.status === 0 && !hasErrorDiagnostics(result.diagnostics)) {

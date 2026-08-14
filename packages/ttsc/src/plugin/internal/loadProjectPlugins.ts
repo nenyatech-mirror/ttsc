@@ -1,12 +1,18 @@
 import childProcess from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { findNearestGoMod } from "../../compiler/internal/paths";
 import { readJsonFile } from "../../compiler/internal/project/readConfigJson";
 import { readProjectConfig } from "../../compiler/internal/project/readProjectConfig";
+import { createCanonicalTempDirectory } from "../../internal/createCanonicalTempDirectory";
+import {
+  javascriptRuntimeCapabilities,
+  resolveNodeBinary,
+} from "../../internal/resolveNodeBinary";
 import type { ITtscPlugin } from "../../structures/ITtscPlugin";
 import type { ITtscPluginContributor } from "../../structures/ITtscPluginContributor";
 import type { ITtscPluginFactoryContext } from "../../structures/ITtscPluginFactoryContext";
@@ -22,10 +28,6 @@ import {
 
 const GO_MOD_SEARCH_MAX_DEPTH = 3;
 
-type TtscPluginFactory<T = ITtscProjectPluginConfig> = (
-  context: ITtscPluginFactoryContext<T>,
-) => ITtscPlugin;
-
 type ProjectPluginEntry = {
   baseDir: string;
   config: ITtscProjectPluginConfig;
@@ -35,8 +37,17 @@ type PackageManifest = {
   dependencies?: Record<string, unknown>;
   devDependencies?: Record<string, unknown>;
   exports?: unknown;
+  main?: unknown;
+  module?: unknown;
   name?: unknown;
   ttsc?: unknown;
+};
+
+type ProjectHostInputSnapshot = {
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  hostInputs: string[];
+  project: ITtscParsedProjectConfig;
 };
 
 /**
@@ -45,17 +56,18 @@ type PackageManifest = {
  * Reads the project config, discovers plugin entries (from tsconfig and package
  * auto-discovery), validates and composes their descriptors, then invokes
  * `buildSourcePlugin` to compile each Go source package into a cached binary.
- * Returns the ordered set of loaded native plugins alongside the parsed project
- * config.
+ * Returns the ordered native plugins, parsed project config, and exact
+ * JavaScript-host files that universally influence the loaded selection.
  *
  * @param options.binary - Absolute path to the ttsc native helper binary.
  * @param options.cacheDir - Override the plugin binary cache directory.
  * @param options.cwd - Working directory for resolving relative paths.
  * @param options.entries - Explicit plugin entries; `false` disables all
  *   plugins (skips both tsconfig entries and package auto-discovery).
- * @param options.env - Effective environment for source-plugin builds and the
- *   `ttsx` descriptor child (`{ ...process.env, ...context.env }`). Defaults to
- *   `process.env` for CLI callers, so ambient behavior is unchanged.
+ * @param options.env - Effective environment for source-plugin builds and
+ *   isolated descriptor evaluators, including the `ttsx` fallback (`{
+ *   ...process.env, ...context.env }`). Defaults to `process.env` for CLI
+ *   callers, so ambient behavior is unchanged.
  * @param options.file - Path to the tsconfig/jsconfig file.
  * @param options.pluginConfigDir - Caller-declared anchor for plugin
  *   config-file discovery (see `ITtscPluginFactoryContext.pluginConfigDir`).
@@ -74,16 +86,28 @@ export function loadProjectPlugins(options: {
   projectRoot?: string;
   tsconfig?: string;
 }): {
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  hostInputs: string[];
   nativePlugins: ITtscLoadedNativePlugin[];
   project: ITtscParsedProjectConfig;
 } {
-  const effectiveEnv = options.env ?? process.env;
-  const project = readProjectConfig({
+  // Snapshot the caller environment before `withPluginLoaderEnv` injects
+  // host-owned Node/ttsx locators into process.env. Under a Bun parent the
+  // direct descriptor evaluator must remain Bun unless the caller explicitly
+  // selected another runtime.
+  const effectiveEnv = { ...(options.env ?? process.env) };
+  const projectSnapshot = readProjectHostInputSnapshot({
     cwd: options.cwd,
     file: options.file,
+    includePluginDiscovery: options.entries === undefined,
     projectRoot: options.projectRoot,
     tsconfig: options.tsconfig,
   });
+  const { project } = projectSnapshot;
+  const projectHostInputs = projectSnapshot.hostInputs;
+  const projectHostInputHashes = projectSnapshot.hostInputHashes;
+  const projectHostInputRealpaths = projectSnapshot.hostInputRealpaths;
   const entries: ProjectPluginEntry[] =
     options.entries === false
       ? []
@@ -93,6 +117,17 @@ export function loadProjectPlugins(options: {
   if (entries.length === 0) {
     options.onWatchInputs?.([]);
     return {
+      ...collectHostInputSnapshot(
+        project,
+        {},
+        [],
+        projectHostInputs,
+        revalidateHostInputHashes(projectHostInputHashes, projectHostInputs),
+        revalidateHostInputRealpaths(
+          projectHostInputRealpaths,
+          projectHostInputs,
+        ),
+      ),
       nativePlugins: [],
       project,
     };
@@ -108,16 +143,67 @@ export function loadProjectPlugins(options: {
     projectRoot: project.root,
     tsconfig: project.path,
   };
-  const plugins = composePluginSources(
-    entries,
-    entries.map((entry) =>
-      loadPluginEntry(
+  const loadedEntries = withPluginLoaderEnv(() =>
+    entries.map((entry) => {
+      const specifier = entry.config.transform;
+      if (typeof specifier !== "string" || specifier.length === 0) {
+        throw new Error(
+          `ttsc: plugin entry is missing a string "transform" field`,
+        );
+      }
+      const entryCandidates = collectModuleResolutionCandidates(
+        specifier,
+        path.join(entry.baseDir, "package.json"),
+        undefined,
+      );
+      // Capture every candidate before resolution chooses the descriptor entry.
+      // A post-resolution snapshot could bless a higher-priority file created
+      // after the resolver had already selected the old entry.
+      const entryCandidateHashes = hashHostInputPaths(entryCandidates);
+      const entryCandidateRealpaths = realpathHostInputPaths(entryCandidates);
+      const request = resolvePluginRequest(specifier, entry.baseDir);
+      const loaded = loadPluginEntry(
         entry.config,
         { ...context, plugin: entry.config },
-        entry.baseDir,
+        request,
         effectiveEnv,
-      ),
-    ),
+      );
+      const loadedHostInputHashes = mergeObservedHostInputHashes(
+        loaded.hostInputHashes,
+        hashHostInputPaths(Object.keys(loaded.hostInputHashes)),
+      );
+      const loadedHostInputRealpaths = mergeObservedHostInputRealpaths(
+        loaded.hostInputRealpaths,
+        realpathHostInputPaths(Object.keys(loaded.hostInputRealpaths)),
+      );
+      const hostInputHashes = mergeObservedHostInputHashes(
+        entryCandidateHashes,
+        loadedHostInputHashes,
+      );
+      const hostInputRealpaths = mergeObservedHostInputRealpaths(
+        entryCandidateRealpaths,
+        loadedHostInputRealpaths,
+      );
+      for (const input of loaded.hostInputs) {
+        const absolute = path.resolve(input);
+        if (
+          !Object.prototype.hasOwnProperty.call(loadedHostInputHashes, absolute)
+        ) {
+          delete hostInputHashes[absolute];
+        }
+      }
+      return {
+        ...loaded,
+        hostInputHashes,
+        hostInputRealpaths,
+        hostInputs: [...loaded.hostInputs, ...entryCandidates],
+        request,
+      };
+    }),
+  );
+  const plugins = composePluginSources(
+    entries,
+    loadedEntries.map((entry) => entry.plugin),
   );
 
   const ttscVersion = readTtscVersion();
@@ -142,6 +228,17 @@ export function loadProjectPlugins(options: {
       kind === "linked"
         ? `linked_${String(index).padStart(6, "0")}`
         : undefined;
+    const hostInputs = validatePluginHostInputs(plugin, index);
+    const pluginHostInputHashes = validatePluginHostInputHashes(
+      plugin,
+      index,
+      hostInputs,
+    );
+    const pluginHostInputRealpaths = validatePluginHostInputRealpaths(
+      plugin,
+      index,
+      hostInputs,
+    );
     return {
       capabilities: plugin.capabilities,
       contributors,
@@ -152,6 +249,20 @@ export function loadProjectPlugins(options: {
       name: plugin.name,
       reportsTypeScriptDiagnostics:
         plugin.reportsTypeScriptDiagnostics === true,
+      request: loadedEntries[index]!.request,
+      hostInputHashes: mergePluginHostInputHashes(
+        loadedEntries[index]!.hostInputHashes,
+        pluginHostInputHashes,
+        loadedEntries[index]!.hostInputs,
+        hostInputs,
+      ),
+      hostInputRealpaths: mergePluginHostInputHashes(
+        loadedEntries[index]!.hostInputRealpaths,
+        pluginHostInputRealpaths,
+        loadedEntries[index]!.hostInputs,
+        hostInputs,
+      ),
+      hostInputs: [...loadedEntries[index]!.hostInputs, ...hostInputs],
       source,
       stage,
     };
@@ -242,9 +353,584 @@ export function loadProjectPlugins(options: {
     };
   });
   return {
+    ...collectHostInputSnapshot(
+      project,
+      context,
+      records,
+      projectHostInputs,
+      revalidateHostInputHashes(projectHostInputHashes, projectHostInputs),
+      revalidateHostInputRealpaths(
+        projectHostInputRealpaths,
+        projectHostInputs,
+      ),
+    ),
     nativePlugins: orderNativePlugins(nativePlugins),
     project,
   };
+}
+
+/**
+ * Collect exact JavaScript-host files that universally influence the loaded
+ * transform. Program files belong to the native reference graph; this list is
+ * deliberately limited to config ancestry, descriptor entries, the project
+ * manifest controlling auto-discovery, and explicit plugin config files.
+ */
+function collectHostInputSnapshot(
+  project: ITtscParsedProjectConfig,
+  context: { pluginConfigDir?: string },
+  records: readonly {
+    config: ITtscProjectPluginConfig;
+    hostInputHashes: Readonly<Record<string, string | null>>;
+    hostInputRealpaths: Readonly<Record<string, string | null>>;
+    hostInputs: readonly string[];
+    request: string;
+  }[],
+  baselineInputs: readonly string[],
+  baselineHashes: Readonly<Record<string, string | null>>,
+  baselineRealpaths: Readonly<Record<string, string | null>>,
+): {
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  hostInputs: string[];
+} {
+  const inputs = new Set<string>(
+    baselineInputs.map((file) => path.resolve(file)),
+  );
+  const configBase = context.pluginConfigDir ?? path.dirname(project.path);
+  for (const record of records) {
+    inputs.add(path.resolve(record.request));
+    for (const hostInput of record.hostInputs) {
+      inputs.add(path.resolve(hostInput));
+    }
+    const descriptorManifest = findNearestPackageJson(record.request);
+    if (descriptorManifest !== undefined) {
+      inputs.add(path.resolve(descriptorManifest));
+    }
+    const configFile = record.config.configFile;
+    if (typeof configFile === "string" && configFile.trim() !== "") {
+      inputs.add(
+        path.isAbsolute(configFile)
+          ? path.resolve(configFile)
+          : path.resolve(configBase, configFile),
+      );
+    }
+  }
+  const hostInputs = [...inputs].sort();
+  const evaluationHashes = mergeObservedHostInputHashes(
+    baselineHashes,
+    ...records.map((record) => record.hostInputHashes),
+  );
+  const evaluationRealpaths = mergeObservedHostInputRealpaths(
+    baselineRealpaths,
+    ...records.map((record) => record.hostInputRealpaths),
+  );
+  for (const record of records) {
+    for (const input of record.hostInputs) {
+      const absolute = path.resolve(input);
+      if (
+        !Object.prototype.hasOwnProperty.call(record.hostInputHashes, absolute)
+      ) {
+        delete evaluationHashes[absolute];
+      }
+      if (
+        !Object.prototype.hasOwnProperty.call(
+          record.hostInputRealpaths,
+          absolute,
+        )
+      ) {
+        delete evaluationRealpaths[absolute];
+      }
+    }
+  }
+  const hostInputHashes = Object.fromEntries(
+    hostInputs.flatMap((file) =>
+      Object.prototype.hasOwnProperty.call(evaluationHashes, file)
+        ? ([[file, evaluationHashes[file]!]] as const)
+        : [],
+    ),
+  );
+  const hostInputRealpaths = Object.fromEntries(
+    hostInputs.flatMap((file) =>
+      Object.prototype.hasOwnProperty.call(evaluationRealpaths, file)
+        ? ([[file, evaluationRealpaths[file]!]] as const)
+        : [],
+    ),
+  );
+  return { hostInputHashes, hostInputRealpaths, hostInputs };
+}
+
+/**
+ * Read one project configuration while its complete discovery surface remains
+ * unchanged. The preliminary read discovers the input set; the accepted read is
+ * bracketed by equal fingerprints for that same set. A repeatedly changing
+ * project is still returned so compilation can make progress, but without any
+ * cache proof for the ambiguous snapshot.
+ */
+function readProjectHostInputSnapshot(options: {
+  cwd?: string;
+  file?: string;
+  includePluginDiscovery: boolean;
+  projectRoot?: string;
+  tsconfig?: string;
+}): ProjectHostInputSnapshot {
+  const { includePluginDiscovery, ...projectOptions } = options;
+  let project = readProjectConfig(projectOptions);
+  let hostInputs = collectProjectHostInputs(project, includePluginDiscovery);
+  const observedInputs = new Set(hostInputs);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = hashHostInputPaths(hostInputs);
+    const beforeRealpaths = realpathHostInputPaths(hostInputs);
+    const beforeSignatures = hostInputMetadataSignatures(hostInputs);
+    const candidateProject = readProjectConfig(projectOptions);
+    const candidateInputs = collectProjectHostInputs(
+      candidateProject,
+      includePluginDiscovery,
+    );
+    for (const input of candidateInputs) observedInputs.add(input);
+    const after = hashHostInputPaths(candidateInputs);
+    const afterRealpaths = realpathHostInputPaths(candidateInputs);
+    const afterSignatures = hostInputMetadataSignatures(candidateInputs);
+    if (
+      equalHostInputLists(hostInputs, candidateInputs) &&
+      equalHostInputHashes(before, after) &&
+      equalHostInputHashes(beforeRealpaths, afterRealpaths) &&
+      beforeSignatures !== undefined &&
+      afterSignatures !== undefined &&
+      equalHostInputHashes(beforeSignatures, afterSignatures)
+    ) {
+      return {
+        hostInputHashes: after,
+        hostInputRealpaths: afterRealpaths,
+        hostInputs: candidateInputs,
+        project: candidateProject,
+      };
+    }
+    project = candidateProject;
+    hostInputs = candidateInputs;
+  }
+  return {
+    hostInputHashes: {},
+    hostInputRealpaths: {},
+    hostInputs: [...observedInputs].sort(),
+    project,
+  };
+}
+
+function equalHostInputLists(
+  first: readonly string[],
+  second: readonly string[],
+): boolean {
+  return (
+    first.length === second.length &&
+    first.every(
+      (file, index) => path.resolve(file) === path.resolve(second[index]!),
+    )
+  );
+}
+
+function equalHostInputHashes(
+  first: Readonly<Record<string, string | null>>,
+  second: Readonly<Record<string, string | null>>,
+): boolean {
+  const files = Object.keys(first);
+  return (
+    files.length === Object.keys(second).length &&
+    files.every(
+      (file) =>
+        Object.prototype.hasOwnProperty.call(second, file) &&
+        first[file] === second[file],
+    )
+  );
+}
+
+/** Retain proof only for inputs whose initial and final observations agree. */
+function revalidateHostInputHashes(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = hashHostInputPaths(inputs);
+  const output: Record<string, string | null> = {};
+  for (const input of inputs) {
+    const absolute = path.resolve(input);
+    if (
+      Object.prototype.hasOwnProperty.call(initial, absolute) &&
+      initial[absolute] === current[absolute]
+    ) {
+      output[absolute] = current[absolute]!;
+    }
+  }
+  return output;
+}
+
+/** Keep physical-identity proof only while the same path resolves identically. */
+function revalidateHostInputRealpaths(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = realpathHostInputPaths(inputs);
+  return Object.fromEntries(
+    inputs.flatMap((input) => {
+      const absolute = path.resolve(input);
+      return Object.prototype.hasOwnProperty.call(initial, absolute) &&
+        initial[absolute] === current[absolute]
+        ? ([[absolute, current[absolute]!]] as const)
+        : [];
+    }),
+  );
+}
+
+function hashHostInput(file: string): string | null {
+  try {
+    if (fs.statSync(file).isDirectory()) {
+      return crypto
+        .createHash("sha256")
+        .update("ttsc:host-input:directory\0")
+        .digest("hex");
+    }
+    return crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(file))
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+export function hashHostInputPaths(
+  files: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    files.map((file) => [path.resolve(file), hashHostInput(file)]),
+  );
+}
+
+/** Physical path selected by a host input, or null while it is unresolved. */
+export function realpathHostInput(file: string): string | null {
+  try {
+    return fs.realpathSync.native(file);
+  } catch {
+    return null;
+  }
+}
+
+export function realpathHostInputPaths(
+  files: readonly string[],
+): Record<string, string | null> {
+  return Object.fromEntries(
+    files.map((file) => [path.resolve(file), realpathHostInput(file)]),
+  );
+}
+
+/**
+ * Metadata identity that survives content-preserving reads but exposes A-B-A
+ * replacement. Missing paths are tied to the nearest existing ancestor whose
+ * directory metadata changes when the missing branch appears or disappears.
+ */
+function hostInputMetadataSignature(file: string): string | undefined {
+  const requested = path.resolve(file);
+  let current = requested;
+  for (;;) {
+    try {
+      const link = fs.lstatSync(current, { bigint: true });
+      let target = link;
+      if (link.isSymbolicLink()) {
+        try {
+          target = fs.statSync(current, { bigint: true });
+        } catch {
+          // A broken link's own metadata cannot expose its target appearing
+          // and disappearing during evaluation. Decline cache proof instead.
+          return undefined;
+        }
+      }
+      return [
+        path.relative(current, requested),
+        link.dev,
+        link.ino,
+        link.mode,
+        link.size,
+        link.mtimeNs,
+        link.ctimeNs,
+        target.dev,
+        target.ino,
+        target.mode,
+        target.size,
+        target.mtimeNs,
+        target.ctimeNs,
+      ].join(":");
+    } catch (error) {
+      if (!isMissingPathError(error)) return undefined;
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
+function hostInputMetadataSignatures(
+  files: readonly string[],
+): Record<string, string> | undefined {
+  const output: Record<string, string> = {};
+  for (const file of files) {
+    const signature = hostInputMetadataSignature(file);
+    if (signature === undefined) return undefined;
+    output[path.resolve(file)] = signature;
+  }
+  return output;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** Return config ancestry and the manifest controlling package discovery. */
+export function collectProjectHostInputs(
+  project: ITtscParsedProjectConfig,
+  includePluginDiscovery: boolean = true,
+): string[] {
+  const inputs = new Set<string>(
+    project.configPaths.map((file) => path.resolve(file)),
+  );
+  if (!includePluginDiscovery) return [...inputs].sort();
+  const manifestCandidates = collectNearestPackageJsonCandidates(project.root);
+  for (const candidate of manifestCandidates) inputs.add(candidate);
+  const manifest = manifestCandidates.find(existingFile);
+  if (manifest !== undefined) {
+    const projectManifest = readPackageManifest(manifest);
+    if (projectManifest !== undefined) {
+      const projectRoot = path.dirname(manifest);
+      for (const dependency of directDependencyNames(projectManifest)) {
+        const dependencyManifest = resolveDependencyPackageJson(
+          dependency,
+          projectRoot,
+        );
+        for (const candidate of collectDependencyManifestCandidates(
+          dependency,
+          manifest,
+          dependencyManifest,
+        )) {
+          inputs.add(candidate);
+        }
+        if (dependencyManifest !== undefined) {
+          inputs.add(path.resolve(dependencyManifest));
+        }
+      }
+    }
+  }
+  return [...inputs].sort();
+}
+
+// The direct evaluator preloads ttsx's supported Node hook, whose
+// extensionless rescue order includes TypeScript and ESM/CJS spellings in
+// addition to Node's ordinary CommonJS probes.
+const MODULE_PROBE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".node",
+] as const;
+
+/** Record every file whose later appearance can change one module resolution. */
+function collectModuleResolutionCandidates(
+  specifier: string,
+  parentFile: string,
+  resolvedFile: string | undefined,
+): string[] {
+  const inputs = new Set<string>();
+  const recordedBases = new Set<string>();
+  const candidates = (base: string): string[] => [
+    base,
+    ...MODULE_PROBE_EXTENSIONS.map((extension) => base + extension),
+    path.join(base, "package.json"),
+    ...MODULE_PROBE_EXTENSIONS.map((extension) =>
+      path.join(base, `index${extension}`),
+    ),
+  ];
+  const recordManifestTargets = (
+    value: unknown,
+    directory: string,
+    allowBare: boolean = false,
+  ): void => {
+    if (typeof value === "string") {
+      if (
+        value !== "" &&
+        (allowBare || value.startsWith("./") || value.startsWith("../"))
+      ) {
+        recordBase(path.resolve(directory, value));
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        recordManifestTargets(item, directory, allowBare);
+      }
+      return;
+    }
+    if (isRecord(value)) {
+      for (const item of Object.values(value)) {
+        recordManifestTargets(item, directory, allowBare);
+      }
+    }
+  };
+  const recordBase = (base: string): void => {
+    const resolvedBase = path.resolve(base);
+    if (recordedBases.has(resolvedBase)) return;
+    recordedBases.add(resolvedBase);
+    for (const candidate of candidates(resolvedBase)) {
+      inputs.add(path.resolve(candidate));
+    }
+    try {
+      const manifest = readJsonFile(path.join(resolvedBase, "package.json"));
+      if (isRecord(manifest)) {
+        recordManifestTargets(manifest.exports, resolvedBase);
+        recordManifestTargets(manifest.module, resolvedBase, true);
+        recordManifestTargets(manifest.main, resolvedBase, true);
+      }
+    } catch {
+      // A malformed selected manifest is reported by normal resolution/load.
+    }
+  };
+  const selectedBy = (base: string): boolean => {
+    if (resolvedFile === undefined) return false;
+    let selected: string;
+    try {
+      selected = fs.realpathSync.native(resolvedFile);
+    } catch {
+      selected = path.resolve(resolvedFile);
+    }
+    for (const candidate of candidates(base)) {
+      try {
+        const canonical = fs.realpathSync.native(candidate);
+        const relative = path.relative(canonical, selected);
+        if (
+          relative === "" ||
+          (fs.statSync(canonical).isDirectory() &&
+            relative !== ".." &&
+            !relative.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(relative))
+        ) {
+          return true;
+        }
+      } catch {
+        // Missing candidates are the inputs this function intentionally keeps.
+      }
+    }
+    return false;
+  };
+  const localBases = (): string[] => {
+    if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];
+    const directory = path.dirname(parentFile);
+    const raw = path.resolve(directory, specifier);
+    const suffixStart = specifier.search(/[?#]/);
+    if (suffixStart === -1) return [raw];
+    const pathname = specifier.slice(0, suffixStart);
+    return pathname === ""
+      ? [raw]
+      : [...new Set([raw, path.resolve(directory, pathname)])];
+  };
+
+  if (
+    specifier.startsWith(".") ||
+    path.isAbsolute(specifier) ||
+    specifier.startsWith("file:")
+  ) {
+    try {
+      for (const base of localBases()) {
+        // An existing exact file wins before extension and directory probes.
+        // Its own recorded identity is therefore sufficient; siblings cannot
+        // supersede it while it exists.
+        if (
+          selectedByExactFile(base, resolvedFile) ||
+          (resolvedFile === undefined && existingFile(base))
+        ) {
+          inputs.add(path.resolve(base));
+        } else {
+          recordBase(base);
+        }
+      }
+    } catch {
+      // Invalid URL spellings are diagnosed by the real resolver.
+    }
+    return [...inputs];
+  }
+  const parts = specifier.split("/");
+  const packageParts = parts[0]?.startsWith("@")
+    ? parts.slice(0, 2)
+    : parts.slice(0, 1);
+  if (packageParts.some((part) => part === undefined || part === "")) {
+    return [...inputs];
+  }
+  const packageName = packageParts.join("/");
+  const subpath = parts.slice(packageParts.length);
+  const searchPaths = createRequire(parentFile).resolve.paths(specifier) ?? [];
+  for (const searchPath of searchPaths) {
+    const packageDirectory = path.join(searchPath, packageName);
+    recordBase(packageDirectory);
+    if (subpath.length !== 0) {
+      recordBase(path.join(packageDirectory, ...subpath));
+    }
+    if (selectedBy(packageDirectory)) break;
+  }
+  return [...inputs];
+}
+
+function existingFile(file: string): boolean {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function selectedByExactFile(
+  candidate: string,
+  selected: string | undefined,
+): boolean {
+  if (selected === undefined) return false;
+  try {
+    return (
+      fs.realpathSync.native(candidate) === fs.realpathSync.native(selected)
+    );
+  } catch {
+    return path.resolve(candidate) === path.resolve(selected);
+  }
+}
+
+/** Record package manifests whose later appearance can redirect discovery. */
+function collectDependencyManifestCandidates(
+  packageName: string,
+  parentFile: string,
+  selectedManifest: string | undefined,
+): string[] {
+  const out: string[] = [];
+  let selectedDirectory: string | undefined;
+  if (selectedManifest !== undefined) {
+    try {
+      selectedDirectory = fs.realpathSync.native(
+        path.dirname(selectedManifest),
+      );
+    } catch {
+      selectedDirectory = path.resolve(path.dirname(selectedManifest));
+    }
+  }
+  for (const searchPath of createRequire(parentFile).resolve.paths(
+    packageName,
+  ) ?? []) {
+    const packageDirectory = path.join(searchPath, ...packageName.split("/"));
+    out.push(path.join(packageDirectory, "package.json"));
+    if (selectedDirectory === undefined) continue;
+    try {
+      if (fs.realpathSync.native(packageDirectory) === selectedDirectory) break;
+    } catch {
+      // Keep searching until the selected package directory is reached.
+    }
+  }
+  return out;
 }
 
 function composePluginSources(
@@ -521,7 +1207,7 @@ function resolveDependencyPackageJson(
 ): string | undefined {
   const direct = path.join(projectRoot, "node_modules", ...name.split("/"));
   const directManifest = path.join(direct, "package.json");
-  if (fs.existsSync(directManifest)) {
+  if (existingFile(directManifest)) {
     return resolveRealPath(directManifest);
   }
   const projectPackage = path.join(projectRoot, "package.json");
@@ -538,18 +1224,23 @@ function resolveDependencyPackageJson(
 }
 
 function findNearestPackageJson(location: string): string | undefined {
+  const selected =
+    collectNearestPackageJsonCandidates(location).find(existingFile);
+  return selected === undefined ? undefined : resolveRealPath(selected);
+}
+
+/** Every package-scope candidate through the first regular manifest file. */
+function collectNearestPackageJsonCandidates(location: string): string[] {
   let current = fs.statSync(location).isDirectory()
     ? location
     : path.dirname(location);
+  const candidates: string[] = [];
   while (true) {
-    const manifest = path.join(current, "package.json");
-    if (fs.existsSync(manifest)) {
-      return resolveRealPath(manifest);
-    }
+    const manifest = path.resolve(current, "package.json");
+    candidates.push(manifest);
+    if (existingFile(manifest)) return candidates;
     const parent = path.dirname(current);
-    if (parent === current) {
-      return undefined;
-    }
+    if (parent === current) return candidates;
     current = parent;
   }
 }
@@ -561,7 +1252,7 @@ function findNearestPackageJson(location: string): string | undefined {
  * message worse here than anywhere else.
  */
 function readPackageManifest(file: string): PackageManifest | undefined {
-  if (!fs.existsSync(file)) {
+  if (!existingFile(file)) {
     return undefined;
   }
   const parsed = readJsonFile(file);
@@ -606,55 +1297,42 @@ function orderNativePlugins(
 function loadPluginEntry(
   entry: ITtscProjectPluginConfig,
   base: Omit<ITtscPluginFactoryContext, "dirname" | "filename">,
-  baseDir: string,
+  request: string,
   effectiveEnv: NodeJS.ProcessEnv,
-): ITtscPlugin {
-  return withPluginLoaderEnv(() => {
-    const specifier = entry.transform;
-    if (typeof specifier !== "string" || specifier.length === 0) {
-      throw new Error(
-        `ttsc: plugin entry is missing a string "transform" field`,
-      );
-    }
+): {
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  hostInputs: string[];
+  plugin: ITtscPlugin;
+} {
+  const specifier = entry.transform;
+  if (typeof specifier !== "string" || specifier.length === 0) {
+    throw new Error(`ttsc: plugin entry is missing a string "transform" field`);
+  }
 
-    const request = resolvePluginRequest(specifier, baseDir);
-    // `dirname`/`filename` are per-entry: each plugin entry resolves to its own
-    // descriptor module, so they are derived here from the resolved `request`
-    // rather than carried on the shared base context. They give factories a
-    // load-mode-independent stand-in for `__dirname`/`__filename`, which are
-    // undefined when a descriptor loads through ttsx or as ESM.
-    const context: ITtscPluginFactoryContext = {
-      ...base,
-      dirname: path.dirname(request),
-      filename: request,
+  // `dirname`/`filename` are per-entry: each plugin entry resolves to its own
+  // descriptor module, so they are derived here from the resolved `request`
+  // rather than carried on the shared base context. They give factories a
+  // load-mode-independent stand-in for `__dirname`/`__filename`, which are
+  // undefined when a descriptor loads through ttsx or as ESM.
+  const context: ITtscPluginFactoryContext = {
+    ...base,
+    dirname: path.dirname(request),
+    filename: request,
+  };
+  const loaded = loadPluginDescriptor(request, context, effectiveEnv);
+  if (isTtscPlugin(loaded.descriptor)) {
+    rejectJsTransformFunctions(specifier, loaded.descriptor);
+    return {
+      hostInputHashes: loaded.hostInputHashes,
+      hostInputRealpaths: loaded.hostInputRealpaths,
+      hostInputs: loaded.inputs,
+      plugin: loaded.descriptor,
     };
-    const mod = requirePluginEntry(request, context, effectiveEnv) as {
-      createTtscPlugin?: TtscPluginFactory;
-      default?: ITtscPlugin | TtscPluginFactory;
-    } & Partial<Record<"plugin", ITtscPlugin | TtscPluginFactory>>;
-    const candidate =
-      mod.createTtscPlugin ??
-      mod.default ??
-      mod.plugin ??
-      (mod as unknown as ITtscPlugin | TtscPluginFactory);
-    if (typeof candidate === "function") {
-      const plugin = candidate(context);
-      if (!isTtscPlugin(plugin)) {
-        throw new Error(
-          `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
-        );
-      }
-      rejectJsTransformFunctions(specifier, plugin);
-      return plugin;
-    }
-    if (isTtscPlugin(candidate)) {
-      rejectJsTransformFunctions(specifier, candidate);
-      return candidate;
-    }
-    throw new Error(
-      `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
-    );
-  });
+  }
+  throw new Error(
+    `ttsc: plugin "${specifier}" does not export a valid ttsc plugin`,
+  );
 }
 
 /**
@@ -672,23 +1350,759 @@ function loadPluginEntry(
  * never runs and cannot deadlock. A package that loads directly (a compiled
  * descriptor, or Bun's native `.ts`) never reaches the fallback.
  */
-function requirePluginEntry(
+function loadPluginDescriptor(
   request: string,
   context: ITtscPluginFactoryContext,
   effectiveEnv: NodeJS.ProcessEnv,
-): unknown {
+): IsolatedPluginDescriptor {
   try {
-    return require(request);
+    return loadCommonJsDescriptor(request, context, effectiveEnv);
   } catch (error) {
-    if (!TS_SOURCE_PATTERN.test(request)) {
+    if (
+      !TS_SOURCE_PATTERN.test(request) ||
+      !(error instanceof CommonJsDescriptorLoadError) ||
+      !error.retryWithTtsx
+    ) {
       throw error;
     }
-    const descriptor = loadDescriptorViaTtsx(request, context, effectiveEnv);
-    if (descriptor === undefined) {
+    const loaded = loadDescriptorViaTtsx(request, context, effectiveEnv);
+    if (loaded === undefined) {
       throw error;
     }
-    return { default: descriptor };
+    return loaded;
   }
+}
+
+interface IsolatedPluginDescriptor {
+  descriptor: unknown;
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  inputs: string[];
+}
+
+class CommonJsDescriptorLoadError extends Error {
+  public constructor(
+    message: string,
+    public readonly retryWithTtsx: boolean,
+  ) {
+    super(message);
+    this.name = "CommonJsDescriptorLoadError";
+  }
+}
+
+/**
+ * Evaluate one CommonJS descriptor in a fresh runtime module-cache generation.
+ *
+ * Reloading an external descriptor dependency inside this process has no safe
+ * cache operation: retaining it serves stale exports, while deleting it splits
+ * any application singleton that required the same module first. Isolation
+ * gives every descriptor load current bytes without mutating the host's cache.
+ * The child invokes the factory before walking its graph, so lazy `require()`
+ * calls are included, and a failed first load cannot strand poisoned children.
+ */
+function loadCommonJsDescriptor(
+  request: string,
+  context: ITtscPluginFactoryContext,
+  effectiveEnv: NodeJS.ProcessEnv,
+): IsolatedPluginDescriptor {
+  const runtime = pluginDescriptorRuntimeBinary(effectiveEnv);
+  const runtimeCapabilities = javascriptRuntimeCapabilities(
+    runtime,
+    effectiveEnv,
+    context.projectRoot,
+  );
+  const node =
+    !runtimeCapabilities.bun &&
+    runtimeCapabilities.registerHooks &&
+    runtimeCapabilities.executable !== undefined
+      ? runtimeCapabilities.executable
+      : resolveNodeBinary(effectiveEnv, context.projectRoot);
+  const dir = createEvaluationTempDir();
+  const out = path.join(dir, "descriptor.json");
+  const inputsOut = path.join(dir, "descriptor-inputs.ndjson");
+  const diagnostics = path.join(dir, "descriptor.stderr");
+  const bunConfig = path.join(dir, "bunfig.toml");
+  const runtimeHookPreload = path.join(
+    __dirname,
+    "..",
+    "..",
+    "launcher",
+    "internal",
+    "runtimeHookPreload.js",
+  );
+  try {
+    if (runtimeCapabilities.bun) {
+      // A descriptor receives exactly the environment supplied by its ttsc
+      // invocation. Bun otherwise auto-loads project `.env*`, local/global
+      // bunfig preloads and loaders, and may install a missing package from the
+      // network. Those implicit authorities are neither part of Node's loader
+      // contract nor reproducible host inputs, so isolate this evaluator from
+      // them while retaining Bun's native TypeScript/module semantics.
+      fs.writeFileSync(bunConfig, "", "utf8");
+    }
+    const diagnosticsFd = fs.openSync(diagnostics, "w");
+    let result: ReturnType<typeof childProcess.spawnSync>;
+    try {
+      result = childProcess.spawnSync(
+        runtime,
+        [
+          ...(runtimeCapabilities.bun
+            ? [
+                "--no-env-file",
+                "--no-install",
+                `--config=${bunConfig}`,
+                `--tsconfig-override=${context.tsconfig}`,
+              ]
+            : []),
+          ...(runtimeCapabilities.registerHooks
+            ? ["--require", runtimeHookPreload]
+            : []),
+          "-e",
+          COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE,
+        ],
+        {
+          cwd: context.projectRoot,
+          env: {
+            ...effectiveEnv,
+            // The direct evaluator may be Bun, but ttsx and native config
+            // loaders require a real Node runtime with synchronous hooks.
+            ...(node === undefined ? {} : { TTSC_NODE_BINARY: node }),
+            TTSC_TTSX_BINARY:
+              effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY,
+            TTSC_PLUGIN_CONTEXT: JSON.stringify(context),
+            TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
+            TTSC_PLUGIN_DESCRIPTOR_OUT: out,
+            TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE: "1",
+            TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT: inputsOut,
+            TTSC_PLUGIN_ENTRY: request,
+          },
+          // Hold direct-evaluator diagnostics until its retry decision is
+          // known. A successful ttsx fallback must not inherit the expected
+          // loader stack from the discarded first attempt.
+          stdio: ["ignore", diagnosticsFd, diagnosticsFd],
+          windowsHide: true,
+        },
+      );
+    } finally {
+      fs.closeSync(diagnosticsFd);
+    }
+    const failure = commonJsDescriptorProcessFailure(result, request);
+    if (failure !== undefined) {
+      const reason = pluginDescriptorFailureReason(out);
+      const retryWithTtsx = commonJsDescriptorRetryWithTtsx(out);
+      if (!retryWithTtsx) replayEvaluationDiagnostics(diagnostics);
+      throw new CommonJsDescriptorLoadError(
+        reason === "" ? failure.message : `${failure.message}\n${reason}`,
+        retryWithTtsx,
+      );
+    }
+    replayEvaluationDiagnostics(diagnostics);
+    if (!fs.existsSync(out)) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" evaluation in an isolated process produced no descriptor output.`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(out, "utf8"));
+    } catch (error) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" produced invalid isolated output: ${errorMessage(error)}`,
+      );
+    }
+    if (!isRecord(parsed) || !Array.isArray(parsed.inputs)) {
+      throw new Error(
+        `ttsc: plugin descriptor "${request}" produced an invalid isolated result`,
+      );
+    }
+    const parsedHashes = isRecord(parsed.inputHashes)
+      ? Object.fromEntries(
+          Object.entries(parsed.inputHashes).flatMap(([file, hash]) =>
+            typeof hash === "string" || hash === null
+              ? [[path.resolve(file), hash]]
+              : [],
+          ),
+        )
+      : {};
+    const parsedRealpaths = isRecord(parsed.inputRealpaths)
+      ? Object.fromEntries(
+          Object.entries(parsed.inputRealpaths).flatMap(([file, realpath]) =>
+            (typeof realpath === "string" && path.isAbsolute(realpath)) ||
+            realpath === null
+              ? [
+                  [
+                    path.resolve(file),
+                    realpath === null ? null : path.resolve(realpath),
+                  ],
+                ]
+              : [],
+          ),
+        )
+      : {};
+    const stableParsedRealpaths = mergeObservedHostInputRealpaths(
+      parsedRealpaths,
+      realpathHostInputPaths(Object.keys(parsedRealpaths)),
+    );
+    for (const input of parsed.inputs) {
+      const absolute = path.resolve(String(input));
+      if (
+        !Object.prototype.hasOwnProperty.call(stableParsedRealpaths, absolute)
+      ) {
+        delete parsedHashes[absolute];
+      }
+    }
+    const runtimeInputs = readTtsxDescriptorInputs(inputsOut, request);
+    return {
+      descriptor: parsed.descriptor,
+      hostInputHashes: omitUnstableHostInputHashes(
+        mergeObservedHostInputHashes(
+          parsedHashes,
+          runtimeInputs.hostInputHashes,
+        ),
+        runtimeInputs.unstableInputs,
+      ),
+      hostInputRealpaths: mergeObservedHostInputRealpaths(
+        stableParsedRealpaths,
+        runtimeInputs.hostInputRealpaths,
+      ),
+      inputs: [
+        ...new Set([
+          ...parsed.inputs.map((input) => String(input)),
+          ...runtimeInputs.inputs,
+        ]),
+      ].sort(),
+    };
+  } finally {
+    removeEvaluationTempDir(dir);
+  }
+}
+
+/** Validate plugin-declared universal host inputs. */
+function validatePluginHostInputs(
+  plugin: ITtscPlugin,
+  index: number,
+): string[] {
+  const label = plugin.name ?? `#${index + 1}`;
+  if (plugin.hostInputs === undefined) return [];
+  if (!Array.isArray(plugin.hostInputs)) {
+    throw new Error(
+      `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputs"; expected an array of absolute paths`,
+    );
+  }
+  return plugin.hostInputs.map((file) => {
+    if (typeof file !== "string" || !path.isAbsolute(file)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputs" entry ${JSON.stringify(file)}; expected an absolute path`,
+      );
+    }
+    return path.resolve(file);
+  });
+}
+
+/** Validate descriptor-supplied evaluation fingerprints for host inputs. */
+function validatePluginHostInputHashes(
+  plugin: ITtscPlugin,
+  index: number,
+  hostInputs: readonly string[],
+): Record<string, string | null> {
+  const label = plugin.name ?? `#${index + 1}`;
+  if (plugin.hostInputHashes === undefined) return {};
+  if (
+    !isRecord(plugin.hostInputHashes) ||
+    Array.isArray(plugin.hostInputHashes)
+  ) {
+    throw new Error(
+      `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputHashes"; expected an object keyed by absolute hostInputs paths`,
+    );
+  }
+  const allowed = new Set(hostInputs.map((file) => path.resolve(file)));
+  const output: Record<string, string | null> = {};
+  for (const [file, hash] of Object.entries(plugin.hostInputHashes)) {
+    if (!path.isAbsolute(file)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputHashes" key ${JSON.stringify(file)}; expected an absolute path`,
+      );
+    }
+    const absolute = path.resolve(file);
+    if (!allowed.has(absolute)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} fingerprints ${JSON.stringify(file)} without listing it in "hostInputs"`,
+      );
+    }
+    if (
+      hash !== null &&
+      (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash))
+    ) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid fingerprint for ${JSON.stringify(file)}; expected a lowercase SHA-256 digest or null`,
+      );
+    }
+    output[absolute] = hash;
+  }
+  return output;
+}
+
+/** Validate descriptor-supplied physical identities for host inputs. */
+function validatePluginHostInputRealpaths(
+  plugin: ITtscPlugin,
+  index: number,
+  hostInputs: readonly string[],
+): Record<string, string | null> {
+  const label = plugin.name ?? `#${index + 1}`;
+  if (plugin.hostInputRealpaths === undefined) return {};
+  if (
+    !isRecord(plugin.hostInputRealpaths) ||
+    Array.isArray(plugin.hostInputRealpaths)
+  ) {
+    throw new Error(
+      `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputRealpaths"; expected an object keyed by absolute hostInputs paths`,
+    );
+  }
+  const allowed = new Set(hostInputs.map((file) => path.resolve(file)));
+  const output: Record<string, string | null> = {};
+  for (const [file, realpath] of Object.entries(plugin.hostInputRealpaths)) {
+    if (!path.isAbsolute(file)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid "hostInputRealpaths" key ${JSON.stringify(file)}; expected an absolute path`,
+      );
+    }
+    const absolute = path.resolve(file);
+    if (!allowed.has(absolute)) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} identifies ${JSON.stringify(file)} without listing it in "hostInputs"`,
+      );
+    }
+    if (
+      realpath !== null &&
+      (typeof realpath !== "string" || !path.isAbsolute(realpath))
+    ) {
+      throw new Error(
+        `ttsc: plugin ${JSON.stringify(label)} has invalid physical identity for ${JSON.stringify(file)}; expected an absolute realpath or null`,
+      );
+    }
+    output[absolute] =
+      realpath === null ? null : path.resolve(realpath as string);
+  }
+  return output;
+}
+
+/** Merge snapshots and omit every path observed in contradictory states. */
+function mergeObservedHostInputHashes(
+  ...sources: Readonly<Record<string, string | null>>[]
+): Record<string, string | null> {
+  const conflicts = new Set<string>();
+  const output: Record<string, string | null> = {};
+  for (const source of sources) {
+    for (const [file, hash] of Object.entries(source)) {
+      const absolute = path.resolve(file);
+      if (conflicts.has(absolute)) continue;
+      if (
+        Object.prototype.hasOwnProperty.call(output, absolute) &&
+        output[absolute] !== hash
+      ) {
+        delete output[absolute];
+        conflicts.add(absolute);
+        continue;
+      }
+      output[absolute] = hash;
+    }
+  }
+  return output;
+}
+
+const mergeObservedHostInputRealpaths = mergeObservedHostInputHashes;
+
+/** Prevent a later plugin claim from reviving an unstable loader input. */
+function mergePluginHostInputHashes(
+  first: Readonly<Record<string, string | null>>,
+  second: Readonly<Record<string, string | null>>,
+  loaderInputs: readonly string[],
+  pluginInputs: readonly string[],
+): Record<string, string | null> {
+  const output = { ...first };
+  const guarded = new Set(loaderInputs.map((file) => path.resolve(file)));
+  for (const input of pluginInputs) {
+    const absolute = path.resolve(input);
+    if (!Object.prototype.hasOwnProperty.call(second, absolute)) {
+      delete output[absolute];
+    }
+  }
+  for (const [file, hash] of Object.entries(second)) {
+    const absolute = path.resolve(file);
+    if (
+      guarded.has(absolute) &&
+      !Object.prototype.hasOwnProperty.call(first, absolute)
+    ) {
+      continue;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(output, absolute) &&
+      output[absolute] !== hash
+    ) {
+      delete output[absolute];
+      continue;
+    }
+    output[absolute] = hash;
+  }
+  return output;
+}
+
+function omitUnstableHostInputHashes(
+  hashes: Record<string, string | null>,
+  unstableInputs: readonly string[],
+): Record<string, string | null> {
+  for (const input of unstableInputs) delete hashes[path.resolve(input)];
+  return hashes;
+}
+
+/** CommonJS evaluator emitted into a clean Node process for every load. */
+export const COMMONJS_PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
+  `const crypto = require("node:crypto");`,
+  `const fs = require("node:fs");`,
+  `const Module = require("node:module");`,
+  `const path = require("node:path");`,
+  `const { fileURLToPath } = require("node:url");`,
+  `const out = process.env.TTSC_PLUGIN_DESCRIPTOR_OUT;`,
+  `let retryWithTtsx = false;`,
+  `const moduleLoadFailures = new WeakMap();`,
+  `const moduleResolutionFailures = new WeakMap();`,
+  `function existingFile(file) { try { return fs.statSync(file).isFile(); } catch { return false; } }`,
+  `function shouldRetryWithTtsx(error) {`,
+  `  const loadFailure = error && (typeof error === "object" || typeof error === "function") ? moduleLoadFailures.get(error) : undefined;`,
+  `  if (loadFailure?.retryWithTtsx === true) return true;`,
+  `  const failure = error && (typeof error === "object" || typeof error === "function") ? moduleResolutionFailures.get(error) : undefined;`,
+  `  return failure?.retryWithTtsx === true;`,
+  `}`,
+  `try {`,
+  `  const request = process.env.TTSC_PLUGIN_ENTRY;`,
+  `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
+  `  const inputs = new Set();`,
+  `  const inputHashes = new Map();`,
+  `  const inputRealpaths = new Map();`,
+  `  const inputSignatures = new Map();`,
+  `  const unstableInputHashes = new Set();`,
+  `  function missingPathError(error) { return error && (error.code === "ENOENT" || error.code === "ENOTDIR"); }`,
+  `  function inputMetadataSignature(file) {`,
+  `    const requested = path.resolve(file);`,
+  `    let current = requested;`,
+  `    for (;;) {`,
+  `      try {`,
+  `        const link = fs.lstatSync(current, { bigint: true });`,
+  `        let target = link;`,
+  `        if (link.isSymbolicLink()) {`,
+  `          try { target = fs.statSync(current, { bigint: true }); }`,
+  `          catch { return undefined; }`,
+  `        }`,
+  `        return [path.relative(current, requested), link.dev, link.ino, link.mode, link.size, link.mtimeNs, link.ctimeNs, target.dev, target.ino, target.mode, target.size, target.mtimeNs, target.ctimeNs].join(":");`,
+  `      } catch (error) {`,
+  `        if (!missingPathError(error)) return undefined;`,
+  `        const parent = path.dirname(current);`,
+  `        if (parent === current) return undefined;`,
+  `        current = parent;`,
+  `      }`,
+  `    }`,
+  `  }`,
+  `  function recordOneInput(file) {`,
+  `    file = path.resolve(file);`,
+  `    inputs.add(file);`,
+  `    if (unstableInputHashes.has(file)) return;`,
+  `    const beforeSignature = inputMetadataSignature(file);`,
+  `    let observedRealpath;`,
+  `    try { observedRealpath = fs.realpathSync.native(file); } catch { observedRealpath = null; }`,
+  `    let observed;`,
+  `    try { observed = fs.statSync(file).isDirectory() ? crypto.createHash("sha256").update("ttsc:host-input:directory\\0").digest("hex") : crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); } catch { observed = null; }`,
+  `    const afterSignature = inputMetadataSignature(file);`,
+  `    if (beforeSignature === undefined || afterSignature === undefined || beforeSignature !== afterSignature || (inputSignatures.has(file) && inputSignatures.get(file) !== afterSignature) || (inputRealpaths.has(file) && inputRealpaths.get(file) !== observedRealpath) || (inputHashes.has(file) && inputHashes.get(file) !== observed)) { inputHashes.delete(file); inputRealpaths.delete(file); inputSignatures.delete(file); unstableInputHashes.add(file); return; }`,
+  `    inputSignatures.set(file, afterSignature);`,
+  `    inputRealpaths.set(file, observedRealpath);`,
+  `    inputHashes.set(file, observed);`,
+  `  }`,
+  `  function recordInput(file) {`,
+  `    file = path.resolve(file);`,
+  `    recordOneInput(file);`,
+  `    const parsed = path.parse(file);`,
+  `    let current = parsed.root;`,
+  `    const relative = path.relative(parsed.root, file);`,
+  `    for (const segment of relative.split(path.sep).slice(0, -1)) {`,
+  `      if (segment === "") continue;`,
+  `      current = path.join(current, segment);`,
+  `      try {`,
+  `        if (fs.lstatSync(current).isSymbolicLink()) recordOneInput(current);`,
+  `      } catch {`,
+  `        break;`,
+  `      }`,
+  `    }`,
+  `  }`,
+  `  function asFile(resolved) {`,
+  `    if (typeof resolved !== "string") return undefined;`,
+  `    if (!resolved.startsWith("file:")) return path.isAbsolute(resolved) ? path.resolve(resolved) : undefined;`,
+  `    try { return path.resolve(fileURLToPath(resolved)); } catch { return undefined; }`,
+  `  }`,
+  `  function recordFile(resolved) {`,
+  `    const file = asFile(resolved);`,
+  `    if (file === undefined) return;`,
+  `    recordInput(file);`,
+  `    for (let directory = path.dirname(file);;) {`,
+  `      const manifest = path.join(directory, "package.json");`,
+  `      recordInput(manifest);`,
+  `      if (existingFile(manifest)) break;`,
+  `      const parent = path.dirname(directory);`,
+  `      if (parent === directory) break;`,
+  `      directory = parent;`,
+  `    }`,
+  `  }`,
+  `  function recordPackageManifests(file) {`,
+  `    for (let directory = path.dirname(path.resolve(file));;) {`,
+  `      const manifest = path.join(directory, "package.json");`,
+  `      recordInput(manifest);`,
+  `      if (existingFile(manifest)) return;`,
+  `      const parent = path.dirname(directory);`,
+  `      if (parent === directory) return;`,
+  `      directory = parent;`,
+  `    }`,
+  `  }`,
+  `  recordFile(request);`,
+  `  const moduleProbeExtensions = typeof globalThis.Bun === "object" ? [".tsx", ".jsx", ".ts", ".mjs", ".js", ".cjs", ".json"] : [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json", ".node"];`,
+  `  const jsToTsProbeExtensions = new Map([[".js", [".ts", ".tsx"]], [".jsx", [".tsx"]], [".mjs", [".mts"]], [".cjs", [".cts"]]]);`,
+  `  function sourceSubstitutionCandidates(base) {`,
+  `    const extension = path.extname(base).toLowerCase();`,
+  `    const substitutions = jsToTsProbeExtensions.get(extension);`,
+  `    if (substitutions === undefined) return [];`,
+  `    const stem = base.slice(0, base.length - extension.length);`,
+  `    return substitutions.map((candidate) => stem + candidate);`,
+  `  }`,
+  `  function moduleCandidates(base) {`,
+  `    return [base, ...sourceSubstitutionCandidates(base), ...moduleProbeExtensions.map((extension) => base + extension), path.join(base, "package.json"), ...moduleProbeExtensions.map((extension) => path.join(base, "index" + extension))];`,
+  `  }`,
+  `  const recordedModuleBases = new Set();`,
+  `  function recordManifestTargets(value, directory, allowBare = false) {`,
+  `    if (typeof value === "string") {`,
+  `      if (value !== "" && (allowBare || value.startsWith("./") || value.startsWith("../"))) recordModuleCandidates(path.resolve(directory, value));`,
+  `      return;`,
+  `    }`,
+  `    if (Array.isArray(value)) { for (const item of value) recordManifestTargets(item, directory, allowBare); return; }`,
+  `    if (value && typeof value === "object") for (const item of Object.values(value)) recordManifestTargets(item, directory, allowBare);`,
+  `  }`,
+  `  function recordModuleCandidates(base) {`,
+  `    const resolvedBase = path.resolve(base);`,
+  `    if (recordedModuleBases.has(resolvedBase)) return;`,
+  `    recordedModuleBases.add(resolvedBase);`,
+  `    for (const candidate of moduleCandidates(resolvedBase)) recordInput(candidate);`,
+  `    try {`,
+  `      const manifest = JSON.parse(fs.readFileSync(path.join(resolvedBase, "package.json"), "utf8").replace(/^\uFEFF/, ""));`,
+  `      recordManifestTargets(manifest.exports, resolvedBase);`,
+  `      recordManifestTargets(manifest.module, resolvedBase, true);`,
+  `      recordManifestTargets(manifest.main, resolvedBase, true);`,
+  `    } catch {}`,
+  `  }`,
+  `  function candidateSelected(base, selected) {`,
+  `    if (selected === undefined) return false;`,
+  `    for (const candidate of moduleCandidates(base)) {`,
+  `      try {`,
+  `        const canonical = fs.realpathSync.native(candidate);`,
+  `        const relative = path.relative(canonical, selected);`,
+  `        if (relative === "" || (fs.statSync(canonical).isDirectory() && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))) return true;`,
+  `      } catch {}`,
+  `    }`,
+  `    return false;`,
+  `  }`,
+  `  function localBases(specifier, parentFile) {`,
+  `    if (specifier.startsWith("file:")) return [fileURLToPath(specifier)];`,
+  `    const directory = path.dirname(parentFile);`,
+  `    const raw = path.resolve(directory, specifier);`,
+  `    const suffixStart = specifier.search(/[?#]/);`,
+  `    if (suffixStart === -1) return [raw];`,
+  `    const pathname = specifier.slice(0, suffixStart);`,
+  `    return pathname === "" ? [raw] : [...new Set([raw, path.resolve(directory, pathname)])];`,
+  `  }`,
+  `  function recordResolutionCandidates(specifier, parent, resolved) {`,
+  `    const parentFile = asFile(parent);`,
+  `    if (typeof specifier !== "string" || parentFile === undefined) return;`,
+  `    let selected;`,
+  `    try { const file = asFile(resolved); selected = file === undefined ? undefined : fs.realpathSync.native(file); } catch {}`,
+  `    if (specifier.startsWith(".") || path.isAbsolute(specifier) || specifier.startsWith("file:")) {`,
+  `      try {`,
+  `        for (const base of localBases(specifier, parentFile)) {`,
+  `          recordPackageManifests(base);`,
+  `          let exact = false;`,
+  `          try { exact = selected === undefined ? fs.statSync(base).isFile() : fs.realpathSync.native(base) === selected; } catch {}`,
+  `          if (exact) recordInput(base);`,
+  `          if (!exact) recordModuleCandidates(base);`,
+  `        }`,
+  `      } catch {}`,
+  `      return;`,
+  `    }`,
+  `    if (Module.isBuiltin(specifier) || specifier.startsWith("#")) return;`,
+  `    const parts = specifier.split("/");`,
+  `    const packageParts = parts[0].startsWith("@") ? parts.slice(0, 2) : parts.slice(0, 1);`,
+  `    if (packageParts.some((part) => part === undefined || part === "")) return;`,
+  `    const packageName = packageParts.join("/");`,
+  `    const subpath = parts.slice(packageParts.length);`,
+  `    const searchPaths = Module.createRequire(parentFile).resolve.paths(specifier) ?? [];`,
+  `    for (const searchPath of searchPaths) {`,
+  `      const packageDirectory = path.join(searchPath, packageName);`,
+  `      recordModuleCandidates(packageDirectory);`,
+  `      if (subpath.length !== 0) recordModuleCandidates(path.join(packageDirectory, ...subpath));`,
+  `      if (candidateSelected(packageDirectory, selected)) break;`,
+  `    }`,
+  `  }`,
+  `  function scanBunModuleGraph(entry) {`,
+  `    if (typeof globalThis.Bun !== "object" || typeof globalThis.Bun.Transpiler !== "function") return;`,
+  `    const scanned = new Set();`,
+  `    function scan(file) {`,
+  `      file = asFile(file);`,
+  `      if (file === undefined) return;`,
+  `      let canonical;`,
+  `      try { canonical = fs.realpathSync.native(file); } catch { return; }`,
+  `      if (scanned.has(canonical)) return;`,
+  `      scanned.add(canonical);`,
+  `      const extension = path.extname(canonical).toLowerCase();`,
+  `      if (![".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"].includes(extension)) return;`,
+  `      const loader = extension === ".tsx" ? "tsx" : extension === ".jsx" ? "jsx" : [".ts", ".mts", ".cts"].includes(extension) ? "ts" : "js";`,
+  `      let imports;`,
+  `      try {`,
+  `        const source = fs.readFileSync(canonical, "utf8");`,
+  `        imports = new globalThis.Bun.Transpiler({ loader }).scan(source).imports;`,
+  `      } catch { return; }`,
+  `      for (const imported of imports) {`,
+  `        const specifier = imported && imported.path;`,
+  `        if (typeof specifier !== "string" || specifier.startsWith("node:") || Module.isBuiltin(specifier)) continue;`,
+  `        recordResolutionCandidates(specifier, canonical, undefined);`,
+  `        try {`,
+  `          const resolved = globalThis.Bun.resolveSync(specifier, path.dirname(canonical));`,
+  `          recordResolutionCandidates(specifier, canonical, resolved);`,
+  `          recordFile(resolved);`,
+  `          scan(resolved);`,
+  `        } catch {`,
+  `          // The real descriptor load below owns user-facing resolution errors.`,
+  `        }`,
+  `      }`,
+  `    }`,
+  `    scan(entry);`,
+  `  }`,
+  `  if (typeof Module.registerHooks === "function") {`,
+  `    Module.registerHooks({`,
+  `      load(url, loadContext, nextLoad) {`,
+  `        try { return nextLoad(url, loadContext); }`,
+  `        catch (error) {`,
+  `          if (error && (typeof error === "object" || typeof error === "function")) moduleLoadFailures.set(error, { retryWithTtsx: error.code === "ERR_UNKNOWN_FILE_EXTENSION" });`,
+  `          throw error;`,
+  `        }`,
+  `      },`,
+  `      resolve(specifier, resolveContext, nextResolve) {`,
+  `        recordResolutionCandidates(specifier, resolveContext.parentURL, undefined);`,
+  `        let resolved;`,
+  `        try {`,
+  `          resolved = nextResolve(specifier, resolveContext);`,
+  `        } catch (error) {`,
+  `          if (error && (typeof error === "object" || typeof error === "function")) {`,
+  `            const parent = asFile(resolveContext.parentURL);`,
+  `            const anchor = typeof parent === "string" ? parent : request;`,
+  `            const candidate = specifier.startsWith(".") && path.extname(specifier) === "" ? path.resolve(path.dirname(anchor), specifier) : undefined;`,
+  `            const retryWithTtsx = candidate !== undefined && [".ts", ".cts", ".mts", ".tsx"].some((extension) => existingFile(candidate + extension) || existingFile(path.join(candidate, "index" + extension)));`,
+  `            moduleResolutionFailures.set(error, { retryWithTtsx });`,
+  `          }`,
+  `          throw error;`,
+  `        }`,
+  `        const url = typeof resolved === "string" ? resolved : resolved && resolved.url;`,
+  `        recordResolutionCandidates(specifier, resolveContext.parentURL, url);`,
+  `        recordFile(url);`,
+  `        return resolved;`,
+  `      },`,
+  `    });`,
+  `  }`,
+  `  if (typeof globalThis.Bun === "object" && typeof globalThis.Bun.plugin === "function") {`,
+  `    let insideBunResolve = false;`,
+  `    globalThis.Bun.plugin({`,
+  `      name: "ttsc-plugin-descriptor-inputs",`,
+  `      setup(build) {`,
+  `        build.onResolve({ filter: /.*/ }, (args) => {`,
+  `          if (insideBunResolve || args.path.startsWith("node:")) return;`,
+  `          try {`,
+  `            insideBunResolve = true;`,
+  `            const importer = args.importer && args.importer.startsWith("file:") ? fileURLToPath(args.importer) : args.importer;`,
+  `            const from = importer ? path.dirname(importer) : process.cwd();`,
+  `            recordResolutionCandidates(args.path, importer, undefined);`,
+  `            const resolved = globalThis.Bun.resolveSync(args.path, from);`,
+  `            recordResolutionCandidates(args.path, importer, resolved);`,
+  `            recordFile(resolved);`,
+  `          } catch {`,
+  `            // The real resolver below owns user-facing resolution errors.`,
+  `          } finally {`,
+  `            insideBunResolve = false;`,
+  `          }`,
+  `        });`,
+  `      },`,
+  `    });`,
+  `  }`,
+  `  scanBunModuleGraph(request);`,
+  `  let mod;`,
+  `  try {`,
+  `    mod = require(request);`,
+  `  } catch (error) {`,
+  `    retryWithTtsx = shouldRetryWithTtsx(error);`,
+  `    throw error;`,
+  `  }`,
+  `  const candidate = mod.createTtscPlugin ?? mod.default ?? mod.plugin ?? mod;`,
+  `  const descriptor = typeof candidate === "function" ? candidate(context) : candidate;`,
+  `  if (descriptor && typeof descriptor === "object" && ("transformSource" in descriptor || "transformOutput" in descriptor)) {`,
+  `    throw new Error("ttsc: plugin descriptor declares unsupported JS transform functions; declare a native backend instead");`,
+  `  }`,
+  // Serialize the descriptor while the module-resolution hooks are still
+  // collecting. Getters are allowed by JavaScript's object model and can
+  // lazily require a config; snapshotting inputs first would silently omit
+  // that influence.
+  `  const serializedDescriptor = JSON.stringify(descriptor);`,
+  `  for (const input of [...inputs]) recordInput(input);`,
+  `  const payload = { inputHashes: Object.fromEntries(inputHashes), inputRealpaths: Object.fromEntries(inputRealpaths), inputs: [...inputs].sort() };`,
+  `  if (serializedDescriptor !== undefined) payload.descriptor = JSON.parse(serializedDescriptor);`,
+  `  fs.writeFileSync(out, JSON.stringify(payload));`,
+  `} catch (error) {`,
+  `  const message = error instanceof Error ? error.message : String(error);`,
+  `  const stack = error instanceof Error && error.stack ? error.stack : String(error);`,
+  `  try {`,
+  `    fs.writeFileSync(out, JSON.stringify({ __ttscLoaderError: message, __ttscRetryWithTtsx: retryWithTtsx }));`,
+  `  } catch {}`,
+  `  try { process.stderr.write(stack + "\\n"); } catch {}`,
+  `  process.exit(1);`,
+  `}`,
+  ``,
+].join("\n");
+
+/** Read the isolated loader's explicit retry classification. */
+function commonJsDescriptorRetryWithTtsx(file: string): boolean {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isRecord(parsed) && parsed.__ttscRetryWithTtsx === true;
+  } catch {
+    return false;
+  }
+}
+
+function commonJsDescriptorProcessFailure(
+  result: {
+    error?: Error;
+    signal: NodeJS.Signals | null;
+    status: number | null;
+  },
+  request: string,
+): Error | undefined {
+  if (result.error !== undefined) {
+    return new Error(
+      `ttsc: failed to launch an isolated process for plugin descriptor "${request}": ${result.error.message}`,
+    );
+  }
+  if (result.signal !== null) {
+    return new Error(
+      `ttsc: plugin descriptor "${request}" isolated evaluation was killed by signal ${result.signal}.`,
+    );
+  }
+  if (result.status !== 0) {
+    return new Error(
+      `ttsc: plugin descriptor "${request}" isolated evaluation failed with exit code ${String(result.status)}`,
+    );
+  }
+  return undefined;
 }
 
 const TS_SOURCE_PATTERN = /\.(?:[cm]?ts|tsx)$/i;
@@ -714,6 +2128,11 @@ export const PLUGIN_DESCRIPTOR_SHIM_SOURCE = [
   // both — "Cannot find module ./missing" is as actionable as anything the
   // factory could have said.
   `try {`,
+  // Runtime hooks are installed before this shim loads. Arm their internal
+  // side channel only for the descriptor import itself, after this shim's own
+  // imports have resolved, so ttsc implementation files never become project
+  // cache inputs.
+  `  process.env.TTSC_PLUGIN_DESCRIPTOR_INPUTS_ACTIVE = "1";`,
   `  const mod = await import(pathToFileURL(process.env.TTSC_PLUGIN_ENTRY).href);`,
   `  const context = JSON.parse(process.env.TTSC_PLUGIN_CONTEXT);`,
   `  const candidate = mod.createTtscPlugin ?? mod.default ?? mod.plugin ?? mod;`,
@@ -748,36 +2167,34 @@ function loadDescriptorViaTtsx(
   request: string,
   context: ITtscPluginFactoryContext,
   effectiveEnv: NodeJS.ProcessEnv,
-): unknown {
+): IsolatedPluginDescriptor | undefined {
   // Binary discovery prefers the instance environment, then the ambient
   // process.env (where `withPluginLoaderEnv` injects ttsc's own node/ttsx paths
   // just before this runs), then the running interpreter.
-  const node =
-    effectiveEnv.TTSC_NODE_BINARY ??
-    process.env.TTSC_NODE_BINARY ??
-    process.execPath;
+  const node = resolveNodeBinary(effectiveEnv, context.projectRoot);
   const ttsx = effectiveEnv.TTSC_TTSX_BINARY ?? process.env.TTSC_TTSX_BINARY;
-  if (ttsx === undefined || ttsx.length === 0) {
+  if (node === undefined || ttsx === undefined || ttsx.length === 0) {
     return undefined;
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ttsc-plugin-descriptor-"));
+  const dir = createEvaluationTempDir();
   const out = path.join(dir, "descriptor.json");
+  const inputsOut = path.join(dir, "descriptor-inputs.ndjson");
   const shim = path.join(dir, "load-descriptor.mts");
   // ttsx type-checks and builds the shim's own project, so it needs a tsconfig
   // to anchor on; a minimal one is enough (the shim is `@ts-nocheck`).
-  fs.writeFileSync(
-    path.join(dir, "tsconfig.json"),
-    JSON.stringify({
-      compilerOptions: {
-        module: "nodenext",
-        moduleResolution: "nodenext",
-        skipLibCheck: true,
-        target: "es2022",
-      },
-    }),
-  );
-  fs.writeFileSync(shim, PLUGIN_DESCRIPTOR_SHIM_SOURCE);
   try {
+    fs.writeFileSync(
+      path.join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          skipLibCheck: true,
+          target: "es2022",
+        },
+      }),
+    );
+    fs.writeFileSync(shim, PLUGIN_DESCRIPTOR_SHIM_SOURCE);
     const result = childProcess.spawnSync(node, [ttsx, "--no-plugins", shim], {
       cwd: context.projectRoot,
       encoding: "utf8",
@@ -794,11 +2211,13 @@ function loadDescriptorViaTtsx(
           dirname: context.dirname,
           filename: context.filename,
           plugin: context.plugin,
+          pluginConfigDir: context.pluginConfigDir,
           projectRoot: context.projectRoot,
           tsconfig: context.tsconfig,
         }),
         TTSC_PLUGIN_DESCRIPTOR_LOAD: "1",
         TTSC_PLUGIN_DESCRIPTOR_OUT: out,
+        TTSC_PLUGIN_DESCRIPTOR_INPUTS_OUT: inputsOut,
         TTSC_PLUGIN_ENTRY: request,
       },
       // Both child streams are human output, and they go straight to this
@@ -826,7 +2245,16 @@ ${reason}`);
     }
     const text = fs.readFileSync(out, "utf8");
     try {
-      return JSON.parse(text);
+      const inputSnapshot = readTtsxDescriptorInputs(inputsOut, request);
+      return {
+        descriptor: JSON.parse(text),
+        hostInputHashes: omitUnstableHostInputHashes(
+          inputSnapshot.hostInputHashes,
+          inputSnapshot.unstableInputs,
+        ),
+        hostInputRealpaths: inputSnapshot.hostInputRealpaths,
+        inputs: inputSnapshot.inputs,
+      };
     } catch (error) {
       throw new Error(
         `ttsc: plugin descriptor "${request}" produced invalid JSON: ${errorMessage(error)}`,
@@ -837,6 +2265,140 @@ ${reason}`);
   }
 }
 
+interface TtsxDescriptorResolutionRecord {
+  hash?: string | null;
+  parent?: string;
+  realpath?: string | null;
+  resolved?: string;
+  signature?: string;
+  specifier?: string;
+  unstable?: boolean;
+}
+
+/**
+ * Expand the ttsx runtime's selected module edges into the same exact and
+ * missing resolution inputs used by the direct isolated evaluator.
+ */
+function readTtsxDescriptorInputs(
+  file: string,
+  request: string,
+): {
+  hostInputHashes: Record<string, string | null>;
+  hostInputRealpaths: Record<string, string | null>;
+  inputs: string[];
+  unstableInputs: string[];
+} {
+  const inputs = new Set<string>([path.resolve(request)]);
+  const hashes = new Map<string, string | null>();
+  const realpaths = new Map<string, string | null>();
+  const signatures = new Map<string, string>();
+  const unstableInputs = new Set<string>();
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return {
+      hostInputHashes: {},
+      hostInputRealpaths: {},
+      inputs: [...inputs],
+      unstableInputs: [],
+    };
+  }
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    let record: TtsxDescriptorResolutionRecord;
+    try {
+      record = JSON.parse(line) as TtsxDescriptorResolutionRecord;
+    } catch {
+      continue;
+    }
+    if (typeof record.resolved === "string") {
+      const resolved = path.resolve(record.resolved);
+      inputs.add(resolved);
+      if (record.unstable === true) {
+        hashes.delete(resolved);
+        realpaths.delete(resolved);
+        signatures.delete(resolved);
+        unstableInputs.add(resolved);
+        continue;
+      }
+      if (
+        typeof record.signature !== "string" ||
+        (signatures.has(resolved) &&
+          signatures.get(resolved) !== record.signature)
+      ) {
+        hashes.delete(resolved);
+        realpaths.delete(resolved);
+        signatures.delete(resolved);
+        unstableInputs.add(resolved);
+        continue;
+      }
+      signatures.set(resolved, record.signature);
+      if (
+        (typeof record.realpath === "string" &&
+          path.isAbsolute(record.realpath)) ||
+        record.realpath === null
+      ) {
+        const observed =
+          record.realpath === null ? null : path.resolve(record.realpath);
+        if (realpaths.has(resolved) && realpaths.get(resolved) !== observed) {
+          hashes.delete(resolved);
+          realpaths.delete(resolved);
+          signatures.delete(resolved);
+          unstableInputs.add(resolved);
+          continue;
+        }
+        realpaths.set(resolved, observed);
+      }
+      if (typeof record.hash === "string" || record.hash === null) {
+        if (unstableInputs.has(resolved)) {
+          // Keep a previously observed contradiction unstable.
+        } else if (
+          hashes.has(resolved) &&
+          hashes.get(resolved) !== record.hash
+        ) {
+          hashes.delete(resolved);
+          realpaths.delete(resolved);
+          signatures.delete(resolved);
+          unstableInputs.add(resolved);
+        } else {
+          hashes.set(resolved, record.hash);
+        }
+      }
+    }
+    if (
+      typeof record.specifier === "string" &&
+      typeof record.parent === "string"
+    ) {
+      for (const candidate of collectModuleResolutionCandidates(
+        record.specifier,
+        record.parent,
+        record.resolved,
+      )) {
+        inputs.add(path.resolve(candidate));
+      }
+    }
+  }
+  for (const [resolved, observed] of realpaths) {
+    if (
+      realpathHostInput(resolved) === observed &&
+      signatures.get(resolved) === hostInputMetadataSignature(resolved)
+    ) {
+      continue;
+    }
+    hashes.delete(resolved);
+    realpaths.delete(resolved);
+    signatures.delete(resolved);
+    unstableInputs.add(resolved);
+  }
+  return {
+    hostInputHashes: Object.fromEntries(hashes),
+    hostInputRealpaths: Object.fromEntries(realpaths),
+    inputs: [...inputs].sort(),
+    unstableInputs: [...unstableInputs],
+  };
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -844,7 +2406,10 @@ function errorMessage(error: unknown): string {
 function withPluginLoaderEnv<T>(run: () => T): T {
   const previousNode = process.env.TTSC_NODE_BINARY;
   const previousTtsx = process.env.TTSC_TTSX_BINARY;
-  process.env.TTSC_NODE_BINARY ??= process.execPath;
+  const node = resolveNodeBinary({}, process.cwd());
+  if (process.env.TTSC_NODE_BINARY === undefined && node !== undefined) {
+    process.env.TTSC_NODE_BINARY = node;
+  }
   process.env.TTSC_TTSX_BINARY ??= path.join(
     __dirname,
     "..",
@@ -857,6 +2422,47 @@ function withPluginLoaderEnv<T>(run: () => T): T {
   } finally {
     restoreEnv("TTSC_NODE_BINARY", previousNode);
     restoreEnv("TTSC_TTSX_BINARY", previousTtsx);
+  }
+}
+
+/**
+ * Select the executable for isolated descriptor evaluation.
+ *
+ * Under Bun, `process.execPath` names Bun itself. Bun implements enough of the
+ * Node module surface to evaluate descriptors natively, but not Node's
+ * synchronous `module.registerHooks` preload. The caller therefore recognizes
+ * this default and omits the Node-only preload while retaining the fresh
+ * process boundary. An explicitly configured Node executable remains
+ * authoritative and receives the preload as usual.
+ */
+function pluginDescriptorRuntimeBinary(env: NodeJS.ProcessEnv): string {
+  if (
+    env.TTSC_NODE_BINARY === undefined &&
+    typeof (process.versions as Record<string, string | undefined>).bun ===
+      "string"
+  ) {
+    return process.execPath;
+  }
+  return (
+    env.TTSC_NODE_BINARY ?? process.env.TTSC_NODE_BINARY ?? process.execPath
+  );
+}
+
+/** Replay a child's human output without imposing a fixed output ceiling. */
+function replayEvaluationDiagnostics(file: string): void {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, "r");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const length = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (length === 0) break;
+      fs.writeSync(2, buffer, 0, length);
+    }
+  } catch {
+    // Diagnostic replay must never replace the descriptor result.
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
@@ -1181,7 +2787,7 @@ function resolvePluginExportCondition(
     return null;
   }
   const file = path.resolve(path.dirname(packageJson), resolved);
-  return fs.existsSync(file) ? resolveRealPath(file) : null;
+  return existingFile(file) ? resolveRealPath(file) : null;
 }
 
 /**
@@ -1411,6 +3017,14 @@ function readTsgoVersion(projectRoot: string): string {
   } catch {
     return "unknown";
   }
+}
+
+/**
+ * Create an evaluator directory whose cleanup path cannot follow a retargeted
+ * parent alias.
+ */
+function createEvaluationTempDir(): string {
+  return createCanonicalTempDirectory("ttsc-plugin-descriptor-");
 }
 
 /**

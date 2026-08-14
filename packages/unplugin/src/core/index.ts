@@ -146,7 +146,10 @@ export type {
   TtscUnpluginCompilerOptionsJson,
   TtscUnpluginOptions,
 } from "./options";
-export type { TtscTransformHooks } from "./transform";
+export type {
+  TtscTransformFilesystemOperations,
+  TtscTransformHooks,
+} from "./transform";
 export {
   beginTtscTransformBuild,
   collectExternalInputHashes,

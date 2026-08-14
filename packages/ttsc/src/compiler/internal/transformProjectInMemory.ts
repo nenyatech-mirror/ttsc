@@ -1,8 +1,11 @@
 import path from "node:path";
 
+import { resolveNodeBinary } from "../../internal/resolveNodeBinary";
 import {
-  hasProjectPluginEntries,
+  collectProjectHostInputs,
+  hashHostInputPaths,
   loadProjectPlugins,
+  realpathHostInputPaths,
 } from "../../plugin/internal/loadProjectPlugins";
 import type { ITtscCompilerContext } from "../../structures/ITtscCompilerContext";
 import type { ITtscCompilerDiagnostic } from "../../structures/ITtscCompilerDiagnostic";
@@ -13,7 +16,6 @@ import type { TtscBuildResult } from "../../structures/internal/TtscBuildResult"
 import { buildNativeCompiler } from "./buildNativeCompiler";
 import { packageRootDir } from "./paths";
 import { createNativeProjectContextArgs } from "./project/createNativeProjectContextArgs";
-import { readProjectConfig } from "./project/readProjectConfig";
 import { resolveBinary } from "./resolveBinary";
 import { resolveTsgo } from "./resolveTsgo";
 import { appendBuildOutput, normalizeBuildOutput } from "./runBuild";
@@ -46,28 +48,28 @@ export function transformProjectInMemory(options: ITtscCompilerContext): {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
+  hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
 } {
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const project = readProjectConfig({
+  const loaded = loadProjectPlugins({
+    binary: resolveBinary(options) ?? "",
+    cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
     cwd,
+    entries: options.plugins,
+    env: inheritedSidecarEnv(options.env),
+    pluginConfigDir: options.pluginConfigDir,
     projectRoot: options.projectRoot,
     tsconfig: options.tsconfig,
   });
-  if (hasConfiguredPlugins(options, project)) {
-    return transformProjectWithPlugins(options, cwd, project);
+  if (loaded.nativePlugins.length !== 0) {
+    return transformProjectWithPlugins(options, loaded);
   }
-  return transformProjectWithNativeHost(options, project);
-}
-
-/** Return true when the project or the call-level options declare any plugins. */
-function hasConfiguredPlugins(
-  options: ITtscCompilerContext,
-  project: ITtscParsedProjectConfig,
-): boolean {
-  return hasProjectPluginEntries(project, options.plugins);
+  return transformProjectWithNativeHost(options, loaded.project, loaded);
 }
 
 /**
@@ -78,14 +80,47 @@ function hasConfiguredPlugins(
 function transformProjectWithNativeHost(
   options: ITtscCompilerContext,
   project: ITtscParsedProjectConfig,
+  baseline?: {
+    hostInputHashes: Readonly<Record<string, string | null>>;
+    hostInputRealpaths: Readonly<Record<string, string | null>>;
+    hostInputs: readonly string[];
+  },
 ): {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
+  hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
 } {
+  // Capture the project inputs before the native host observes them. Pairing a
+  // post-build hash with an earlier result can bless a torn generation when a
+  // config changes during the child process.
+  // Plugin discovery already ran in loadProjectPlugins. The native host only
+  // consumes the resolved config chain here, so dependency package manifests
+  // must not become per-project universal inputs a second time.
+  const projectHostInputs = collectProjectHostInputs(project, false);
+  const projectHostInputHashes = hashHostInputPaths(projectHostInputs);
+  const projectHostInputRealpaths = realpathHostInputPaths(projectHostInputs);
+  const observedHostInputs = mergeHostInputs(
+    baseline?.hostInputs,
+    projectHostInputs,
+  );
+  const observedHostInputHashes = mergeCompatibleHostInputHashes(
+    baseline?.hostInputHashes ?? {},
+    projectHostInputHashes,
+    baseline?.hostInputs ?? [],
+    projectHostInputs,
+  );
+  const observedHostInputRealpaths = mergeCompatibleHostInputHashes(
+    baseline?.hostInputRealpaths ?? {},
+    projectHostInputRealpaths,
+    baseline?.hostInputs ?? [],
+    projectHostInputs,
+  );
   const binary = buildNativeCompiler({
     cacheBaseDir: project.root,
     cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
@@ -109,8 +144,37 @@ function transformProjectWithNativeHost(
     outputText(res.stdout),
     outputText(res.stderr),
   );
+  const finalObservedHostInputHashes = revalidateHostInputHashes(
+    observedHostInputHashes,
+    observedHostInputs,
+  );
+  const finalOutputHostInputHashes = revalidateHostInputHashes(
+    output.hostInputHashes ?? {},
+    output.hostInputs ?? [],
+  );
+  const finalObservedHostInputRealpaths = revalidateHostInputRealpaths(
+    observedHostInputRealpaths,
+    observedHostInputs,
+  );
+  const finalOutputHostInputRealpaths = revalidateHostInputRealpaths(
+    output.hostInputRealpaths ?? {},
+    output.hostInputs ?? [],
+  );
   return {
     ...envelopeSideChannels(output),
+    hostInputHashes: mergeCompatibleHostInputHashes(
+      finalObservedHostInputHashes,
+      finalOutputHostInputHashes,
+      observedHostInputs,
+      output.hostInputs,
+    ),
+    hostInputRealpaths: mergeCompatibleHostInputHashes(
+      finalObservedHostInputRealpaths,
+      finalOutputHostInputRealpaths,
+      observedHostInputs,
+      output.hostInputs,
+    ),
+    hostInputs: mergeHostInputs(observedHostInputs, output.hostInputs),
     result: {
       diagnostics: output.diagnostics,
       status: res.status ?? 1,
@@ -123,26 +187,19 @@ function transformProjectWithNativeHost(
 
 function transformProjectWithPlugins(
   options: ITtscCompilerContext,
-  cwd: string,
-  project: ITtscParsedProjectConfig,
+  loaded: ReturnType<typeof loadProjectPlugins>,
 ): {
   dependencies?: Record<string, string[]>;
   dependenciesComplete?: string[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
+  hostInputs?: string[];
   result: TtscBuildResult;
   typescript: Record<string, string>;
   volatile?: string[];
 } {
-  const loaded = loadProjectPlugins({
-    binary: resolveBinary(options) ?? "",
-    cacheDir: options.cacheDir ?? options.env?.TTSC_CACHE_DIR,
-    cwd,
-    entries: options.plugins,
-    env: inheritedSidecarEnv(options.env),
-    pluginConfigDir: options.pluginConfigDir,
-    projectRoot: options.projectRoot,
-    tsconfig: project.path,
-  });
+  const { project } = loaded;
   const checks = loaded.nativePlugins.filter(
     (plugin) => plugin.stage === "check",
   );
@@ -162,14 +219,44 @@ function transformProjectWithPlugins(
   );
   if (checked.status !== 0) {
     return {
+      hostInputHashes: revalidateHostInputHashes(
+        loaded.hostInputHashes,
+        loaded.hostInputs,
+      ),
+      hostInputRealpaths: revalidateHostInputRealpaths(
+        loaded.hostInputRealpaths,
+        loaded.hostInputs,
+      ),
+      hostInputs: loaded.hostInputs,
       result: checked,
       typescript: {},
     };
   }
   if (transformers.length === 0) {
     const transformed = transformProjectWithNativeHost(options, project);
+    const finalLoadedHostInputHashes = revalidateHostInputHashes(
+      loaded.hostInputHashes,
+      loaded.hostInputs,
+    );
+    const finalLoadedHostInputRealpaths = revalidateHostInputRealpaths(
+      loaded.hostInputRealpaths,
+      loaded.hostInputs,
+    );
     return {
       ...envelopeSideChannels(transformed),
+      hostInputHashes: mergeCompatibleHostInputHashes(
+        finalLoadedHostInputHashes,
+        transformed.hostInputHashes,
+        loaded.hostInputs,
+        transformed.hostInputs,
+      ),
+      hostInputRealpaths: mergeCompatibleHostInputHashes(
+        finalLoadedHostInputRealpaths,
+        transformed.hostInputRealpaths,
+        loaded.hostInputs,
+        transformed.hostInputs,
+      ),
+      hostInputs: mergeHostInputs(loaded.hostInputs, transformed.hostInputs),
       result: appendBuildOutput(checked, transformed.result),
       typescript: transformed.typescript,
     };
@@ -186,7 +273,13 @@ function transformProjectWithPlugins(
     ),
     {
       cwd: project.root,
-      env: nativePluginEnv(options, tsgoBinary, loaded.nativePlugins, plugin),
+      env: nativePluginEnv(
+        options,
+        project.root,
+        tsgoBinary,
+        loaded.nativePlugins,
+        plugin,
+      ),
     },
   );
   if (res.error) {
@@ -204,11 +297,74 @@ function transformProjectWithPlugins(
     stdout: "",
     stderr: outputText(res.stderr),
   };
+  const finalLoadedHostInputHashes = revalidateHostInputHashes(
+    loaded.hostInputHashes,
+    loaded.hostInputs,
+  );
+  const finalOutputHostInputHashes = revalidateHostInputHashes(
+    output.hostInputHashes ?? {},
+    output.hostInputs ?? [],
+  );
+  const finalLoadedHostInputRealpaths = revalidateHostInputRealpaths(
+    loaded.hostInputRealpaths,
+    loaded.hostInputs,
+  );
+  const finalOutputHostInputRealpaths = revalidateHostInputRealpaths(
+    output.hostInputRealpaths ?? {},
+    output.hostInputs ?? [],
+  );
   return {
     ...envelopeSideChannels(output),
+    hostInputHashes: mergeCompatibleHostInputHashes(
+      finalLoadedHostInputHashes,
+      finalOutputHostInputHashes,
+      loaded.hostInputs,
+      output.hostInputs,
+    ),
+    hostInputRealpaths: mergeCompatibleHostInputHashes(
+      finalLoadedHostInputRealpaths,
+      finalOutputHostInputRealpaths,
+      loaded.hostInputs,
+      output.hostInputs,
+    ),
+    hostInputs: mergeHostInputs(loaded.hostInputs, output.hostInputs),
     result: appendBuildOutput(checked, result),
     typescript: output.typescript,
   };
+}
+
+/** Keep evaluation proof only when the same input still has the same state. */
+function revalidateHostInputHashes(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = hashHostInputPaths(inputs);
+  return Object.fromEntries(
+    inputs.flatMap((input) => {
+      const absolute = path.resolve(input);
+      return Object.prototype.hasOwnProperty.call(initial, absolute) &&
+        initial[absolute] === current[absolute]
+        ? ([[absolute, current[absolute]!]] as const)
+        : [];
+    }),
+  );
+}
+
+/** Keep evaluation proof only while each lexical path selects the same target. */
+function revalidateHostInputRealpaths(
+  initial: Readonly<Record<string, string | null>>,
+  inputs: readonly string[],
+): Record<string, string | null> {
+  const current = realpathHostInputPaths(inputs);
+  return Object.fromEntries(
+    inputs.flatMap((input) => {
+      const absolute = path.resolve(input);
+      return Object.prototype.hasOwnProperty.call(initial, absolute) &&
+        initial[absolute] === current[absolute]
+        ? ([[absolute, current[absolute]!]] as const)
+        : [];
+    }),
+  );
 }
 
 /**
@@ -240,6 +396,73 @@ function envelopeSideChannels(output: {
   };
 }
 
+/** Merge JavaScript- and native-host universal inputs by absolute path. */
+function mergeHostInputs(
+  ...groups: readonly (readonly string[] | undefined)[]
+): string[] {
+  return [
+    ...new Set(
+      groups.flatMap((group) =>
+        (group ?? []).map((file) => path.resolve(file)),
+      ),
+    ),
+  ].sort();
+}
+
+/** Keep only native/descriptor fingerprints that agree on shared paths. */
+function mergeCompatibleHostInputHashes(
+  first: Readonly<Record<string, string | null>>,
+  second: Readonly<Record<string, string | null>> | undefined,
+  firstInputs: readonly string[],
+  secondInputs: readonly string[] | undefined,
+): Record<string, string | null> {
+  const firstDeclared = new Set(
+    firstInputs.map((input) => path.resolve(input)),
+  );
+  const secondDeclared = new Set(
+    (secondInputs ?? []).map((input) => path.resolve(input)),
+  );
+  const output = Object.fromEntries(
+    Object.entries(first).flatMap(([file, hash]) => {
+      const absolute = path.resolve(file);
+      return firstDeclared.has(absolute) ? [[absolute, hash] as const] : [];
+    }),
+  );
+  const unproven = new Set<string>();
+  for (const input of firstInputs) {
+    const absolute = path.resolve(input);
+    if (!Object.prototype.hasOwnProperty.call(first, absolute)) {
+      delete output[absolute];
+      unproven.add(absolute);
+    }
+  }
+  for (const input of secondInputs ?? []) {
+    const absolute = path.resolve(input);
+    if (!Object.prototype.hasOwnProperty.call(second ?? {}, absolute)) {
+      delete output[absolute];
+      unproven.add(absolute);
+    }
+  }
+  for (const [file, hash] of Object.entries(second ?? {})) {
+    const absolute = path.resolve(file);
+    if (!secondDeclared.has(absolute)) continue;
+    if (unproven.has(absolute)) continue;
+    if (
+      Object.prototype.hasOwnProperty.call(output, absolute) &&
+      output[absolute] !== hash
+    ) {
+      // Two evaluation stages observed different states. Dropping proof makes
+      // persistent adapters replace the generation without turning advisory
+      // cache metadata into a user-facing compile failure.
+      delete output[absolute];
+      unproven.add(absolute);
+      continue;
+    }
+    output[absolute] = hash;
+  }
+  return output;
+}
+
 /**
  * Run every check-stage plugin in sequence, short-circuiting on the first
  * failure. Returns the aggregated `TtscBuildResult` (status 0 when all pass).
@@ -268,7 +491,13 @@ function runNativeChecks(
       ),
       {
         cwd: project.root,
-        env: nativePluginEnv(options, tsgoBinary, nativePlugins, plugin),
+        env: nativePluginEnv(
+          options,
+          project.root,
+          tsgoBinary,
+          nativePlugins,
+          plugin,
+        ),
       },
     );
     if (res.error) {
@@ -360,6 +589,7 @@ function serializeNativePlugins(
  */
 function nativePluginEnv(
   options: ITtscCompilerContext,
+  projectRoot: string,
   tsgoBinary: string,
   nativePlugins?: readonly ITtscLoadedNativePlugin[],
   plugin?: ITtscLoadedNativePlugin,
@@ -367,7 +597,6 @@ function nativePluginEnv(
   const pluginConfigDir = resolvePluginConfigDir(options);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TTSC_NODE_BINARY: process.env.TTSC_NODE_BINARY ?? process.execPath,
     ...(pluginConfigDir === undefined
       ? {}
       : { TTSC_PLUGIN_CONFIG_DIR: pluginConfigDir }),
@@ -377,6 +606,9 @@ function nativePluginEnv(
       path.join(__dirname, "..", "..", "launcher", "ttsx.js"),
     ...options.env,
   };
+  const node = resolveNodeBinary(env, projectRoot);
+  if (node === undefined) delete env.TTSC_NODE_BINARY;
+  else env.TTSC_NODE_BINARY = node;
   // The anchor is per-invocation state owned by this host: when this run
   // declared none (and the caller's env does not name one), drop any value
   // inherited from an ancestor ttsc process so a nested build never
@@ -423,6 +655,9 @@ function parseNativeTransformOutput(
   dependenciesComplete?: string[];
   diagnostics: ITtscCompilerDiagnostic[];
   graph?: ITtscCompilerTransformation.IReferenceGraph;
+  hostInputHashes?: Record<string, string | null>;
+  hostInputRealpaths?: Record<string, string | null>;
+  hostInputs?: string[];
   typescript: Record<string, string>;
   volatile?: string[];
 } {
@@ -432,6 +667,9 @@ function parseNativeTransformOutput(
       dependenciesComplete?: string[];
       diagnostics?: ITtscCompilerDiagnostic[];
       graph?: ITtscCompilerTransformation.IReferenceGraph;
+      hostInputHashes?: Record<string, string | null>;
+      hostInputRealpaths?: Record<string, string | null>;
+      hostInputs?: string[];
       typescript?: Record<string, string>;
       volatile?: string[];
     };
@@ -443,11 +681,19 @@ function parseNativeTransformOutput(
     const dependencies = parseDependencyLists(parsed.dependencies);
     const dependenciesComplete = parseFileList(parsed.dependenciesComplete);
     const graph = parseReferenceGraph(parsed.graph);
+    const hostInputHashes = parseHostInputHashes(parsed.hostInputHashes);
+    const hostInputRealpaths = parseHostInputRealpaths(
+      parsed.hostInputRealpaths,
+    );
+    const hostInputs = parseFileList(parsed.hostInputs);
     const volatile = parseFileList(parsed.volatile);
     return {
       ...(dependencies === undefined ? {} : { dependencies }),
       ...(dependenciesComplete === undefined ? {} : { dependenciesComplete }),
       ...(graph === undefined ? {} : { graph }),
+      ...(hostInputHashes === undefined ? {} : { hostInputHashes }),
+      ...(hostInputRealpaths === undefined ? {} : { hostInputRealpaths }),
+      ...(hostInputs === undefined ? {} : { hostInputs }),
       ...(volatile === undefined ? {} : { volatile }),
       diagnostics: Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [],
       typescript: parsed.typescript,
@@ -461,6 +707,49 @@ function parseNativeTransformOutput(
         "ttsc: native transform host returned no output",
     );
   }
+}
+
+/** Parse native evaluation-time SHA-256/null host-input fingerprints. */
+function parseHostInputHashes(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, hash] of Object.entries(value)) {
+    if (
+      !path.isAbsolute(file) ||
+      (hash !== null &&
+        (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)))
+    ) {
+      continue;
+    }
+    output[path.resolve(file)] = hash;
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
+}
+
+/** Parse native evaluation-time realpath/null host-input identities. */
+function parseHostInputRealpaths(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, realpath] of Object.entries(value)) {
+    if (
+      !path.isAbsolute(file) ||
+      (realpath !== null &&
+        (typeof realpath !== "string" || !path.isAbsolute(realpath)))
+    ) {
+      continue;
+    }
+    output[path.resolve(file)] =
+      realpath === null ? null : path.resolve(realpath as string);
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
 }
 
 /**
@@ -489,10 +778,36 @@ function parseDependencyLists(
 }
 
 /**
+ * Normalize graph adjacency while retaining every well-formed node key.
+ *
+ * A leaf is intentionally encoded as an empty target array. Its key still
+ * declares graph membership and lets persistent hosts bind the compiler-time
+ * input proof for that source. A node needs a non-empty source key and an array
+ * value; invalid array members are filtered without erasing a valid node.
+ */
+function parseGraphEdges(value: unknown): Record<string, string[]> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string[]> = {};
+  for (const [key, entries] of Object.entries(value)) {
+    if (key.length === 0 || !Array.isArray(entries)) {
+      continue;
+    }
+    output[key] = entries.filter(
+      (entry): entry is string => typeof entry === "string",
+    );
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
+}
+
+/**
  * Normalize the optional `graph` envelope section with the same tolerance as
- * `dependencies`: non-object sections are dropped, edge entries that are not
- * string arrays are dropped, and non-string list members are filtered. A
- * section carrying nothing usable collapses to `undefined`.
+ * `dependencies`: non-object sections are dropped, empty source keys and edge
+ * entries that are not arrays are dropped, and non-string list members are
+ * filtered. Empty arrays remain as graph nodes because leaf membership binds
+ * compiler input proof. A section carrying nothing usable collapses to
+ * `undefined`.
  *
  * `candidates` is the one optional member, so an empty one is left off the
  * result instead of being materialized as `{}`. The host omits the key when it
@@ -511,11 +826,15 @@ function parseReferenceGraph(
     configs?: unknown;
     edges?: unknown;
     globals?: unknown;
+    inputHashes?: unknown;
+    inputRealpaths?: unknown;
   };
   const candidates = parseDependencyLists(section.candidates) ?? {};
-  const edges = parseDependencyLists(section.edges) ?? {};
+  const edges = parseGraphEdges(section.edges) ?? {};
   const globals = parseFileList(section.globals) ?? [];
   const configs = parseFileList(section.configs) ?? [];
+  const inputHashes = parseGraphInputHashes(section.inputHashes);
+  const inputRealpaths = parseGraphInputRealpaths(section.inputRealpaths);
   if (
     Object.keys(candidates).length === 0 &&
     Object.keys(edges).length === 0 &&
@@ -524,15 +843,62 @@ function parseReferenceGraph(
   ) {
     return undefined;
   }
-  return Object.keys(candidates).length === 0
-    ? { configs, edges, globals }
-    : { candidates, configs, edges, globals };
+  return {
+    ...(Object.keys(candidates).length === 0 ? {} : { candidates }),
+    configs,
+    edges,
+    globals,
+    ...(inputHashes === undefined ? {} : { inputHashes }),
+    ...(inputRealpaths === undefined ? {} : { inputRealpaths }),
+  };
+}
+
+/** Parse graph-keyed compiler-time content/null observations. */
+function parseGraphInputHashes(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, hash] of Object.entries(value)) {
+    if (
+      file.length === 0 ||
+      (hash !== null &&
+        (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)))
+    ) {
+      continue;
+    }
+    output[file] = hash;
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
+}
+
+/** Parse graph-keyed compiler-time physical/null identities. */
+function parseGraphInputRealpaths(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const output: Record<string, string | null> = {};
+  for (const [file, realpath] of Object.entries(value)) {
+    if (
+      file.length === 0 ||
+      (realpath !== null &&
+        (typeof realpath !== "string" || !path.isAbsolute(realpath)))
+    ) {
+      continue;
+    }
+    output[file] = realpath === null ? null : path.resolve(realpath);
+  }
+  return Object.keys(output).length === 0 ? undefined : output;
 }
 
 /**
  * Normalize an optional string-list envelope field (`dependenciesComplete`,
- * `volatile`, and the `globals`/`configs` graph sections), or `undefined` when
- * absent or carrying nothing usable.
+ * `hostInputs`, `volatile`, and the `globals`/`configs` graph sections), or
+ * `undefined` when absent or carrying nothing usable.
  */
 function parseFileList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {

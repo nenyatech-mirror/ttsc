@@ -2,6 +2,13 @@ import { TestUnpluginProject, TestUnpluginRuntime } from "@ttsc/testing";
 import assert from "node:assert/strict";
 import path from "node:path";
 
+/** Universal descriptor/config files loaded by the fixture host. */
+function fixtureHostInputs(root: string): string[] {
+  return ["package.json", "plugin.cjs", "tsconfig.json"].map((file) =>
+    path.join(root, file),
+  );
+}
+
 /**
  * Build the plugin descriptor list that routes the fixture plugin through the
  * `emit-graph` operation with the given graph section. Plugin options live at
@@ -13,6 +20,8 @@ function emitGraphPlugins(graph: {
   echoTsconfig?: boolean;
   edges?: Record<string, string[]>;
   globals?: string[];
+  inputHashes?: Record<string, string | null>;
+  inputRealpaths?: Record<string, string | null>;
 }): unknown[] {
   return [
     {
@@ -68,7 +77,7 @@ async function assertTransformRegistersGraphReachGlobalsAndConfigs(): Promise<vo
       path.join(root, "src", "a.d.ts"),
       path.join(root, "src", "b.d.ts"),
       path.join(root, "src", "ambient.d.ts"),
-      path.join(root, "tsconfig.json"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
@@ -115,6 +124,7 @@ async function assertGraphAndDependenciesRegisterAsUnion(): Promise<void> {
       path.join(root, "src", "shared.d.ts"),
       path.join(root, "src", "only-dependency.d.ts"),
       path.join(root, "src", "only-graph.d.ts"),
+      ...fixtureHostInputs(root),
     ].sort(),
   );
 }
@@ -151,7 +161,10 @@ async function assertGeneratedTsconfigIsNotRegistered(): Promise<void> {
 
   assert.ok(result);
   // The type edge still registers; the echoed temp-dir tsconfig must not.
-  assert.deepEqual(watched, [path.join(root, "src", "types.d.ts")]);
+  assert.deepEqual(
+    [...watched].sort(),
+    [path.join(root, "src", "types.d.ts"), ...fixtureHostInputs(root)].sort(),
+  );
 }
 
 export {

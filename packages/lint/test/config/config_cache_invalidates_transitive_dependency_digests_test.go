@@ -6,6 +6,7 @@ import (
   "encoding/hex"
   "os"
   "path/filepath"
+  "runtime"
   "sort"
   "strconv"
   "strings"
@@ -27,8 +28,10 @@ import (
 //     to its original state on deletion.
 //  6. Evaluate a real executable config in a directory with those names twice
 //     and prove the JavaScript fingerprint is accepted by the Go cache reader.
-//  7. Reject every malformed dependency-envelope class while accepting an
-//     idempotent duplicate, so corrupt cache state can only become a soft miss.
+//  7. Change one imported module A-B-A inside a loader hook and prove its
+//     transient output cannot receive a reusable fingerprint for restored A.
+//  8. Accept the evaluator's empty conflict sentinel as an unstable soft miss,
+//     while rejecting every malformed dependency-envelope class.
 func TestConfigCacheInvalidatesTransitiveDependencyDigests(t *testing.T) {
   t.Setenv("TTSC_LINT_DISABLE_CONFIG_CACHE", "")
   root := t.TempDir()
@@ -52,10 +55,12 @@ func TestConfigCacheInvalidatesTransitiveDependencyDigests(t *testing.T) {
     }
     sum := sha256.Sum256(body)
     dependency := configDependencyFingerprint{
-      Path:   helper,
-      Digest: hex.EncodeToString(sum[:]),
-      Kind:   configDependencyFile,
-      Scope:  configDependencyWatch,
+      Path:           helper,
+      Digest:         hex.EncodeToString(sum[:]),
+      IdentityStable: true,
+      Kind:           configDependencyFile,
+      Realpath:       configDependencyRealpath(helper),
+      Scope:          configDependencyWatch,
     }
     return evaluatedConfigFile{
       value: map[string]any{
@@ -206,9 +211,11 @@ func TestConfigCacheInvalidatesTransitiveDependencyDigests(t *testing.T) {
 
   optionalManifest := filepath.Join(root, "optional-package.json")
   absentFingerprint := configDependencyFingerprint{
-    Path:  optionalManifest,
-    Kind:  configDependencyOptionalFile,
-    Scope: configDependencyWatch,
+    Path:           optionalManifest,
+    IdentityStable: true,
+    Kind:           configDependencyOptionalFile,
+    Realpath:       nil,
+    Scope:          configDependencyWatch,
   }
   absentDigest, err := configDependencyDigest(absentFingerprint)
   if err != nil {
@@ -241,6 +248,53 @@ func TestConfigCacheInvalidatesTransitiveDependencyDigests(t *testing.T) {
       restoredDigest,
       absentDigest,
     )
+  }
+
+  oldIdentity := filepath.Join(root, "identity-old")
+  newIdentity := filepath.Join(root, "identity-new")
+  identityLink := filepath.Join(root, "identity-link")
+  for _, directory := range []string{oldIdentity, newIdentity} {
+    if err := os.Mkdir(directory, 0o755); err != nil {
+      t.Fatal(err)
+    }
+    write(filepath.Join(directory, "selection.cjs"), "same bytes")
+  }
+  if runtime.GOOS == "windows" {
+    if err := createWindowsJunction(identityLink, oldIdentity); err != nil {
+      t.Fatal(err)
+    }
+  } else if err := os.Symlink(oldIdentity, identityLink); err != nil {
+    t.Fatal(err)
+  }
+  identityInput := filepath.Join(identityLink, "selection.cjs")
+  identityBody, err := os.ReadFile(identityInput)
+  if err != nil {
+    t.Fatal(err)
+  }
+  identityDigest := sha256.Sum256(identityBody)
+  identityFingerprint := configDependencyFingerprint{
+    Path:           identityInput,
+    Digest:         hex.EncodeToString(identityDigest[:]),
+    IdentityStable: true,
+    Kind:           configDependencyFile,
+    Realpath:       configDependencyRealpath(identityInput),
+    Scope:          configDependencyWatch,
+  }
+  if !configDependencyDigestsAreCurrent([]configDependencyFingerprint{identityFingerprint}) {
+    t.Fatal("unchanged physical dependency did not authorize cache reuse")
+  }
+  if err := os.Remove(identityLink); err != nil {
+    t.Fatal(err)
+  }
+  if runtime.GOOS == "windows" {
+    if err := createWindowsJunction(identityLink, newIdentity); err != nil {
+      t.Fatal(err)
+    }
+  } else if err := os.Symlink(newIdentity, identityLink); err != nil {
+    t.Fatal(err)
+  }
+  if configDependencyDigestsAreCurrent([]configDependencyFingerprint{identityFingerprint}) {
+    t.Fatal("equal bytes at a retargeted physical dependency reused stale config")
   }
 
   loaderRoot := filepath.Join(root, "loader-parity")
@@ -281,27 +335,89 @@ module.exports = { rules: {} };`)
     )
   }
 
+  abaRoot := filepath.Join(root, "loader-aba")
+  if err := os.MkdirAll(abaRoot, 0o755); err != nil {
+    t.Fatal(err)
+  }
+  abaDependency := filepath.Join(abaRoot, "selection.cjs")
+  abaConfig := filepath.Join(abaRoot, "lint.config.cjs")
+  beforeModule := `module.exports = { rules: { "before/rule": "off" } };` + "\n"
+  duringModule := `module.exports = { rules: { "during/rule": "off" } };` + "\n"
+  write(abaDependency, beforeModule)
+  write(abaConfig, `const fs = require("node:fs");
+const { registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
+const dependency = `+strconv.Quote(abaDependency)+`;
+const before = `+strconv.Quote(beforeModule)+`;
+const during = `+strconv.Quote(duringModule)+`;
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url !== pathToFileURL(dependency).href) return nextLoad(url, context);
+    fs.writeFileSync(dependency, during, "utf8");
+    try { return nextLoad(url, context); }
+    finally { fs.writeFileSync(dependency, before, "utf8"); }
+  },
+});
+module.exports = () => require(dependency);`)
+  abaEvaluation, err := loadScriptConfigEvaluationWithin(abaConfig, abaRoot)
+  if err != nil {
+    t.Fatalf("A-B-A loader evaluation: %v", err)
+  }
+  rules, ok := abaEvaluation.value.(map[string]any)["rules"].(map[string]any)
+  if !ok || rules["during/rule"] != "off" {
+    t.Fatalf("A-B-A loader did not return transient module output: %#v", abaEvaluation.value)
+  }
+  if body, readErr := os.ReadFile(abaDependency); readErr != nil || string(body) != beforeModule {
+    t.Fatalf("A-B-A dependency was not restored: body=%q err=%v", body, readErr)
+  }
+  var abaFingerprint *configDependencyFingerprint
+  for index := range abaEvaluation.dependencyDigests {
+    dependency := &abaEvaluation.dependencyDigests[index]
+    if dependency.Kind == configDependencyFile && dependency.Path == abaDependency {
+      abaFingerprint = dependency
+      break
+    }
+  }
+  if abaFingerprint == nil {
+    t.Fatalf("A-B-A dependency was not reported: %#v", abaEvaluation.dependencyDigests)
+  }
+  if abaFingerprint.IdentityStable || abaFingerprint.Digest != "" {
+    t.Fatalf("A-B-A dependency retained reusable proof: %#v", *abaFingerprint)
+  }
+  if configDependencyDigestsAreCurrent([]configDependencyFingerprint{*abaFingerprint}) {
+    t.Fatal("A-B-A dependency fingerprint authorized stale cache reuse")
+  }
+
   helperBody, err := os.ReadFile(helper)
   if err != nil {
     t.Fatal(err)
   }
   helperSum := sha256.Sum256(helperBody)
   valid := configDependencyFingerprint{
-    Path:   helper,
-    Digest: hex.EncodeToString(helperSum[:]),
-    Kind:   configDependencyFile,
-    Scope:  configDependencyWatch,
+    Path:           helper,
+    Digest:         hex.EncodeToString(helperSum[:]),
+    IdentityStable: true,
+    Kind:           configDependencyFile,
+    Realpath:       configDependencyRealpath(helper),
+    Scope:          configDependencyWatch,
   }
+  relativeRealpath := "relative.cjs"
+  invalidRealpath := valid
+  invalidRealpath.Realpath = &relativeRealpath
+  otherRealpath := filepath.Join(root, "other.cjs")
+  conflictingRealpath := valid
+  conflictingRealpath.Realpath = &otherRealpath
   invalid := [][]configDependencyFingerprint{
     nil,
     {{Path: "relative.cjs", Digest: valid.Digest, Kind: configDependencyFile, Scope: configDependencyWatch}},
-    {{Path: helper, Digest: "", Kind: configDependencyFile, Scope: configDependencyWatch}},
     {{Path: helper, Digest: strings.Repeat("A", sha256.Size*2), Kind: configDependencyFile, Scope: configDependencyWatch}},
     {{Path: helper, Digest: strings.Repeat("g", sha256.Size*2), Kind: configDependencyFile, Scope: configDependencyWatch}},
     {{Path: helper, Digest: valid.Digest, Kind: "invalid", Scope: configDependencyWatch}},
     {valid, {Path: helper, Digest: strings.Repeat("0", sha256.Size*2), Kind: configDependencyFile, Scope: configDependencyWatch}},
     {{Path: helper, Digest: valid.Digest, Kind: configDependencyFile, Scope: "invalid"}},
     {valid, {Path: helper, Digest: valid.Digest, Kind: configDependencyFile, Scope: configDependencyCache}},
+    {invalidRealpath},
+    {valid, conflictingRealpath},
   }
   for index, candidate := range invalid {
     if normalized, ok := normalizeConfigDependencyFingerprints(candidate); ok {
@@ -311,8 +427,27 @@ module.exports = { rules: {} };`)
   normalized, ok := normalizeConfigDependencyFingerprints(
     []configDependencyFingerprint{valid, valid},
   )
-  if !ok || len(normalized) != 1 || normalized[0] != valid {
+  if !ok || len(normalized) != 1 ||
+    normalized[0].Path != valid.Path ||
+    normalized[0].Digest != valid.Digest ||
+    normalized[0].IdentityStable != valid.IdentityStable ||
+    normalized[0].Kind != valid.Kind ||
+    !sameConfigDependencyRealpath(normalized[0].Realpath, valid.Realpath) ||
+    normalized[0].Scope != valid.Scope {
     t.Fatalf("idempotent duplicate normalized to %v, %v", normalized, ok)
+  }
+  unstableFingerprint := valid
+  unstableFingerprint.Digest = ""
+  unstableFingerprint.IdentityStable = false
+  unstableFingerprint.Realpath = nil
+  normalized, ok = normalizeConfigDependencyFingerprints(
+    []configDependencyFingerprint{unstableFingerprint},
+  )
+  if !ok || len(normalized) != 1 || normalized[0].IdentityStable {
+    t.Fatalf("unstable conflict normalized to %v, %v", normalized, ok)
+  }
+  if configDependencyDigestsAreCurrent(normalized) {
+    t.Fatal("an unstable conflict fingerprint must never authorize cache reuse")
   }
 }
 
