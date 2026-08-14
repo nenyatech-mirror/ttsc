@@ -512,11 +512,13 @@ func loadStripScriptConfigFileWithInputs(location string) (stripLoadedConfig, er
   defer cancel()
   // Windows limits the whole process command line to roughly 32 KiB. The
   // dependency-tracking loader is intentionally larger than that, so keep only
-  // this fixed bootstrap in argv and stream the trusted source over stdin.
-  // Using eval preserves the historical process.argv layout seen by both the
-  // loader and the imported user config.
-  cmd := exec.CommandContext(ctx, node, "-e", `eval(require("node:fs").readFileSync(0, "utf8"))`, location)
-  cmd.Stdin = strings.NewReader(stripScriptLoaderSource)
+  // an explicit CommonJS stdin program and remove Node's stdin sentinel before
+  // the loader runs. This preserves the historical process.argv layout seen by
+  // both the loader and the imported user config without using string eval.
+  cmd := exec.CommandContext(ctx, node, "--input-type=commonjs", "-", location)
+  cmd.Stdin = strings.NewReader(
+    "process.argv.splice(1, 1);\n" + stripScriptLoaderSource,
+  )
   cmd.Env = stripNodeConfigLoaderEnv(location)
   // The child's stderr is human output and goes straight to this process's
   // stderr as it is written. Collecting it only to replay it afterwards is what

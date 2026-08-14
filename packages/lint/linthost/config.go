@@ -1960,18 +1960,18 @@ func loadScriptConfigEvaluationWithin(
   cmd := exec.CommandContext(
     ctx,
     node,
-    "-e",
-    `eval(require("node:fs").readFileSync(0, "utf8"))`,
+    "--input-type=commonjs",
+    "-",
     location,
     outputPath,
     resolutionRoot,
   )
   // Windows limits the whole process command line to roughly 32 KiB. The
   // dependency-tracking loader is intentionally larger than that, so keep only
-  // the fixed bootstrap above in argv and stream the trusted generated source
-  // over stdin. eval preserves the historical process.argv layout seen by both
-  // the loader and the imported user config.
-  cmd.Stdin = strings.NewReader(script)
+  // an explicit CommonJS stdin program and remove Node's stdin sentinel before
+  // the loader runs. This preserves the historical process.argv layout seen by
+  // both the loader and the imported user config without using string eval.
+  cmd.Stdin = strings.NewReader("process.argv.splice(1, 1);\n" + script)
   return runConfigLoaderCommand(cmd, location, "config file", outputPath)
 }
 
