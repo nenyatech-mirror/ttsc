@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-14T01:48:06.841Z",
+  "generatedAt": "2026-08-14T03:47:26.737Z",
   "origin": "samchon/ttsc",
   "cells": [
     {
@@ -1597,46 +1597,46 @@
       "benchmarkRevision": "dfb684279b79e623fcc3210bbea54eb04cf132b6",
       "model": "gpt-5.6-luna",
       "effort": "high",
-      "status": "running",
-      "stage": "overall-remind-4",
+      "status": "completed",
+      "stage": "overall-final",
       "launchedAt": "2026-08-09T18:17:34.421Z",
-      "tokens": 5359662131,
+      "tokens": 5449487580,
       "tokenUsage": {
-        "totalTokens": 5359662131,
-        "inputTokens": 5351626696,
-        "cachedInputTokens": 5238173184,
+        "totalTokens": 5449487580,
+        "inputTokens": 5441307460,
+        "cachedInputTokens": 5326763264,
         "cacheWriteInputTokens": 0,
-        "outputTokens": 8035435,
-        "reasoningOutputTokens": 1825496
+        "outputTokens": 8180120,
+        "reasoningOutputTokens": 1870305
       },
       "inspection": {
-        "attempts": 14,
+        "attempts": 15,
         "failures": 0,
         "tokenUsage": {
-          "totalTokens": 48606836,
-          "inputTokens": 48429499,
-          "cachedInputTokens": 45562368,
+          "totalTokens": 53117910,
+          "inputTokens": 52926638,
+          "cachedInputTokens": 49844992,
           "cacheWriteInputTokens": 0,
-          "outputTokens": 177337,
-          "reasoningOutputTokens": 93261
+          "outputTokens": 191272,
+          "reasoningOutputTokens": 99716
         },
-        "elapsedMs": 5214801.0243999995
+        "elapsedMs": 5649526.665999999
       },
       "apiCost": {
         "provider": "openrouter",
         "pricingAsOf": "2026-08-01",
         "priceSource": "https://openrouter.ai/api/v1/models",
         "currency": "USD",
-        "amountUsd": 67.70923462,
-        "requests": 39781,
-        "shortContextRequests": 39780,
+        "amountUsd": 68.71837608,
+        "requests": 40359,
+        "shortContextRequests": 40358,
         "longContextRequests": 1,
         "longContextThresholdTokens": 272000,
         "replayedUpdates": 0
       },
       "suspendedMs": 0,
       "suspensions": [],
-      "workElapsedMs": 360879223.245,
+      "workElapsedMs": 367882103.4479,
       "worktree": {
         "files": 452,
         "additions": 88511,
@@ -1852,140 +1852,162 @@
           "verdictRelativePath": "supervision/13-overall-3-verdict.json",
           "verdictSha256": "4c2fef2ba4c8b710710da73727af6193c90c21ff4bc1d58a51ae869d43e38fe7",
           "workspaceMaterialSha256": "7328883c99394515f6f1fe948ede7b04ed9c116eef8a9c0662d8fe29c9d6b3c0"
+        },
+        {
+          "scope": "overall",
+          "attempt": 4,
+          "decision": "fail",
+          "action": "final",
+          "goalIndex": 18,
+          "terminalTurnId": "e23bd05d-4adb-405f-b7e3-4de4cbdced08",
+          "rationale": "The final traversal is evidenced in overall-remind-4.log:87675-103892 (requirements reread, MANIFEST_COUNT=507, and one-file FULL_READ commands through the final file), with no later file changes before the completion message at :104219. However, the required AGENTS.md read is not evidenced; the new review setup reads only SKILL.md/backend.md/frontend.md/overall.md at :95, :250, :434, and :629. More decisively, tests are not proper: testing instructions require every published operation and persisted-mutation follow-up assertions (.agents/skills/backend/testing.md:132-145, 158; 138 specifically requires observable follow-up state). Twelve published accessors have no references anywhere under packages/backend/test, including control_ops automation (packages/api/src/functional/erp/control_ops/automation/index.ts:16,78), credit-memo apply/refund/void, MRP recommendation actions, asset activate/submit, departmentUpdate, and tax_return.reject (their generated files/lines are present, but no matching test calls exist). Additionally, test_api_erp_operation_coverage.ts:23-30 claims item erasure but only checks returned identity, not the required deactivation state.",
+          "pausedAt": "2026-08-14T02:45:59.188Z",
+          "decidedAt": "2026-08-14T02:53:29.955Z",
+          "resumedAt": "2026-08-14T02:53:29.992Z",
+          "verdictRelativePath": "supervision/14-overall-4-verdict.json",
+          "verdictSha256": "9bb704b9f3ddcc8d0ae6daf3324ba47342cf854d6bbbafba25a46181500754ce",
+          "workspaceMaterialSha256": "19edc1d59b1ec37a0218d8b7233c0c5ec334d5bee3a54f5a4057e00e6a3e2d2f"
         }
       ],
       "stages": [
         {
           "name": "backend-start",
           "tokens": 544228917,
-          "elapsedMs": 55121000,
+          "elapsedMs": 55644610.90895567,
           "tokenPercent": 10,
           "timePercent": 15
         },
         {
           "name": "backend-review",
           "tokens": 523010157,
-          "elapsedMs": 42027654.7284,
+          "elapsedMs": 42421020.73663378,
           "tokenPercent": 10,
           "timePercent": 12
         },
         {
           "name": "backend-remind-1",
           "tokens": 44991625,
-          "elapsedMs": 3950115.8663,
+          "elapsedMs": 3984161.357087488,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "backend-remind-2",
           "tokens": 8627055,
-          "elapsedMs": 782645.4894000001,
+          "elapsedMs": 786806.182749587,
           "tokenPercent": 0,
           "timePercent": 0
         },
         {
           "name": "backend-remind-3",
           "tokens": 18968106,
-          "elapsedMs": 1794206.6759,
+          "elapsedMs": 1808341.6341287338,
           "tokenPercent": 0,
           "timePercent": 0
         },
         {
           "name": "backend-remind-4",
           "tokens": 132029222,
-          "elapsedMs": 6602042.5572,
+          "elapsedMs": 6660301.763394102,
           "tokenPercent": 2,
           "timePercent": 2
         },
         {
           "name": "backend-final",
           "tokens": 8656428,
-          "elapsedMs": 1071000,
+          "elapsedMs": 1081173.7501767299,
           "tokenPercent": 0,
           "timePercent": 0
         },
         {
           "name": "frontend-start",
           "tokens": 28836461,
-          "elapsedMs": 3011000,
+          "elapsedMs": 3039602.391953439,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "frontend-review",
           "tokens": 61761807,
-          "elapsedMs": 4477304.8948,
+          "elapsedMs": 4515596.572636039,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "frontend-remind-1",
           "tokens": 67847130,
-          "elapsedMs": 3687617.0896,
+          "elapsedMs": 3720655.6545996885,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "frontend-remind-2",
           "tokens": 140351522,
-          "elapsedMs": 8549493.7308,
+          "elapsedMs": 8627226.50175815,
           "tokenPercent": 3,
           "timePercent": 2
         },
         {
           "name": "frontend-remind-3",
           "tokens": 60326958,
-          "elapsedMs": 4290611.9195,
+          "elapsedMs": 4328238.646344096,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "frontend-remind-4",
           "tokens": 39029924,
-          "elapsedMs": 3280571.2816,
+          "elapsedMs": 3307995.760367711,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "frontend-final",
           "tokens": 15335215,
-          "elapsedMs": 2288000,
+          "elapsedMs": 2309734.3981366553,
           "tokenPercent": 0,
           "timePercent": 1
         },
         {
           "name": "overall-review",
           "tokens": 36725780,
-          "elapsedMs": 3540224.4318,
+          "elapsedMs": 3571239.645924204,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "overall-remind-1",
           "tokens": 2955860040,
-          "elapsedMs": 177354104.0307,
-          "tokenPercent": 55,
+          "elapsedMs": 179035385.11732876,
+          "tokenPercent": 54,
           "timePercent": 49
         },
         {
           "name": "overall-remind-2",
           "tokens": 606699282,
-          "elapsedMs": 30257729.0483,
+          "elapsedMs": 30541967.09945603,
           "tokenPercent": 11,
           "timePercent": 8
         },
         {
           "name": "overall-remind-3",
           "tokens": 39772933,
-          "elapsedMs": 3773479.2801,
+          "elapsedMs": 3805615.411610623,
           "tokenPercent": 1,
           "timePercent": 1
         },
         {
           "name": "overall-remind-4",
-          "tokens": 26603569,
-          "elapsedMs": 5020422.220600009,
-          "tokenPercent": 0,
+          "tokens": 74025948,
+          "elapsedMs": 5598314.560511272,
+          "tokenPercent": 1,
+          "timePercent": 2
+        },
+        {
+          "name": "overall-final",
+          "tokens": 42403070,
+          "elapsedMs": 3094115.3541472238,
+          "tokenPercent": 1,
           "timePercent": 1
         }
       ]
