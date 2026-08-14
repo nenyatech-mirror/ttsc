@@ -39,6 +39,7 @@ const EXCLUDED = "excluded";
  */
 const OWNERSHIP = {
   // ---- Go: packages/ttsc, split across three runners ----
+  "go:packages/ttsc/driver": "scripts/test-go-driver.cjs",
   "go:packages/ttsc/test/driver": "scripts/test-go-driver.cjs",
   "go:packages/ttsc/internal/lspserver": "scripts/test-go-ttsc.cjs",
   "go:packages/ttsc/test/cli": "scripts/test-go-ttsc.cjs",

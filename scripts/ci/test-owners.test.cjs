@@ -34,6 +34,7 @@ test("discovery reads the tree, not a list", () => {
   // seven node suites ran off a literal array in `scripts/test-go.cjs`. Both
   // families passed the old assertions by having zero members.
   for (const owner of [
+    "go:packages/ttsc/driver",
     "go:packages/ttsc/test/driver",
     "e2e:tests/test-lint",
     "e2e:experimental/test-unplugin",
