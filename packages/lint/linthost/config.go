@@ -2985,7 +2985,7 @@ function finalizeDependencies() {
       dependency.kind,
       dependency.path,
       currentDependencyDigest(dependency.kind, dependency.path),
-      dependency.owners,
+      [...dependency.owners],
     );
   }
   const watched = graphWatchReachability();
@@ -4316,7 +4316,7 @@ function finalizeDependencies(): Array<{
       dependency.kind,
       dependency.path,
       currentDependencyDigest(dependency.kind, dependency.path),
-      dependency.owners,
+      [...dependency.owners],
     );
   }
   const watched = graphWatchReachability();
