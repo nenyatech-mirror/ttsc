@@ -10,6 +10,7 @@ import type {
 import { TtscCompiler } from "ttsc";
 import {
   type FilesystemPathIdentityContext,
+  type FilesystemPathIdentityOperations,
   createFilesystemPathIdentityContext,
 } from "ttsc/path-identity";
 import type { TransformResult } from "unplugin";
@@ -148,6 +149,8 @@ export type TtscTransformCache = Map<
 
 /** Cache-owned synchronous filesystem reads used by transform validation. */
 export interface TtscTransformFilesystemOperations {
+  /** Override the case policy when the observed filesystem is not the host. */
+  caseSensitive?: FilesystemPathIdentityOperations["caseSensitive"];
   /** Test whether a validation or resolution candidate currently exists. */
   exists(location: string): boolean;
   /** Read link metadata without following a symbolic link. */
@@ -162,6 +165,8 @@ export interface TtscTransformFilesystemOperations {
   stat(location: string): fs.Stats;
   /** Read nanosecond metadata for stable file and directory signatures. */
   statBigInt(location: string): fs.BigIntStats;
+  /** Override path parsing when the observed filesystem is not the host. */
+  platform?: NodeJS.Platform;
 }
 
 const DEFAULT_FILESYSTEM_OPERATIONS: TtscTransformFilesystemOperations =
@@ -195,6 +200,11 @@ function createHostPathIdentityContext(
   filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
 ): FilesystemPathIdentityContext {
   return createFilesystemPathIdentityContext({
+    caseSensitive: filesystem.caseSensitive,
+    lstat: filesystem.lstat,
+    platform: filesystem.platform,
+    readdir: (directory) =>
+      filesystem.readdir(directory).map((entry) => entry.name),
     realpath: filesystem.realpath,
     throwOnRealpathError: false,
   });
@@ -214,6 +224,7 @@ export function createTtscTransformCache(
 ): TtscTransformCache {
   const cache: TtscTransformCache = new Map();
   TRANSFORM_CACHE_FILESYSTEM.set(cache, {
+    caseSensitive: operations.caseSensitive,
     exists: operations.exists ?? DEFAULT_FILESYSTEM_OPERATIONS.exists,
     lstat: operations.lstat ?? DEFAULT_FILESYSTEM_OPERATIONS.lstat,
     readFile: operations.readFile ?? DEFAULT_FILESYSTEM_OPERATIONS.readFile,
@@ -222,6 +233,7 @@ export function createTtscTransformCache(
     stat: operations.stat ?? DEFAULT_FILESYSTEM_OPERATIONS.stat,
     statBigInt:
       operations.statBigInt ?? DEFAULT_FILESYSTEM_OPERATIONS.statBigInt,
+    platform: operations.platform,
   });
   return cache;
 }

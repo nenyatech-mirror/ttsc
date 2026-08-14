@@ -11,7 +11,9 @@ export type FilesystemPathIdentity = {
 
 export type FilesystemPathIdentityOperations = {
   caseSensitive(directory: string): boolean;
+  lstat?(location: string): fs.Stats | fs.BigIntStats;
   platform: NodeJS.Platform;
+  readdir?(directory: string): string[];
   realpath(location: string): string;
   throwOnRealpathError: boolean;
 };
@@ -53,10 +55,16 @@ export function createFilesystemPathIdentityContext(
   const pathApi = platform === "win32" ? path.win32 : path;
   const throwOnRealpathError = operations.throwOnRealpathError ?? true;
   const realpath = operations.realpath ?? physicalRealpath;
+  const lstat = operations.lstat ?? fs.lstatSync;
+  const readdir = operations.readdir ?? fs.readdirSync;
   const caseSensitive =
     operations.caseSensitive ??
     ((directory: string) =>
-      filesystemDirectoryIsCaseSensitive(directory, platform));
+      filesystemDirectoryIsCaseSensitive(directory, platform, {
+        lstat,
+        readdir,
+        realpath,
+      }));
 
   const resolve = (location: string): FilesystemPathIdentity => {
     const normalized = resolveFilesystemPath(location, platform);
@@ -210,10 +218,15 @@ function physicalRealpath(location: string): string {
 function filesystemDirectoryIsCaseSensitive(
   directory: string,
   platform: NodeJS.Platform,
+  operations: {
+    lstat(location: string): fs.Stats | fs.BigIntStats;
+    readdir(directory: string): string[];
+    realpath(location: string): string;
+  },
 ): boolean {
   let entries: string[];
   try {
-    entries = fs.readdirSync(directory);
+    entries = operations.readdir(directory);
   } catch {
     return unprovenCaseSensitivity(platform);
   }
@@ -229,7 +242,7 @@ function filesystemDirectoryIsCaseSensitive(
     const alternate = alternateCase(name);
     if (alternate === name) continue;
     try {
-      fs.lstatSync(path.join(directory, alternate));
+      operations.lstat(path.join(directory, alternate));
       return false;
     } catch (error) {
       if (isMissingFilesystemEntry(error)) {
@@ -254,7 +267,7 @@ function filesystemDirectoryIsCaseSensitive(
       const alternate = alternateCase(name);
       if (alternate !== name) {
         try {
-          physicalRealpath(path.join(parent, alternate));
+          operations.realpath(path.join(parent, alternate));
           return false;
         } catch (error) {
           if (isMissingFilesystemEntry(error) === false) throw error;
