@@ -63,27 +63,47 @@ style: |
     justify-content: center;
     text-align: center;
   }
-  section.divider h1 { color: #ffffff; border-bottom: none; font-size: 56px; }
-  section.divider p { color: #b9c9e6; font-size: 30px; }
-  section.divider .note { color: #b9c9e6; }
+  section.divider h1 { color: #ffffff; border-bottom: none; font-size: 72px; }
+  section.divider p { color: #b9c9e6; font-size: 40px; }
+  section.divider .note { color: #b9c9e6; font-size: 40px; }
 
-  /* Opening claims */
-  .opening-claim {
-    font-size: 64px;
-    font-weight: 800;
-    line-height: 1.25;
-    text-align: center;
+  /* Opening summary */
+  .tldr-layout {
+    display: grid;
+    grid-template-columns: 60fr 40fr;
+    gap: 32px;
+    align-items: center;
+    margin-top: 24px;
   }
-  .opening-metrics { display: flex; width: 100%; gap: 70px; }
-  .opening-metric {
-    flex: 1;
-    border-top: 8px solid #4a76b8;
-    padding-top: 32px;
-    text-align: center;
+  .opening-summary {
+    font-size: 34px;
+    line-height: 1.35;
   }
-  .opening-metric b { display: block; color: #ffd479; font-size: 104px; line-height: 1; }
-  .opening-metric span { display: block; margin-top: 22px; color: #ffffff; font-size: 38px; }
-  .opening-context { margin-top: 42px; color: #a7b0be; font-size: 28px; text-align: center; }
+  .opening-summary ul { margin: 0; padding-left: 1.1em; }
+  .opening-summary li { margin-bottom: 10px; }
+  .opening-summary ul ul { margin: 6px 0 12px; font-size: 28px; line-height: 1.3; }
+  .opening-summary ul ul li { margin-bottom: 4px; }
+  .benchmark-graphs { display: flex; flex-direction: column; gap: 18px; }
+  .opening-measure { padding: 16px; background: #f3f6fb; border-radius: 12px; }
+  .opening-measure-title { margin-bottom: 12px; font-size: 28px; font-weight: 700; }
+  .opening-bar-row {
+    display: grid;
+    grid-template-columns: 88px 1fr 92px;
+    gap: 8px;
+    align-items: center;
+    margin-top: 10px;
+    font-size: 22px;
+  }
+  .opening-bar-row span { white-space: nowrap; }
+  .opening-bar-row strong { text-align: right; white-space: nowrap; }
+  .opening-bar { height: 22px; overflow: hidden; background: #e2e7ef; border-radius: 11px; }
+  .opening-bar i { display: block; height: 100%; background: #4a76b8; border-radius: 10px; }
+  .opening-bar-row.evidence .opening-bar i { background: #f08a24; }
+  .opening-bar i.coverage-plain { width: 51.6%; }
+  .opening-bar i.coverage-evidence { width: 100%; }
+  .opening-bar i.token-plain { width: 100%; }
+  .opening-bar i.token-evidence { width: 7.5%; }
+  .benchmark-context { color: #5b6674; font-size: 24px; text-align: center; }
   .note { font-size: 24px; color: #5b6674; }
 
   /* Cumulative narrative references */
@@ -435,30 +455,42 @@ style: |
 
 ---
 
-<!-- _class: dark -->
+# TL;DR
 
-<div class="opening-claim">
-Your specification becomes<br/><strong>a compile error no agent can skip.</strong>
+<div class="tldr-layout">
+<div class="opening-summary">
+
+- **Evidence Graph, a compiler harness**
+  - No loop until dry required
+  - `@evidence <target> <reason>`
+  - `@evidenceExclude <target> <reason>`
+- **Spec Driven Development**
+  - Write and review only the requirements
+  - AI builds everything with 100% coverage
+
 </div>
-
----
-
-<!-- _class: dark -->
-
-<div class="opening-metrics">
-<div class="opening-metric"><b>100%</b><span>requirement coverage</span></div>
-<div class="opening-metric"><b>13.3×</b><span>fewer tokens</span></div>
+<div class="benchmark-graphs">
+<div class="opening-measure">
+<div class="opening-measure-title">Requirement coverage</div>
+<div class="opening-bar-row"><span>Plain</span><div class="opening-bar"><i class="coverage-plain"></i></div><strong>51.6%</strong></div>
+<div class="opening-bar-row evidence"><span>Evidence</span><div class="opening-bar"><i class="coverage-evidence"></i></div><strong>100%</strong></div>
 </div>
-
-<div class="opening-context">ERP benchmark</div>
+<div class="opening-measure">
+<div class="opening-measure-title">Token usage</div>
+<div class="opening-bar-row"><span>Plain</span><div class="opening-bar"><i class="token-plain"></i></div><strong>5,449M</strong></div>
+<div class="opening-bar-row evidence"><span>Evidence</span><div class="opening-bar"><i class="token-evidence"></i></div><strong>411M</strong></div>
+</div>
+<div class="benchmark-context">100+ tables · 150K+ LoC</div>
+</div>
+</div>
 
 ---
 
 <!-- _class: divider -->
 
-# So what do humans do?
+# The Limits of Loop Until Dry
 
-<span class="note">One document layer. Delegate everything else</span>
+<span class="note">More review. Diminishing returns.</span>
 
 ---
 
