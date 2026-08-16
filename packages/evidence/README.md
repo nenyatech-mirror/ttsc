@@ -56,9 +56,7 @@ One engine built the same four applications twice from the same frozen requireme
   - Stop only after a round turns up nothing.
   - The review target is the whole codebase.
   - A loop cannot count what it never read, so it settles at a ceiling.
-- **Evidence**: the build does not finish while an obligation is open.
-  - The compiler reports every omission.
-  - Only the truth of the evidence is reviewed.
+- **Evidence**: only the truth of the evidence is reviewed.
 
 ## Setup
 
