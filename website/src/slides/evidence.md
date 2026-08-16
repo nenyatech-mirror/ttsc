@@ -1028,7 +1028,7 @@ Plain coverage falls with scope. **Evidence remains at 100%.**
   - https://ttsc.dev/docs/evidence
   - https://ttsc.dev/docs/benchmark/evidence
 - https://github.com/samchon/evidence-benchmark-results
-- https://github.com/wrtnlabs/novels
+- https://github.com/samchon/novels
 
 ---
 
