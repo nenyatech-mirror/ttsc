@@ -44,41 +44,9 @@ An AI coding agent has to clear them to finish, and clearing them means citing e
 
 ![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
-One coding engine built the same four applications twice from the same frozen requirements, once with the graph in the workspace and once without. Both arms ran review loops: read the codebase, fix every finding, restart, and stop after a round comes back empty.
+One coding engine built the same four applications twice from the same frozen requirements, once with the graph in the workspace and once without.
 
-That loop is why the arm without the graph cost what it cost. Most of what it will ever find arrives in its first rounds, each round after returns less than the one before, and nothing in it counts what was never looked at, so it settles on a ceiling instead of on zero. On the ERP subject the loop took nine of every ten tokens the run spent, 5,449M in total, and still stopped at 51.6% of the requirements. The other arm finished the same subject at 100% on 411M tokens for $4.96, against $68.72.
-
-The ceiling also drops as the project grows. Coverage without the graph fell from 85.5% on the smallest subject to 51.6% on the largest, while every graph arm finished at 100%, because the build does not complete while an obligation is open.
-
-## The shape of a graph
-
-Every arrow points at the evidence it cites, so it runs from the artifact that owes to the artifact that grounds it.
-
-### Documents
-
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/documents-dark.svg"><img alt="Idea notes grounding Requirements and Specifications, which ground Implementation and Test" src="https://ttsc.dev/evidence/documents-light.svg" width="100%"></picture>
-
-Each edge closes an omission nothing else catches. A decision taken in a meeting and never written into the requirements. A specification nobody asked for. A requirement the documents state and no code implements. A feature implemented and never verified.
-
-Humans own one layer and delegate the rest. Hand over the requirements and the agent writes the specifications below them; hand over raw idea notes and it writes the requirements too, with the build breaking the moment anything in those notes goes missing.
-
-### Backend
-
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/backend-dark.svg"><img alt="Requirements and Specifications grounding DB schema, API operation, API schema and Test" src="https://ttsc.dev/evidence/backend-light.svg" width="100%"></picture>
-
-A table nobody asked for has nothing to cite. An endpoint with no model behind it fails against the schema. An operation the documents describe and nobody implemented is a compile error on the next build, and so is one that no test answers for.
-
-### Frontend
-
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/frontend-dark.svg"><img alt="Requirements and Specifications grounding Swagger, Hooks, Screens and Journeys" src="https://ttsc.dev/evidence/frontend-light.svg" width="100%"></picture>
-
-The Swagger document is the backend's own output, so the frontend graph starts from an artifact another project publishes. An operation no hook calls, a hook no screen renders, and a screen no journey reaches are each an open obligation rather than a diff nobody read.
-
-### Beyond code
-
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/novel-dark.svg"><img alt="Principles and Settings grounding Storylines, Scenarios and Manuscripts" src="https://ttsc.dev/evidence/novel-light.svg" width="100%"></picture>
-
-The graph never reads meaning, only obligations and citations, so the same rules hold wherever the artifacts are text. In a novel the edges block a scene that drifts from the work's purpose, a character who uses knowledge they never learned, a consequence with no cause, and a manuscript that departs from the scene it was supposed to execute. [`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
+Both arms reviewed the same way, by loop: read the codebase, fix every finding, restart, and stop after a round comes back empty. That loop finds most of what it will ever find in its first rounds and never counts what it did not look at, so it settles on a ceiling that drops as the project grows. On the ERP subject it took nine of every ten tokens the run spent, 5,449M in total, and stopped at 51.6% of the requirements. The other arm finished the same subject at 100% on 411M tokens, because the build does not complete while an obligation is open.
 
 ## Setup
 
@@ -132,6 +100,36 @@ One sentence: the components under `src` implement the docs, so every H2 and H3 
 | `evidence/review` | nothing | Requires an `@evidenceReview` beside every `@evidence` and an `@evidenceExcludeReview` beside every `@evidenceExclude`, naming the same target and stating what was checked. |
 
 Each takes `"error"`, `"warning"`, or `"off"`.
+
+## Graphs in practice
+
+Every arrow points at the evidence it cites, so it runs from the artifact that owes to the artifact that grounds it.
+
+### Documents
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/documents-dark.svg"><img alt="Idea notes grounding Requirements and Specifications, which ground Implementation and Test" src="https://ttsc.dev/evidence/documents-light.svg" width="100%"></picture>
+
+Each edge closes an omission nothing else catches. A decision taken in a meeting and never written into the requirements. A specification nobody asked for. A requirement the documents state and no code implements. A feature implemented and never verified.
+
+Humans own one layer and delegate the rest. Hand over the requirements and the agent writes the specifications below them; hand over raw idea notes and it writes the requirements too, with the build breaking the moment anything in those notes goes missing.
+
+### Backend
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/backend-dark.svg"><img alt="Requirements and Specifications grounding DB schema, API operation, API schema and Test" src="https://ttsc.dev/evidence/backend-light.svg" width="100%"></picture>
+
+A table nobody asked for has nothing to cite. An endpoint with no model behind it fails against the schema. An operation the documents describe and nobody implemented is a compile error on the next build, and so is one that no test answers for.
+
+### Frontend
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/frontend-dark.svg"><img alt="Requirements and Specifications grounding Swagger, Hooks, Screens and Journeys" src="https://ttsc.dev/evidence/frontend-light.svg" width="100%"></picture>
+
+The Swagger document is the backend's own output, so the frontend graph starts from an artifact another project publishes. An operation no hook calls, a hook no screen renders, and a screen no journey reaches are each an open obligation rather than a diff nobody read.
+
+### Beyond code
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/novel-dark.svg"><img alt="Principles and Settings grounding Storylines, Scenarios and Manuscripts" src="https://ttsc.dev/evidence/novel-light.svg" width="100%"></picture>
+
+The graph never reads meaning, only obligations and citations, so the same rules hold wherever the artifacts are text. In a novel the edges block a scene that drifts from the work's purpose, a character who uses knowledge they never learned, a consequence with no cause, and a manuscript that departs from the scene it was supposed to execute. [`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
 
 ## Claims and references
 
