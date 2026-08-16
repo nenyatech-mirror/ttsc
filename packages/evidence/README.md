@@ -45,14 +45,12 @@ Found 3 errors.
 
 One error per obligation, so the error list is the task list.
 
-An AI coding agent cannot finish while one is open, and closing one means citing the target and writing down why its code answers for it. Nobody aims at 100% coverage. It is what is left once the errors are gone.
-
 ![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
 One engine built the same four applications twice from the same frozen requirements.
 
 - **Plain**: review runs as a loop, and a loop cannot count what it never looked at.
-- **Evidence**: the build does not finish while an obligation is open.
+- **Evidence**: the build does not finish while an obligation is open, so coverage is what is left once the errors are gone.
 
 ## Setup
 
