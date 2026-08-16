@@ -51,8 +51,8 @@ One error per obligation, because a citation toward one reference never counts t
 
 One engine built the same four applications twice from the same frozen requirements.
 
-- **Plain**: review runs as a loop, and a loop cannot count what it never looked at.
-- **Evidence**: the build does not finish while an obligation is open, so coverage is what is left once the errors are gone.
+- **Plain**: review is a loop until dry. Read the codebase from the beginning, fix every finding, start over, and stop only once a round turns up nothing. A loop reports what it happened to read, so it stops at a ceiling rather than at zero, without ever knowing how far from done it was.
+- **Evidence**: the build does not finish while an obligation is open, so coverage is what is left once the errors are gone. The compiler owns every omission, and a human reviews one thing only, whether each citation is true.
 
 ## Setup
 
