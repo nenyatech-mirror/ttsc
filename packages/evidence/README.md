@@ -26,6 +26,8 @@ export function CouponStackingNotice(props: IProps): JSX.Element;
 - **Swagger**: an operation, method and path together.
 - **TypeScript**: a type, a function, or a property, written as an inline link.
 
+Leave one uncited and the build stops.
+
 ```bash
 $ npx ttsc
 error TS16411: [evidence/graph] Missing acknowledgement for 'docs/discount.md#coupon-stacking'
@@ -43,7 +45,7 @@ error TS16411: [evidence/graph] Missing acknowledgement for 'docs/discount.md#co
 Found 3 errors.
 ```
 
-One error per obligation, so the error list is the task list.
+One error per obligation, because a citation toward one reference never counts toward another. The error list is the task list, and an AI coding agent has to clear every entry to finish.
 
 ![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
@@ -93,7 +95,7 @@ Four more rules ship beside `evidence/graph`, asking for a JSDoc block on every 
 
 ## Graphs in practice
 
-Every arrow points at the evidence it cites. The shape changes per project, the review split does not:
+One claim is one edge. Chain them and a project has a graph, where every arrow points at the evidence it cites. The shape changes per project, the review split does not:
 
 - **Humans read** the top layer, and the reason written on each tag.
 - **The compiler reads** everything below it, and fails the build on any obligation nobody answered.
@@ -124,7 +126,7 @@ The graph reads no meaning, only obligations and citations, so the rules hold wh
 
 ## Tags
 
-A configuration is written once. Tags are written forever, so this is the part to keep at hand.
+Whatever the shape, a graph is written with three tags. `@evidence` cites, `@evidenceReview` verifies, and `@evidenceExclude` declines. The configuration is written once, these are written forever.
 
 | Kind | Address a target as | Write a tag in |
 | --- | --- | --- |
@@ -143,6 +145,8 @@ A citation sits in a comment, so a rendered document stays clean, and `{#id}` gi
 
 ### `@evidenceReview`
 
+100% coverage is not 100% truth. A false tag removes the error, not the problem, so the tag list is what a human reads instead of the codebase.
+
 ```ts
 /**
  * @evidence docs/discount.md#coupon-stacking States the per-issuer limit.
@@ -151,20 +155,18 @@ A citation sits in a comment, so a rendered document stays clean, and `{#id}` gi
  */
 ```
 
-100% coverage is not 100% truth. A false tag removes the error, not the problem, so this list is what a human reads instead of the codebase.
-
 A review answers one citation: the same declaration, the same target, and a fingerprint of the cited content. Editing that content expires the review and asks for it again.
 
 ### `@evidenceExclude`
+
+Not every requirement belongs to every layer, so an exclusion settles an obligation with nothing built. It is the only acknowledgement that does, which is why it exists to be vetoed.
 
 ```md
 <!-- @evidenceExclude docs/requirements/pricing.md#coupon-stacking
      This release ships a single coupon. Stacking waits for the settlement policy. -->
 ```
 
-An exclusion records that a claim intentionally does not use a scope. It is the only acknowledgement that settles an obligation with nothing built, so it exists to be vetoed, and "not applicable" is a conclusion rather than a reason.
-
-[The tag reference](https://ttsc.dev/docs/evidence/tags) has the rest, including hierarchy, overlap, and where an exclusion may sit.
+"Not applicable" is a conclusion rather than a reason. [The tag reference](https://ttsc.dev/docs/evidence/tags) has the rest, including hierarchy, overlap, and where an exclusion may sit.
 
 ## Sponsors
 
