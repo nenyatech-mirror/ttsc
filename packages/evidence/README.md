@@ -93,14 +93,14 @@ One claim: the components under `src` implement the docs, so every H2 and H3 und
 
 Four more rules ship beside `evidence/graph`, asking for a JSDoc block on every export, one public identity per file, no leftover `@todo`, and a review beside every tag. [The rule reference](https://ttsc.dev/docs/evidence/rules) has all five, and [the claim reference](https://ttsc.dev/docs/evidence/claims) has the full option surface: symbol selectors, external packages, monorepo roots, exclusion carriers, and the policies that tighten a single reference.
 
-## Graphs in practice
+## How a project is wired
 
 One claim is one edge. Chain them and a project has a graph, where every arrow points at the evidence it cites. The shape changes per project, the review split does not:
 
 - **Humans read** the top layer, and the reason written on each tag.
 - **The compiler reads** everything below it, and fails the build on any obligation nobody answered.
 
-### Documents
+### Layers
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/documents-dark.svg"><img alt="Idea notes grounding Requirements and Specifications, which ground Implementation and Test" src="https://ttsc.dev/evidence/documents-light.svg" width="100%"></picture>
 
@@ -118,7 +118,7 @@ The DB schema is Prisma and everything else is TypeScript, so one graph spans tw
 
 The Swagger document is the backend's own output, so this graph starts from what another project publishes.
 
-### Beyond code
+## Beyond code
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/novel-dark.svg"><img alt="Principles and Settings grounding Storylines, Scenarios and Manuscripts" src="https://ttsc.dev/evidence/novel-light.svg" width="100%"></picture>
 
