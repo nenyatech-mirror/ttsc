@@ -38,15 +38,11 @@ error TS16411: [evidence/graph] Missing acknowledgement for 'docs/discount.md#co
 Found 3 errors.
 ```
 
-Without those tags, the build fails once per obligation, because one reference never covers another. The endpoint and the hook above raise their own errors in the same shape.
-
-An AI coding agent has to clear them to finish, and clearing them means citing each target and writing down why its code answers for it. Coverage reaches 100% on its own, as the residue of the errors it closed.
+The build fails once per obligation, because one reference never covers another. An AI coding agent has to clear every one to finish, and clearing one means citing the target and writing down why its code answers for it. Coverage reaches 100% on its own, as the residue of the errors it closed.
 
 ![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
-One coding engine built the same four applications twice from the same frozen requirements, once with the graph in the workspace and once without.
-
-Both arms reviewed the same way, by loop: read the codebase, fix every finding, restart, and stop after a round comes back empty. That loop finds most of what it will ever find in its first rounds and never counts what it did not look at, so it settles on a ceiling that drops as the project grows. On the ERP subject it took nine of every ten tokens the run spent, 5,449M in total, and stopped at 51.6% of the requirements. The other arm finished the same subject at 100% on 411M tokens, because the build does not complete while an obligation is open.
+One engine built the same four applications twice from the same frozen requirements, once with the graph and once without. Both arms reviewed by loop: read, fix, restart, stop after an empty round. A loop never counts what it did not look at, so it settles on a ceiling that drops as the project grows: 5,449M tokens and 51.6% coverage on the ERP subject, against 411M tokens and 100%.
 
 ## Setup
 
@@ -87,53 +83,51 @@ export default {
 } satisfies ITtscLintConfig;
 ```
 
-One sentence: the components under `src` implement the docs, so every H2 and H3 under `docs` must be cited by a component. Run `npx ttsc` and the error count is the backlog. Violations arrive in the same stream as type errors, so there is no CI job to add.
+The components under `src` implement the docs, so every H2 and H3 under `docs` must be cited by a component. Run `npx ttsc` and the error count is the backlog, in the same stream as the type errors.
 
 ### Rules
 
 | Rule | Takes | What it does |
 | --- | --- | --- |
 | `evidence/graph` | [`ITtscEvidenceGraphConfig`](https://github.com/samchon/ttsc/blob/master/packages/evidence/src/structures/ITtscEvidenceGraphConfig.ts) | The graph itself. Project-scoped, so its entry declares no `files`. |
-| `evidence/documented` | [`ITtscEvidenceDocumentedConfig`](https://github.com/samchon/ttsc/blob/master/packages/evidence/src/structures/ITtscEvidenceDocumentedConfig.ts) | Requires a JSDoc block on every selected export, since a block is the only place a citation can live. Members count, so a class field, a method, a parameter property, and an interface member each need their own. |
+| `evidence/documented` | [`ITtscEvidenceDocumentedConfig`](https://github.com/samchon/ttsc/blob/master/packages/evidence/src/structures/ITtscEvidenceDocumentedConfig.ts) | Requires a JSDoc block on every selected export, since a block is the only place a citation can live. Members need their own. |
 | `evidence/singular` | nothing | Keeps one public identity per file, named after the file. |
 | `evidence/todo` | nothing | Fails on every remaining JSDoc `@todo`, with its own text. |
-| `evidence/review` | nothing | Requires an `@evidenceReview` beside every `@evidence` and an `@evidenceExcludeReview` beside every `@evidenceExclude`, naming the same target and stating what was checked. |
+| `evidence/review` | nothing | Requires an `@evidenceReview` beside every `@evidence` and an `@evidenceExcludeReview` beside every `@evidenceExclude`. |
 
 Each takes `"error"`, `"warning"`, or `"off"`.
 
 ## Graphs in practice
 
-Every arrow points at the evidence it cites, so it runs from the artifact that owes to the artifact that grounds it.
+Every arrow points at the evidence it cites.
 
 ### Documents
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/documents-dark.svg"><img alt="Idea notes grounding Requirements and Specifications, which ground Implementation and Test" src="https://ttsc.dev/evidence/documents-light.svg" width="100%"></picture>
 
-Each edge closes an omission nothing else catches. A decision taken in a meeting and never written into the requirements. A specification nobody asked for. A requirement the documents state and no code implements. A feature implemented and never verified.
-
-Humans own one layer and delegate the rest. Hand over the requirements and the agent writes the specifications below them; hand over raw idea notes and it writes the requirements too, with the build breaking the moment anything in those notes goes missing.
+A meeting decision never written into the requirements, a specification nobody asked for, a requirement no code implements, a feature never verified. Humans own one layer and delegate everything below it, so handing over raw idea notes delegates the requirements too.
 
 ### Backend
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/backend-dark.svg"><img alt="Requirements and Specifications grounding DB schema, API operation, API schema and Test" src="https://ttsc.dev/evidence/backend-light.svg" width="100%"></picture>
 
-A table nobody asked for has nothing to cite. An endpoint with no model behind it fails against the schema. An operation the documents describe and nobody implemented is a compile error on the next build, and so is one that no test answers for.
+A table nobody asked for has nothing to cite, an endpoint with no model behind it fails against the schema, and an operation no test answers for is a compile error on the next build.
 
 ### Frontend
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/frontend-dark.svg"><img alt="Requirements and Specifications grounding Swagger, Hooks, Screens and Journeys" src="https://ttsc.dev/evidence/frontend-light.svg" width="100%"></picture>
 
-The Swagger document is the backend's own output, so the frontend graph starts from an artifact another project publishes. An operation no hook calls, a hook no screen renders, and a screen no journey reaches are each an open obligation rather than a diff nobody read.
+The Swagger document is the backend's own output, so this graph starts from what another project publishes. An operation no hook calls, a hook no screen renders, and a screen no journey reaches are each an open obligation.
 
 ### Beyond code
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/novel-dark.svg"><img alt="Principles and Settings grounding Storylines, Scenarios and Manuscripts" src="https://ttsc.dev/evidence/novel-light.svg" width="100%"></picture>
 
-The graph never reads meaning, only obligations and citations, so the same rules hold wherever the artifacts are text. In a novel the edges block a scene that drifts from the work's purpose, a character who uses knowledge they never learned, a consequence with no cause, and a manuscript that departs from the scene it was supposed to execute. [`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
+The graph reads no meaning, only obligations and citations, so the rules hold wherever the artifacts are text. Here they block a scene that drifts from the work's purpose, a character using knowledge they never learned, a consequence with no cause, and a manuscript departing from the scene it was to execute. [`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
 
 ## Claims and references
 
-A claim is the population that owes a citation, a reference is what it owes, and every claim and reference pair is its own 100% obligation. Listing two references means both must be satisfied, and a citation toward one never counts toward the other. They all join the same `claims` array.
+A claim is the population that owes a citation, a reference is what it owes, and every pair is its own 100% obligation. A citation toward one reference never counts toward another. All pairs join the same `claims` array.
 
 | Kind | Units | Claim | Reference | Cites in |
 | --- | --- | --- | --- | --- |
@@ -142,7 +136,7 @@ A claim is the population that owes a citation, a reference is what it owes, and
 | TypeScript | types, functions, properties | yes | yes | JSDoc |
 | Swagger / OpenAPI | each operation under `paths` | no | yes | nothing, it cannot host a tag |
 
-Every population takes glob patterns in `files`, resolved against the `ttsc` project root. Add `root` to resolve against another directory instead, which is how several packages in a monorepo share one requirements set.
+Every population takes glob patterns in `files`, resolved against the `ttsc` project root. `root` resolves against another directory instead, which is how a monorepo shares one requirements set.
 
 ### Documents
 
@@ -164,7 +158,7 @@ Every population takes glob patterns in `files`, resolved against the `ttsc` pro
 <!-- @evidence docs/meetings/2026-01-12.md#discount-policy Carries the limit agreed in that meeting. -->
 ```
 
-A citation sits in an HTML comment, so rendered prose stays clean, and a heading declares its own anchor with the `{#id}` suffix. A section citation sits under its heading, a whole-file citation sits at the top.
+A citation sits in an HTML comment, so rendered prose stays clean, and `{#id}` gives a heading its own anchor. A section citation sits under its heading, a whole-file citation at the top.
 
 ### Database schema
 
@@ -189,7 +183,7 @@ model Sale {
 }
 ```
 
-A model is addressed as `prisma:Sale` and a member as `prisma:Sale.price`, never through the file it sits in, so moving a model between files cannot break a citation. Every matched file is parsed as one schema.
+A model is addressed as `prisma:Sale` and a member as `prisma:Sale.price`, never through its file, so moving a model cannot break a citation. Every matched file is parsed as one schema.
 
 ### API operations
 
@@ -204,7 +198,7 @@ A model is addressed as `prisma:Sale` and a member as `prisma:Sale.price`, never
 }
 ```
 
-An operation is cited as `POST:/orders`, one whitespace-free token, so the method and the path stay one target. The singular `file` names one local path or one `http:` URL, never a glob; use a `reference` array for several documents.
+An operation is cited as `POST:/orders`, one whitespace-free token. The singular `file` names one local path or one `http:` URL, never a glob.
 
 ### Symbols
 
@@ -222,9 +216,7 @@ An operation is cited as `POST:/orders`, one whitespace-free token, so the metho
 }
 ```
 
-`files` selects modules and the population is what those modules publish, so a barrel carries in the surface it forwards. A unit is addressed the way a consumer reaches it, so `export * as functional` nests a segment and `export { A as B }` answers to `B`.
-
-A `package` population is read from disk rather than from the program, because a symbol nothing imports is absent from the program and is exactly the one an obligation needs to name. Only TypeScript may cite TypeScript, since `{@link}` resolves through the citing module's own imports and no document has an import scope to resolve in.
+`files` selects modules and the population is what they publish, addressed the way a consumer reaches it, so `export * as functional` nests a segment and `export { A as B }` answers to `B`. A `package` population is read from disk, because a symbol nothing imports is absent from the program and is exactly the one an obligation needs to name. Only TypeScript may cite TypeScript.
 
 ### Symbol selectors
 
@@ -237,9 +229,9 @@ A `package` population is read from disk rather than from the program, because a
 | TypeScript | `type`, `function`, `property` | all three | `type` |
 | Swagger | none, every operation is selected | not applicable | every operation |
 
-Units keep their hierarchy, so a target acknowledges itself and every selected descendant: citing a heading covers its subsections, an interface or a class covers the members it declares, and `prisma:Sale` covers the columns beneath it. An ancestor stays addressable even when its own kind is not selected.
+Units keep their hierarchy, so a target acknowledges itself and every selected descendant, and an ancestor stays addressable even when its own kind is not selected.
 
-A class is a `type`, its methods are `function`, and its fields are `property`. A member written as a callable joins the methods, so `handler = () => {}` and `charge: () => void` are both `function`. The test is on how the member is written rather than on what its type resolves to, because this rule reads no type checker. Private and protected members materialize no unit, and a declaration documented with `@internal`, `@hidden`, or `@ignore` leaves the population entirely. [The guide](https://ttsc.dev/docs/evidence/claims) has the rest, including parameter properties and overloads.
+A class is a `type`, its methods are `function`, and its fields are `property`, with any member written as a callable joining the methods. Private members and declarations documented `@internal`, `@hidden`, or `@ignore` leave the population. [The guide](https://ttsc.dev/docs/evidence/claims) has the rest.
 
 ### Reviews
 
@@ -251,7 +243,7 @@ A class is a `type`, its methods are `function`, and its fields are `property`. 
  */
 ```
 
-100% coverage is not 100% truth. An inexpensive model sometimes writes a reason for a fact the cited section never states, and an untrue tag removes the error rather than the problem, so the tag list is what a human reads instead of the codebase. A review names the same declaration and target as the citation it answers, and it carries a fingerprint of the cited content, so editing that content expires the review and asks for it again.
+100% coverage is not 100% truth, and an untrue tag removes the error rather than the problem, so a human reads the tag list instead of the codebase. A review names the same declaration and target as the citation it answers, and carries a fingerprint of the cited content, so editing that content expires the review.
 
 ### Exclusions
 
@@ -260,9 +252,7 @@ A class is a `type`, its methods are `function`, and its fields are `property`. 
      This release ships a single coupon. Stacking waits for the settlement policy. -->
 ```
 
-`@evidenceExclude <target> <reason>` records that a claim intentionally does not use a scope. It follows the same hierarchy as `@evidence`, affects only the claim it is written in, and one obligation may exclude a scope only once.
-
-It is the only acknowledgement that settles an obligation without anything being built, so it exists to be vetoed. "Not applicable" is a conclusion rather than a reason.
+`@evidenceExclude <target> <reason>` records that a claim intentionally does not use a scope. It is the only acknowledgement that settles an obligation with nothing built, so it exists to be vetoed, and "not applicable" is a conclusion rather than a reason.
 
 ```ts
 {
@@ -274,18 +264,18 @@ It is the only acknowledgement that settles an obligation without anything being
 }
 ```
 
-`evidenceExcludeCarriers` confines them to a named ledger, so reviewing every exclusion means opening one file rather than reading the population. An exclusion written anywhere else is reported where it sits and discharges nothing.
+`evidenceExcludeCarriers` confines them to one ledger file, so reviewing every exclusion means opening one file. An exclusion written anywhere else discharges nothing.
 
 ### Strict references
 
-Ordinary coverage is permissive, which is right for a document several modules honor and too weak for a proof obligation, where one exclusion or one host citing everything discharges the whole population. Four properties tighten a single reference, and they never pool across references.
+Ordinary coverage is permissive, which is too weak for a proof obligation, where one exclusion or one host citing everything discharges the whole population. Four properties tighten a single reference, and they never pool across references.
 
 | Property | Effect |
 | --- | --- |
-| `noEvidenceExclude` | Refuses exclusions, so the target still owes positive evidence. A published accessor no hook consumes is an omission rather than a decision. |
-| `uniqueEvidence` | Allows at most one host per unit, so one host is answerable for it rather than several. |
+| `noEvidenceExclude` | Refuses exclusions, so the target still owes positive evidence. |
+| `uniqueEvidence` | Allows at most one host per unit, so one host is answerable rather than several. |
 | `singleEvidencePerSymbol` | Requires exactly one unit from every selected host, so a host citing nothing and a host citing everything both fail. |
-| `requireReview` | Makes every acknowledgement owe a matching review carrying a fingerprint of the cited content, so the review fails again once that content changes. |
+| `requireReview` | Makes every acknowledgement owe a matching review, which fails again once the cited content changes. |
 
 ```ts
 {
