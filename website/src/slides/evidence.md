@@ -814,7 +814,7 @@ export function CouponStackingNotice(props: IProps): JSX.Element;
 
 - Missing idea-note coverage **breaks the requirements build**
 - Idea notes, interviews, and internal documents share one layer
-- Citations are HTML comments, so **the rendered document stays clean**
+- Citations are comments, so **the rendered document stays clean**
 
 ---
 
