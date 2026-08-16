@@ -19,12 +19,12 @@ Evidence Graph, your spec as a compile error no coding agent can skip.
 export function CouponStackingNotice(props: IProps): JSX.Element;
 ```
 
-`@evidence <target> <reason>` names one unit of the spec and why this declaration answers for it. A target can be:
+`@evidence <target> <reason>` names one unit of the spec and why this declaration answers for it. A target is one of four kinds:
 
-- a section of a document,
-- an API operation,
-- a database schema model, or
-- a TypeScript symbol, written as an inline link.
+- **Markdown**: a file, or a section of one.
+- **Prisma**: a model, a column, or a relation.
+- **Swagger**: an operation, method and path together.
+- **TypeScript**: a type, a function, or a property, written as an inline link.
 
 ```bash
 $ npx ttsc
@@ -49,11 +49,12 @@ An AI coding agent cannot finish while one is open, and closing one means citing
 
 ![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
-One engine built the same four applications twice from the same frozen requirements, once with the graph and once without.
+One engine built the same four applications twice from the same frozen requirements.
 
-- Both arms reviewed the same way: read the codebase, fix every finding, restart, stop after an empty round.
-- A loop cannot count what it never looked at, so it stops at a ceiling instead of at zero.
-- That ceiling falls as the project grows. On the ERP subject it was 51.6% coverage for 5,449M tokens, against 100% for 411M.
+- **Plain**: no graph. Review runs as a loop, reading the codebase, fixing every finding, restarting, and stopping after an empty round. A loop cannot count what it never looked at, so it stops at a ceiling instead of at zero, and that ceiling falls as the project grows.
+- **Evidence**: the graph in the workspace. The build does not finish while an obligation is open.
+
+On the ERP subject, the largest of the four, Plain reached 51.6% coverage for 5,449M tokens and Evidence 100% for 411M.
 
 ## Setup
 
@@ -174,7 +175,7 @@ Every claim and reference pair is its own 100% obligation, so a citation toward 
 
 Both sides take glob patterns in `files`, resolved against the `ttsc` project root. Set `root` to resolve against another directory instead, which is how a monorepo shares one requirements set.
 
-### Documents
+### Markdown
 
 ```ts
 {
@@ -198,7 +199,7 @@ Both sides take glob patterns in `files`, resolved against the `ttsc` project ro
 - `{#id}` gives a heading its own anchor.
 - A section citation sits under its heading, a whole-file citation at the top.
 
-### Database schema
+### Prisma
 
 ```ts
 {
@@ -224,7 +225,7 @@ model Sale {
 - A model is `prisma:Sale` and a member is `prisma:Sale.price`, never addressed through its file, so moving a model cannot break a citation.
 - Every matched file is parsed as one schema.
 
-### API operations
+### Swagger
 
 ```ts
 {
@@ -240,7 +241,7 @@ model Sale {
 - An operation is cited as `POST:/orders`, one token with no whitespace.
 - `file` names one local path or one `http:` URL, never a glob. Use an array of references for several documents.
 
-### Symbols
+### TypeScript
 
 ```ts
 {
