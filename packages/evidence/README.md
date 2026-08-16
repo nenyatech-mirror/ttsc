@@ -51,14 +51,10 @@ An AI coding agent cannot finish while one is open, and closing one means citing
 
 One engine built the same four applications twice from the same frozen requirements.
 
-- **Plain**: no graph. Review runs as a loop, reading the codebase, fixing every finding, restarting, and stopping after an empty round. A loop cannot count what it never looked at, so it stops at a ceiling instead of at zero, and that ceiling falls as the project grows.
-- **Evidence**: the graph in the workspace. The build does not finish while an obligation is open.
-
-On the ERP subject, the largest of the four, Plain reached 51.6% coverage for 5,449M tokens and Evidence 100% for 411M.
+- **Plain**: review runs as a loop, and a loop cannot count what it never looked at.
+- **Evidence**: the build does not finish while an obligation is open.
 
 ## Setup
-
-### Install
 
 ```bash
 npm install -D typescript ttsc @ttsc/lint
@@ -66,8 +62,6 @@ npm install -D @ttsc/evidence
 ```
 
 This is a rule contributor to [`@ttsc/lint`](https://github.com/samchon/ttsc/tree/master/packages/lint) 0.22 or newer, so it runs on [`ttsc`](https://github.com/samchon/ttsc) rather than on stock `tsc` with ESLint.
-
-### Configure
 
 ```ts
 // lint.config.ts
@@ -95,19 +89,9 @@ export default {
 } satisfies ITtscLintConfig;
 ```
 
-The components under `src` implement the docs, so every H2 and H3 under `docs` must be cited by a component. Run `npx ttsc` and the error count is the backlog, in the same stream as the type errors.
+One claim: the components under `src` implement the docs, so every H2 and H3 under `docs` must be cited by a component. Run `npx ttsc` and the error count is the backlog, in the same stream as the type errors.
 
-### Rules
-
-| Rule | Takes | What it does |
-| --- | --- | --- |
-| `evidence/graph` | [`ITtscEvidenceGraphConfig`](https://github.com/samchon/ttsc/blob/master/packages/evidence/src/structures/ITtscEvidenceGraphConfig.ts) | The graph itself. Project-scoped, so its entry declares no `files`. |
-| `evidence/documented` | [`ITtscEvidenceDocumentedConfig`](https://github.com/samchon/ttsc/blob/master/packages/evidence/src/structures/ITtscEvidenceDocumentedConfig.ts) | Requires a JSDoc block on every selected export, since a block is the only place a citation can live. Members need their own. |
-| `evidence/singular` | nothing | Keeps one public identity per file, named after the file. |
-| `evidence/todo` | nothing | Fails on every remaining JSDoc `@todo`, with its own text. |
-| `evidence/review` | nothing | Requires an `@evidenceReview` beside every `@evidence` and an `@evidenceExcludeReview` beside every `@evidenceExclude`. |
-
-Each takes `"error"`, `"warning"`, or `"off"`.
+Four more rules ship beside `evidence/graph`, asking for a JSDoc block on every export, one public identity per file, no leftover `@todo`, and a review beside every tag. [The rule reference](https://ttsc.dev/docs/evidence/rules) has all five, and [the claim reference](https://ttsc.dev/docs/evidence/claims) has the full option surface: symbol selectors, external packages, monorepo roots, exclusion carriers, and the policies that tighten a single reference.
 
 ## Graphs in practice
 
@@ -140,34 +124,18 @@ The Swagger document is the backend's own output, so this graph starts from what
 
 The graph reads no meaning, only obligations and citations, so the rules hold wherever the artifacts are text. In a novel the same edges hold a character to what they have learned, a consequence to its cause, and a manuscript to the scene it was meant to execute. [`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
 
-## Claims and references
+## Tags
 
-A claim is the set of declarations that owe a citation, and a reference is what they owe.
+A configuration is written once. Tags are written forever, so this is the part to keep at hand.
 
-Every claim and reference pair is its own 100% obligation, so a citation toward one never counts toward another. All pairs go in the same `claims` array.
+| Kind | Address a target as | Write a tag in |
+| --- | --- | --- |
+| Markdown | `docs/pricing.md`, or `docs/pricing.md#coupon-stacking` | an HTML comment |
+| Prisma | `prisma:Sale`, or `prisma:Sale.coupon_limit` | a `///` comment |
+| Swagger | `POST:/orders`, one token with no whitespace | nothing, it cannot host a tag |
+| TypeScript | `{@link hooks.useCouponStacking}`, resolved through the citing module's imports | JSDoc |
 
-| Kind | Units | Claim | Reference | Cites in |
-| --- | --- | --- | --- | --- |
-| Markdown | file, H1 to H4 sections | yes | yes | an HTML comment |
-| Prisma | model, column, relation | yes | yes | a `///` comment |
-| TypeScript | types, functions, properties | yes | yes | JSDoc |
-| Swagger / OpenAPI | each operation under `paths` | no | yes | nothing, it cannot host a tag |
-
-Both sides take glob patterns in `files`, resolved against the `ttsc` project root. Set `root` to resolve against another directory instead, which is how a monorepo shares one requirements set.
-
-### Markdown
-
-```ts
-{
-  type: "markdown",
-  files: ["docs/requirements/**/*.md"],
-  reference: {
-    type: "markdown",
-    files: ["docs/meetings/**/*.md"],
-    symbol: ["h2", "h3"],
-  },
-}
-```
+A citation sits in a comment, so a rendered document stays clean, and `{#id}` gives a heading its own anchor.
 
 ```md
 ## Coupon Stacking {#coupon-stacking}
@@ -175,92 +143,7 @@ Both sides take glob patterns in `files`, resolved against the `ttsc` project ro
 <!-- @evidence docs/meetings/2026-01-12.md#discount-policy Carries the limit agreed in that meeting. -->
 ```
 
-- A citation sits in an HTML comment, so the rendered document stays clean.
-- `{#id}` gives a heading its own anchor.
-- A section citation sits under its heading, a whole-file citation at the top.
-
-### Prisma
-
-```ts
-{
-  type: "prisma",
-  files: ["prisma/schema/**/*.prisma"],
-  symbol: "model",
-  reference: {
-    type: "markdown",
-    files: ["docs/requirements/**/*.md"],
-    symbol: "h2",
-  },
-}
-```
-
-```prisma
-/// @evidence docs/requirements/pricing.md#discount-policy Discount columns exist for this policy.
-model Sale {
-  /// @evidence docs/requirements/pricing.md#coupon-stacking The stacking limit is stored here.
-  coupon_limit Int
-}
-```
-
-- A model is `prisma:Sale` and a member is `prisma:Sale.price`, never addressed through its file, so moving a model cannot break a citation.
-- Every matched file is parsed as one schema.
-
-### Swagger
-
-```ts
-{
-  type: "typescript",
-  files: ["src/controllers/**/*.ts"],
-  reference: {
-    type: "swagger",
-    file: "https://raw.githubusercontent.com/samchon/shopping/refs/heads/master/packages/api/swagger.json",
-  },
-}
-```
-
-- An operation is cited as `POST:/orders`, one token with no whitespace.
-- `file` names one local path or one `http:` URL, never a glob. Use an array of references for several documents.
-
-### TypeScript
-
-```ts
-{
-  type: "typescript",
-  files: ["src/lib/*/hooks.ts"],
-  symbol: "function",
-  reference: {
-    type: "typescript",
-    package: "@ORGANIZATION/PROJECT-api",
-    files: ["src/functional/**/*.ts"],
-    symbol: ["function"],
-  },
-}
-```
-
-- `files` picks the modules, and the units are whatever those modules publish.
-- A unit is addressed the way a consumer reaches it, so `export * as functional` nests a segment and `export { A as B }` answers to `B`.
-- `package` reads the units from disk instead of from the program, because a symbol nothing imports never enters the program and is exactly the one an obligation needs to name.
-- Only TypeScript may cite TypeScript, since `{@link}` resolves through the citing module's imports and a document has none.
-
-### Symbol selectors
-
-`symbol` picks which units a reference produces, and on a claim it restricts which declarations may host a tag.
-
-| Kind | Values | Default on a claim | Default on a reference |
-| --- | --- | --- | --- |
-| Markdown | `file`, `h1`, `h2`, `h3`, `h4` | all five | all five |
-| Prisma | `model`, `column`, `relation` | all three | `model` |
-| TypeScript | `type`, `function`, `property` | all three | `type` |
-| Swagger | none, every operation is selected | not applicable | every operation |
-
-- Units keep their hierarchy, so a target answers for itself and every selected descendant. Citing a heading covers its subsections, and `prisma:Sale` covers the columns beneath it.
-- An ancestor stays addressable even when its own kind is not selected.
-- A class is a `type`, its methods are `function`, and its fields are `property`. Any member written as a callable counts as a method.
-- Private members, and declarations marked `@internal`, `@hidden`, or `@ignore`, leave the set entirely.
-
-[The guide](https://ttsc.dev/docs/evidence/claims) has the rest.
-
-### Reviews
+### `@evidenceReview`
 
 ```ts
 /**
@@ -274,50 +157,16 @@ model Sale {
 
 A review answers one citation: the same declaration, the same target, and a fingerprint of the cited content. Editing that content expires the review and asks for it again.
 
-### Exclusions
+### `@evidenceExclude`
 
 ```md
 <!-- @evidenceExclude docs/requirements/pricing.md#coupon-stacking
      This release ships a single coupon. Stacking waits for the settlement policy. -->
 ```
 
-`@evidenceExclude <target> <reason>` records that a claim intentionally does not use a scope. It is the only acknowledgement that settles an obligation with nothing built, so it exists to be vetoed, and "not applicable" is a conclusion rather than a reason.
+An exclusion records that a claim intentionally does not use a scope. It is the only acknowledgement that settles an obligation with nothing built, so it exists to be vetoed, and "not applicable" is a conclusion rather than a reason.
 
-```ts
-{
-  type: "typescript",
-  files: ["src/components/**/*.tsx", "src/components/EXCLUSIONS.ts"],
-  evidenceExcludeCarriers: ["src/components/EXCLUSIONS.ts"],
-  symbol: "function",
-  reference: { type: "markdown", files: ["docs/**/*.md"], symbol: "h2" },
-}
-```
-
-`evidenceExcludeCarriers` confines them to one ledger file, so reading every exclusion means opening one file. An exclusion written anywhere else discharges nothing.
-
-### Strict references
-
-Coverage is loose by default, which suits a document that several modules honor. It is too loose for a proof obligation, where one exclusion or one host citing everything discharges the whole set. Four properties tighten a single reference, and they never pool across references.
-
-| Property | Effect |
-| --- | --- |
-| `noEvidenceExclude` | Refuses exclusions, so the target still owes positive evidence. |
-| `uniqueEvidence` | Allows at most one host per unit, so one host is answerable rather than several. |
-| `singleEvidencePerSymbol` | Requires exactly one unit from every selected host, so a host citing nothing and a host citing everything both fail. |
-| `requireReview` | Makes every acknowledgement owe a matching review, which fails again once the cited content changes. |
-
-```ts
-{
-  type: "typescript",
-  package: "@ORGANIZATION/PROJECT-api",
-  files: ["src/functional/**/*.ts"],
-  symbol: ["function"],
-  noEvidenceExclude: true,
-  singleEvidencePerSymbol: true,
-}
-```
-
-Counting is by identity rather than by text. Repeated tags for one unit count once, an overload set stays one host, and citing a parent of two selected units counts as two.
+[The tag reference](https://ttsc.dev/docs/evidence/tags) has the rest, including hierarchy, overlap, and where an exclusion may sit.
 
 ## Sponsors
 
