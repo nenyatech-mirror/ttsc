@@ -54,14 +54,15 @@ One error per obligation, because a citation toward one reference never counts t
 
 ![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
-One engine built the same four applications twice from the same frozen requirements.
+The same coding agent built four applications twice, with and without the evidence graph.
 
 - **Plain**: review is a loop until dry.
-  - Read everything from the beginning, fix every finding, start over.
-  - Stop only after a round turns up nothing.
-  - The review target is the whole codebase.
-  - A loop cannot count what it never read, so it settles at a ceiling.
+  - Read everything, fix every finding, start over.
+  - Stop only after an empty round.
+  - About 90% of the run, but coverage never reaches 100%.
 - **Evidence**: only the truth of the evidence is reviewed.
+  - Coverage reaches 100% in one pass.
+  - Review takes just 25% of the run.
 
 ## Setup
 
@@ -106,8 +107,8 @@ Four more rules ship beside `evidence/graph`, asking for a JSDoc block on every 
 
 One claim is one edge. Chain them and a project has a graph, where every arrow points at the evidence it cites. The shape changes per project, the review split does not:
 
-- **Humans read** the top layer, and the reason written on each tag.
-- **The compiler reads** everything below it, and fails the build on any obligation nobody answered.
+- **Humans read** the top layer and the reason on each tag.
+- **The compiler reads** the rest, and fails on any open obligation.
 
 ### Layers
 
