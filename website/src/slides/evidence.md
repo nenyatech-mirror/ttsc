@@ -334,13 +334,19 @@ style: |
     border-left: 3px solid currentColor;
   }
   .document-foundations { left: 30%; }
-  .document-node.meeting { left: 0; top: 35px; width: 22%; }
+  .document-node.idea { left: 0; top: 35px; width: 22%; }
   .document-node.implementation { left: 70%; top: 35px; width: 22%; }
   .document-node.test { left: 70%; top: 197px; width: 22%; }
-  .document-edge.requirements-meeting { left: 22%; top: 71px; width: 9.3%; }
+  .document-edge.requirements-idea { left: 22%; top: 71px; width: 9.3%; }
   .document-edge.implementation-foundations { left: 61%; top: 71px; width: 9%; }
   .document-edge.test-implementation { left: 81%; top: 107px; height: 90px; }
   .document-edge.test-foundations { left: 61%; top: 233px; width: 9%; }
+  .document-graph.requirements-only .document-foundations { left: 12%; }
+  .document-graph.requirements-only .document-node.implementation { left: 66%; }
+  .document-graph.requirements-only .document-node.test { left: 66%; }
+  .document-graph.requirements-only .document-edge.implementation-foundations { left: 43%; width: 23%; }
+  .document-graph.requirements-only .document-edge.test-implementation { left: 77%; }
+  .document-graph.requirements-only .document-edge.test-foundations { left: 43%; width: 23%; }
   .backend-graph .architecture-foundations,
   .frontend-graph .architecture-foundations { top: 55px; }
   .backend-node.database { left: 40%; top: 70px; width: 22%; }
@@ -391,6 +397,52 @@ style: |
   .card .note { font-size: 28px; }
   .card.warm { border-top-color: #f08a24; }
   .card.warm b { color: #b35c00; }
+
+  /* Review checklist */
+  section.review-checklist table {
+    display: table;
+    width: 100%;
+    max-width: none;
+    margin-right: 0;
+    margin-left: 0;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 0 10px;
+    font-size: 29px;
+  }
+  section.review-checklist th,
+  section.review-checklist td {
+    box-sizing: border-box;
+    padding: 14px 20px;
+    border: 0;
+    white-space: nowrap;
+  }
+  section.review-checklist th:first-child,
+  section.review-checklist td:first-child { width: 33.333%; }
+  section.review-checklist th:nth-child(2),
+  section.review-checklist td:nth-child(2) { width: 33.333%; }
+  section.review-checklist th:nth-child(3),
+  section.review-checklist td:nth-child(3) { width: 33.334%; }
+  section.review-checklist th {
+    background: #14284b;
+    color: #ffffff;
+    font-weight: 700;
+  }
+  section.review-checklist th:first-child { border-radius: 10px 0 0 10px; }
+  section.review-checklist th:last-child { border-radius: 0 10px 10px 0; }
+  section.review-checklist td {
+    color: #14161a;
+    font-weight: 400;
+  }
+  section.review-checklist td:first-child {
+    border-radius: 10px 0 0 10px;
+  }
+  section.review-checklist td:last-child {
+    border-radius: 0 10px 10px 0;
+  }
+  section.review-checklist td:first-child { background: #eef2f7; }
+  section.review-checklist td:nth-child(2) { background: #dce8f6; }
+  section.review-checklist td:nth-child(3) { background: #c5d9f0; }
   .problem-measures { display: flex; flex-direction: column; gap: 12px; width: 94%; margin: 12px auto 0; }
   .problem-measure-title { margin-bottom: 8px; font-size: 32px; font-weight: 700; }
   .problem-bar {
@@ -484,10 +536,12 @@ style: |
 - **Evidence Graph, a compiler harness**
   - No loop until dry required
   - `@evidence <target> <reason>`
+  - `@evidenceReview <target> <reason>`
   - `@evidenceExclude <target> <reason>`
 - **Spec Driven Development**
   - Write and review only the requirements
   - AI builds everything with 100% coverage
+  - Not only programming, but also lectures
 
 </div>
 <div class="benchmark-graphs">
@@ -557,7 +611,7 @@ style: |
 # First, divide the artifacts into layers
 
 <div class="document-graph">
-<div class="architecture-node document-node meeting">Meeting notes</div>
+<div class="architecture-node document-node idea">Idea notes</div>
 <div class="architecture-foundations document-foundations">
 <div class="architecture-node">Requirements</div>
 <div class="architecture-edge vertical arrow-up specifications-requirements"></div>
@@ -565,13 +619,39 @@ style: |
 </div>
 <div class="architecture-node document-node implementation">Implementation</div>
 <div class="architecture-node document-node test">Test</div>
-<div class="architecture-edge horizontal arrow-left document-edge requirements-meeting"></div>
+<div class="architecture-edge horizontal arrow-left document-edge requirements-idea"></div>
 <div class="architecture-edge horizontal arrow-left document-edge implementation-foundations"></div>
 <div class="architecture-edge vertical arrow-up document-edge test-implementation"></div>
 <div class="architecture-edge horizontal arrow-left document-edge test-foundations"></div>
 </div>
 
 <p class="architecture-caption">Each arrow points to the evidence it cites.</p>
+
+---
+
+# One rule declares the relationship
+
+```ts
+type: "typescript",
+files: ["src/components/**/*.tsx"], // sources
+symbol: "function",
+reference: {
+  type: "markdown",
+  files: ["docs/**/*.md"], // targets
+  symbol: ["h2", "h3"],
+},
+```
+
+**Components implement documents.**
+
+---
+
+# One grammar covers four artifact types
+
+- **Markdown**: file, H1-H4 section
+- **Prisma**: database model, columns, relation
+- **TypeScript**: type, function, property
+- **Swagger**: each operation under `paths`
 
 ---
 
@@ -605,11 +685,79 @@ error TS16411: [evidence/graph]
 
 ---
 
+# 100% coverage can include false citations
+
+```ts
+/**
+ * @evidence docs/discount.md#coupon-stacking
+ *           Explains the per-issuer limit.
+ */
+export function CouponStackingNotice(props: IProps): JSX.Element;
+```
+
+- Inexpensive models **sometimes write facts that do not exist**
+- A false tag removes the error, **not the problem**
+
+---
+
+# Review only citation truth
+
+```ts
+/**
+ * @evidence docs/discount.md#coupon-stacking Explains the per-issuer limit.
+ * @evidenceReview docs/discount.md#coupon-stacking #a1b2c3d4e5f6
+ *                 Verified against policy section 3.
+ */
+export function CouponStackingNotice(props: IProps): JSX.Element;
+```
+
+- Reviews match the **same declaration and target**
+- The fingerprint expires when the cited content changes
+
+<span class="note">Even Luna reduced false citations to zero in one review pass.</span>
+
+---
+
+<!-- _class: review-checklist -->
+
+# The tag list is the review checklist
+
+| Review    | Plain               | Evidence              |
+| --------- | ------------------- | --------------------- |
+| Target    | Everything          | Citation truth        |
+| Loop      | Restart every round | Follow the tag list   |
+| Omissions | Search manually     | Compiler reports them |
+
+> **The compiler handles omissions. Humans handle falsehoods.**
+
+---
+
 <!-- _class: divider -->
 
 # Spec Driven Development
 
 <span class="note">Requirements are the handoff.<br/>AI builds everything below them with 100% coverage.</span>
+
+---
+
+<!-- _class: architecture-slide -->
+
+# Method A starts from requirements
+
+<div class="document-graph requirements-only">
+<div class="architecture-foundations document-foundations">
+<div class="architecture-node">Requirements</div>
+<div class="architecture-edge vertical arrow-up specifications-requirements"></div>
+<div class="architecture-node">Specifications</div>
+</div>
+<div class="architecture-node document-node implementation">Implementation</div>
+<div class="architecture-node document-node test">Test</div>
+<div class="architecture-edge horizontal arrow-left document-edge implementation-foundations"></div>
+<div class="architecture-edge vertical arrow-up document-edge test-implementation"></div>
+<div class="architecture-edge horizontal arrow-left document-edge test-foundations"></div>
+</div>
+
+<p class="architecture-caption">Requirements are the source layer.</p>
 
 ---
 
@@ -622,11 +770,34 @@ error TS16411: [evidence/graph]
 
 ---
 
+<!-- _class: architecture-slide -->
+
+# Method B starts from idea notes
+
+<div class="document-graph">
+<div class="architecture-node document-node idea">Idea notes</div>
+<div class="architecture-foundations document-foundations">
+<div class="architecture-node">Requirements</div>
+<div class="architecture-edge vertical arrow-up specifications-requirements"></div>
+<div class="architecture-node">Specifications</div>
+</div>
+<div class="architecture-node document-node implementation">Implementation</div>
+<div class="architecture-node document-node test">Test</div>
+<div class="architecture-edge horizontal arrow-left document-edge requirements-idea"></div>
+<div class="architecture-edge horizontal arrow-left document-edge implementation-foundations"></div>
+<div class="architecture-edge vertical arrow-up document-edge test-implementation"></div>
+<div class="architecture-edge horizontal arrow-left document-edge test-foundations"></div>
+</div>
+
+<p class="architecture-caption">Idea notes are the source layer.</p>
+
+---
+
 # Method B: Delegate the requirements, too
 
-- Hand over meeting notes and idea notes **as-is, without organizing them**
+- Hand over idea notes **as-is, without organizing them**
 - **Delegate everything**, starting with writing the requirements
-- If anything decided in the meeting is omitted, **the build breaks immediately**
+- If anything in the idea notes is omitted, **the build breaks immediately**
 
 > Humans provide one source layer.<br/>The graph protects everything below it.
 
@@ -637,64 +808,13 @@ error TS16411: [evidence/graph]
 ```md
 ## Coupon stacking limit {#coupon-stacking}
 
-<!-- @evidence docs/meetings/2026-01-12.md#discount-policy
-     Carries over the per-issuer limit agreed upon in that meeting. -->
+<!-- @evidence docs/ideas/discount.md#discount-policy
+     Carries over the per-issuer limit recorded in the idea notes. -->
 ```
 
-- If anything decided in the meeting **is missing from the requirements, the build breaks**
-- Idea notes, interview records, and existing internal documents occupy the same layer
-- Citations are HTML comments, so **the rendered document stays clean**
-
----
-
-# One rule declares the relationship
-
-```ts
-type: "typescript",
-files: ["src/components/**/*.tsx"], // sources
-symbol: "function",
-reference: {
-  type: "markdown",
-  files: ["docs/**/*.md"], // targets
-  symbol: ["h2", "h3"],
-},
-```
-
-**Components implement documents. Therefore, every H2 and H3 must be cited.**
-
----
-
-# One grammar covers four artifact types
-
-| Kind       | Unit                         |
-| ---------- | ---------------------------- |
-| Markdown   | file, H1-H4 section          |
-| Prisma     | model, column, relation      |
-| TypeScript | type, function, property     |
-| Swagger    | each operation under `paths` |
-
----
-
-# The compiler determines 100%
-
-<div class="cards">
-<div class="card"><b>Denominator</b>The configuration declares it</div>
-<div class="card"><b>Numerator</b>Tags record it</div>
-<div class="card warm"><b>Decision</b>The compiler makes it every time</div>
-</div>
-
----
-
-# It closes mechanical loopholes
-
-| Option | What it prevents |
-| --- | --- |
-| `noEvidenceExclude` | Escaping with "not applicable" |
-| `uniqueEvidence` | Multiple places passing responsibility to one another |
-| `singleEvidencePerSymbol` | Piling every citation onto one place |
-| `requireReview` | Letting the specification change after it was cited |
-
-<span class="note">An exclusion requires a reason, and a review carries a fingerprint of the document content.</span>
+- Missing idea-note coverage **breaks the requirements build**
+- Idea notes, interviews, and internal documents share one layer
+- Citations are comments, so **the rendered document stays clean**
 
 ---
 
@@ -763,7 +883,7 @@ reference: {
 
 # Benchmark
 
-<span class="note">Same requirements · Same engine · Same model · Only the plugin changed</span>
+<span class="note">Same inputs · engine · model · Plugin only</span>
 
 ---
 
@@ -815,35 +935,6 @@ Plain coverage falls with scope. **Evidence remains at 100%.**
 | erp | <span class="split"><i class="d105"></i><i class="rev"></i></span> Review 90% | <span class="split on"><i class="d846"></i><i class="rev"></i></span> Review 15% |
 
 <span class="note">Dark is development. Light is review. Each cell represents 100% of its tokens.</span>
-
----
-
-# 100% coverage can include false citations
-
-```ts
-/**
- * @evidence docs/discount.md#coupon-stacking Explains the per-issuer limit.
- * @evidenceReview docs/discount.md#coupon-stacking #a1b2c3d4e5f6
- *                 Verified that the screen copy matches the limit in policy section 3.
- */
-```
-
-- Inexpensive models **sometimes write facts that do not exist**
-- Requiring fingerprinted reviews makes this **converge toward zero**<br/>but takes more time
-
-> A false tag removes the error, not the problem.
-
----
-
-# Human review checks citation truth
-
-|  | Plain | Evidence |
-| --- | --- | --- |
-| What to inspect | All code, documents, and tests | The truthfulness of citations |
-| Scope | Start over in every round | The tag list is the checklist |
-| What is missing | Humans and AI must search to find out | The compiler has already reported it |
-
-**The compiler handles "omissions"; humans handle "falsehoods."**
 
 ---
 
@@ -924,16 +1015,26 @@ Plain coverage falls with scope. **Evidence remains at 100%.**
 - **Causality**: clues, motives, consequences
 - **Continuity**: knowledge, arcs, revisions
 - Historical fiction, fantasy, science fiction, mystery, drama
-- **Napoleon**: one example with 25 principles, 350 settings commitments, and 742 scenes
+- **Napoleon**: 25 principles, 350 setting commitments, 742 scenes
 
 ---
 
 <!-- _class: dark -->
 <!-- _paginate: false -->
 
+# References
+
+- https://github.com/samchon/ttsc
+  - https://ttsc.dev/docs/evidence
+  - https://ttsc.dev/docs/benchmark/evidence
+- https://github.com/samchon/evidence-benchmark-results
+- https://github.com/samchon/novels
+
+---
+
+<!-- _class: divider -->
+<!-- _paginate: false -->
+
 # Q & A
 
-- [https://github.com/samchon/ttsc](https://github.com/samchon/ttsc)
-- [https://github.com/wrtnlabs/novels](https://github.com/wrtnlabs/novels)
-- [https://ttsc.dev/docs/evidence](https://ttsc.dev/docs/evidence)
-- [https://ttsc.dev/docs/benchmark/evidence](https://ttsc.dev/docs/benchmark/evidence)
+<span class="note">Samchon<br/>https://ttsc.dev</span>
