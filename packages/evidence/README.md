@@ -113,7 +113,7 @@ One claim: the components under `src` implement the docs, so every H2 and H3 und
 
 ### Tags
 
-The configuration is written once. The tags are written forever: `@evidence` cites, `@evidenceReview` verifies, and `@evidenceExclude` declines. [The tag reference](https://ttsc.dev/docs/evidence/tags) has the grammar of all three.
+The configuration is written once. The tags are written forever: `@evidence` cites, `@evidenceReview` verifies, and `@evidenceExclude` declines. [The tag reference](https://ttsc.dev/docs/evidence/tags) has the full grammar.
 
 A false tag removes the error, not the problem. `@evidenceReview` resolves it:
 
@@ -151,6 +151,8 @@ Backend, frontend, and even novels below are this same shape, drawn in detail.
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/backend-dark.svg"><img alt="Requirements and Specifications grounding DB schema, API operation, API schema and Test" src="https://ttsc.dev/evidence/backend-light.svg" width="100%"></picture>
 
+> Real config: [`api/lint.config.ts`](https://github.com/samchon/ttsc/blob/master/benchmarks/evidence/template/evidence/packages/api/lint.config.ts) and [`backend/test/lint.config.ts`](https://github.com/samchon/ttsc/blob/master/benchmarks/evidence/template/evidence/packages/backend/test/lint.config.ts)
+
 The DB schema is Prisma, the rest is TypeScript, and one graph spans both:
 
 - The DB schema cites the documents; no table without a documented reason.
@@ -161,17 +163,21 @@ The DB schema is Prisma, the rest is TypeScript, and one graph spans both:
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/frontend-dark.svg"><img alt="Requirements and Specifications grounding Swagger, Hooks, Screens and Journeys" src="https://ttsc.dev/evidence/frontend-light.svg" width="100%"></picture>
 
+> Real config: [`frontend/lint.config.ts`](https://github.com/samchon/ttsc/blob/master/benchmarks/evidence/template/evidence/packages/frontend/lint.config.ts)
+
 The source layer is the backend's own Swagger output: a graph can start from what another project publishes.
 
 - Hooks cite the operations they call.
 - Screens cite the hooks they render.
 - Journeys cite the screens they walk through.
 
-Each layer also cites the documents, so every screen traces back to a requirement.
+Screens and journeys also cite the documents, so every screen traces back to a requirement.
 
 ### Novels
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/novel-dark.svg"><img alt="Principles and Settings grounding Storylines, Scenarios and Manuscripts" src="https://ttsc.dev/evidence/novel-light.svg" width="100%"></picture>
+
+> Real config: [`napoleon-imperator/lint.config.ts`](https://github.com/samchon/novels/blob/master/packages/napoleon-imperator/lint.config.ts)
 
 The graph reads no meaning, only obligations and citations, so it works on any text. Humans review only the settings (characters, world rules, history), and the novel follows. The principles are universal literary fundamentals, not something written per work.
 
