@@ -57,9 +57,8 @@ One engine built the same four applications twice from the same frozen requireme
   - The review target is the whole codebase.
   - A loop cannot count what it never read, so it settles at a ceiling.
 - **Evidence**: the build does not finish while an obligation is open.
-  - Nobody aims at coverage, it is what is left once the errors are gone.
-  - The compiler reports every omission on its own.
-  - The review target is only the truth of the evidence.
+  - The compiler reports every omission.
+  - Only the truth of the evidence is reviewed.
 
 ## Setup
 
