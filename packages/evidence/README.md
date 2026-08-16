@@ -111,54 +111,34 @@ Each takes `"error"`, `"warning"`, or `"off"`.
 
 ## Graphs in practice
 
-Every arrow points at the evidence it cites.
+Every arrow points at the evidence it cites. The shape changes per project, the review split does not:
+
+- **Humans read** the top layer, and the reason written on each tag.
+- **The compiler reads** everything below it, and fails the build on any obligation nobody answered.
 
 ### Documents
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/documents-dark.svg"><img alt="Idea notes grounding Requirements and Specifications, which ground Implementation and Test" src="https://ttsc.dev/evidence/documents-light.svg" width="100%"></picture>
 
-The edges block:
-
-- a decision taken in a meeting and never written into the requirements,
-- a specification nobody asked for,
-- a requirement no code implements, and
-- a feature no test verifies.
-
-Humans own one layer and delegate everything under it. Hand over the requirements, and the agent writes the specifications. Hand over raw idea notes, and it writes the requirements too.
+Humans own one layer and delegate everything under it. Hand over the requirements, and the agent writes the specifications; hand over raw idea notes, and it writes the requirements too.
 
 ### Backend
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/backend-dark.svg"><img alt="Requirements and Specifications grounding DB schema, API operation, API schema and Test" src="https://ttsc.dev/evidence/backend-light.svg" width="100%"></picture>
 
-The edges block:
-
-- a table nobody asked for,
-- an endpoint with no model behind it,
-- an operation the documents describe and nobody built, and
-- an operation no test answers for.
+The DB schema is Prisma and everything else is TypeScript, so one graph spans two artifact kinds without either side knowing about the other.
 
 ### Frontend
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/frontend-dark.svg"><img alt="Requirements and Specifications grounding Swagger, Hooks, Screens and Journeys" src="https://ttsc.dev/evidence/frontend-light.svg" width="100%"></picture>
 
-The Swagger document is the backend's own output, so this graph starts from what another project publishes. The edges block:
-
-- an operation no hook calls,
-- a hook no screen renders, and
-- a screen no journey reaches.
+The Swagger document is the backend's own output, so this graph starts from what another project publishes.
 
 ### Beyond code
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/novel-dark.svg"><img alt="Principles and Settings grounding Storylines, Scenarios and Manuscripts" src="https://ttsc.dev/evidence/novel-light.svg" width="100%"></picture>
 
-The graph reads no meaning, only obligations and citations, so the rules hold wherever the artifacts are text. In a novel the edges block:
-
-- a scene that drifts from what the work is about,
-- a character using knowledge they never learned,
-- a consequence with no cause, and
-- a manuscript departing from the scene it was meant to execute.
-
-[`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
+The graph reads no meaning, only obligations and citations, so the rules hold wherever the artifacts are text. In a novel the same edges hold a character to what they have learned, a consequence to its cause, and a manuscript to the scene it was meant to execute. [`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
 
 ## Claims and references
 
