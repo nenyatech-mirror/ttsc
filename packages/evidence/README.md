@@ -19,7 +19,12 @@ Evidence Graph, your spec as a compile error no coding agent can skip.
 export function CouponStackingNotice(props: IProps): JSX.Element;
 ```
 
-`@evidence <target> <reason>` names one unit of the spec and why this declaration answers for it. A target is a document section, an API operation, a database schema model, or a TypeScript symbol as an inline link.
+`@evidence <target> <reason>` names one unit of the spec and why this declaration answers for it. A target can be:
+
+- a section of a document,
+- an API operation,
+- a database schema model, or
+- a TypeScript symbol, written as an inline link.
 
 ```bash
 $ npx ttsc
@@ -38,11 +43,17 @@ error TS16411: [evidence/graph] Missing acknowledgement for 'docs/discount.md#co
 Found 3 errors.
 ```
 
-The build fails once per obligation, because one reference never covers another. An AI coding agent has to clear every one to finish, and clearing one means citing the target and writing down why its code answers for it. Coverage reaches 100% on its own, as the residue of the errors it closed.
+One error per obligation, so the error list is the task list.
+
+An AI coding agent cannot finish while one is open, and closing one means citing the target and writing down why its code answers for it. Nobody aims at 100% coverage. It is what is left once the errors are gone.
 
 ![Coverage and token spend across all four subjects](https://raw.githubusercontent.com/samchon/ttsc/gh-pages/benchmark/png/evidence-summary.png)
 
-One engine built the same four applications twice from the same frozen requirements, once with the graph and once without. Both arms reviewed by loop: read, fix, restart, stop after an empty round. A loop never counts what it did not look at, so it settles on a ceiling that drops as the project grows: 5,449M tokens and 51.6% coverage on the ERP subject, against 411M tokens and 100%.
+One engine built the same four applications twice from the same frozen requirements, once with the graph and once without.
+
+- Both arms reviewed the same way: read the codebase, fix every finding, restart, stop after an empty round.
+- A loop cannot count what it never looked at, so it stops at a ceiling instead of at zero.
+- That ceiling falls as the project grows. On the ERP subject it was 51.6% coverage for 5,449M tokens, against 100% for 411M.
 
 ## Setup
 
@@ -105,29 +116,54 @@ Every arrow points at the evidence it cites.
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/documents-dark.svg"><img alt="Idea notes grounding Requirements and Specifications, which ground Implementation and Test" src="https://ttsc.dev/evidence/documents-light.svg" width="100%"></picture>
 
-A meeting decision never written into the requirements, a specification nobody asked for, a requirement no code implements, a feature never verified. Humans own one layer and delegate everything below it, so handing over raw idea notes delegates the requirements too.
+The edges block:
+
+- a decision taken in a meeting and never written into the requirements,
+- a specification nobody asked for,
+- a requirement no code implements, and
+- a feature no test verifies.
+
+Humans own one layer and delegate everything under it. Hand over the requirements, and the agent writes the specifications. Hand over raw idea notes, and it writes the requirements too.
 
 ### Backend
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/backend-dark.svg"><img alt="Requirements and Specifications grounding DB schema, API operation, API schema and Test" src="https://ttsc.dev/evidence/backend-light.svg" width="100%"></picture>
 
-A table nobody asked for has nothing to cite, an endpoint with no model behind it fails against the schema, and an operation no test answers for is a compile error on the next build.
+The edges block:
+
+- a table nobody asked for,
+- an endpoint with no model behind it,
+- an operation the documents describe and nobody built, and
+- an operation no test answers for.
 
 ### Frontend
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/frontend-dark.svg"><img alt="Requirements and Specifications grounding Swagger, Hooks, Screens and Journeys" src="https://ttsc.dev/evidence/frontend-light.svg" width="100%"></picture>
 
-The Swagger document is the backend's own output, so this graph starts from what another project publishes. An operation no hook calls, a hook no screen renders, and a screen no journey reaches are each an open obligation.
+The Swagger document is the backend's own output, so this graph starts from what another project publishes. The edges block:
+
+- an operation no hook calls,
+- a hook no screen renders, and
+- a screen no journey reaches.
 
 ### Beyond code
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://ttsc.dev/evidence/novel-dark.svg"><img alt="Principles and Settings grounding Storylines, Scenarios and Manuscripts" src="https://ttsc.dev/evidence/novel-light.svg" width="100%"></picture>
 
-The graph reads no meaning, only obligations and citations, so the rules hold wherever the artifacts are text. Here they block a scene that drifts from the work's purpose, a character using knowledge they never learned, a consequence with no cause, and a manuscript departing from the scene it was to execute. [`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
+The graph reads no meaning, only obligations and citations, so the rules hold wherever the artifacts are text. In a novel the edges block:
+
+- a scene that drifts from what the work is about,
+- a character using knowledge they never learned,
+- a consequence with no cause, and
+- a manuscript departing from the scene it was meant to execute.
+
+[`samchon/novels`](https://github.com/samchon/novels) runs one on 25 principles, 350 setting commitments, and 742 scenes.
 
 ## Claims and references
 
-A claim is the population that owes a citation, a reference is what it owes, and every pair is its own 100% obligation. A citation toward one reference never counts toward another. All pairs join the same `claims` array.
+A claim is the set of declarations that owe a citation, and a reference is what they owe.
+
+Every claim and reference pair is its own 100% obligation, so a citation toward one never counts toward another. All pairs go in the same `claims` array.
 
 | Kind | Units | Claim | Reference | Cites in |
 | --- | --- | --- | --- | --- |
@@ -136,7 +172,7 @@ A claim is the population that owes a citation, a reference is what it owes, and
 | TypeScript | types, functions, properties | yes | yes | JSDoc |
 | Swagger / OpenAPI | each operation under `paths` | no | yes | nothing, it cannot host a tag |
 
-Every population takes glob patterns in `files`, resolved against the `ttsc` project root. `root` resolves against another directory instead, which is how a monorepo shares one requirements set.
+Both sides take glob patterns in `files`, resolved against the `ttsc` project root. Set `root` to resolve against another directory instead, which is how a monorepo shares one requirements set.
 
 ### Documents
 
@@ -158,7 +194,9 @@ Every population takes glob patterns in `files`, resolved against the `ttsc` pro
 <!-- @evidence docs/meetings/2026-01-12.md#discount-policy Carries the limit agreed in that meeting. -->
 ```
 
-A citation sits in an HTML comment, so rendered prose stays clean, and `{#id}` gives a heading its own anchor. A section citation sits under its heading, a whole-file citation at the top.
+- A citation sits in an HTML comment, so the rendered document stays clean.
+- `{#id}` gives a heading its own anchor.
+- A section citation sits under its heading, a whole-file citation at the top.
 
 ### Database schema
 
@@ -183,7 +221,8 @@ model Sale {
 }
 ```
 
-A model is addressed as `prisma:Sale` and a member as `prisma:Sale.price`, never through its file, so moving a model cannot break a citation. Every matched file is parsed as one schema.
+- A model is `prisma:Sale` and a member is `prisma:Sale.price`, never addressed through its file, so moving a model cannot break a citation.
+- Every matched file is parsed as one schema.
 
 ### API operations
 
@@ -198,7 +237,8 @@ A model is addressed as `prisma:Sale` and a member as `prisma:Sale.price`, never
 }
 ```
 
-An operation is cited as `POST:/orders`, one whitespace-free token. The singular `file` names one local path or one `http:` URL, never a glob.
+- An operation is cited as `POST:/orders`, one token with no whitespace.
+- `file` names one local path or one `http:` URL, never a glob. Use an array of references for several documents.
 
 ### Symbols
 
@@ -216,11 +256,14 @@ An operation is cited as `POST:/orders`, one whitespace-free token. The singular
 }
 ```
 
-`files` selects modules and the population is what they publish, addressed the way a consumer reaches it, so `export * as functional` nests a segment and `export { A as B }` answers to `B`. A `package` population is read from disk, because a symbol nothing imports is absent from the program and is exactly the one an obligation needs to name. Only TypeScript may cite TypeScript.
+- `files` picks the modules, and the units are whatever those modules publish.
+- A unit is addressed the way a consumer reaches it, so `export * as functional` nests a segment and `export { A as B }` answers to `B`.
+- `package` reads the units from disk instead of from the program, because a symbol nothing imports never enters the program and is exactly the one an obligation needs to name.
+- Only TypeScript may cite TypeScript, since `{@link}` resolves through the citing module's imports and a document has none.
 
 ### Symbol selectors
 
-`symbol` picks which units a reference materializes, and on a claim it restricts which declarations may host a tag.
+`symbol` picks which units a reference produces, and on a claim it restricts which declarations may host a tag.
 
 | Kind | Values | Default on a claim | Default on a reference |
 | --- | --- | --- | --- |
@@ -229,9 +272,12 @@ An operation is cited as `POST:/orders`, one whitespace-free token. The singular
 | TypeScript | `type`, `function`, `property` | all three | `type` |
 | Swagger | none, every operation is selected | not applicable | every operation |
 
-Units keep their hierarchy, so a target acknowledges itself and every selected descendant, and an ancestor stays addressable even when its own kind is not selected.
+- Units keep their hierarchy, so a target answers for itself and every selected descendant. Citing a heading covers its subsections, and `prisma:Sale` covers the columns beneath it.
+- An ancestor stays addressable even when its own kind is not selected.
+- A class is a `type`, its methods are `function`, and its fields are `property`. Any member written as a callable counts as a method.
+- Private members, and declarations marked `@internal`, `@hidden`, or `@ignore`, leave the set entirely.
 
-A class is a `type`, its methods are `function`, and its fields are `property`, with any member written as a callable joining the methods. Private members and declarations documented `@internal`, `@hidden`, or `@ignore` leave the population. [The guide](https://ttsc.dev/docs/evidence/claims) has the rest.
+[The guide](https://ttsc.dev/docs/evidence/claims) has the rest.
 
 ### Reviews
 
@@ -243,7 +289,9 @@ A class is a `type`, its methods are `function`, and its fields are `property`, 
  */
 ```
 
-100% coverage is not 100% truth, and an untrue tag removes the error rather than the problem, so a human reads the tag list instead of the codebase. A review names the same declaration and target as the citation it answers, and carries a fingerprint of the cited content, so editing that content expires the review.
+100% coverage is not 100% truth. A false tag removes the error, not the problem, so this list is what a human reads instead of the codebase.
+
+A review answers one citation: the same declaration, the same target, and a fingerprint of the cited content. Editing that content expires the review and asks for it again.
 
 ### Exclusions
 
@@ -264,11 +312,11 @@ A class is a `type`, its methods are `function`, and its fields are `property`, 
 }
 ```
 
-`evidenceExcludeCarriers` confines them to one ledger file, so reviewing every exclusion means opening one file. An exclusion written anywhere else discharges nothing.
+`evidenceExcludeCarriers` confines them to one ledger file, so reading every exclusion means opening one file. An exclusion written anywhere else discharges nothing.
 
 ### Strict references
 
-Ordinary coverage is permissive, which is too weak for a proof obligation, where one exclusion or one host citing everything discharges the whole population. Four properties tighten a single reference, and they never pool across references.
+Coverage is loose by default, which suits a document that several modules honor. It is too loose for a proof obligation, where one exclusion or one host citing everything discharges the whole set. Four properties tighten a single reference, and they never pool across references.
 
 | Property | Effect |
 | --- | --- |
