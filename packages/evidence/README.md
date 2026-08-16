@@ -54,11 +54,11 @@ One engine built the same four applications twice from the same frozen requireme
 - **Plain**: review is a loop until dry.
   - Read everything from the beginning, fix every finding, start over.
   - Stop only after a round turns up nothing.
-  - The loop reports what it happened to read, so it settles at a ceiling instead of at zero.
+  - Review has no target but the whole codebase, and reports only what it happened to read.
 - **Evidence**: the build does not finish while an obligation is open.
   - Coverage is not a target, it is what is left once the errors are gone.
-  - The compiler owns every omission.
-  - A human reviews one thing, whether each citation is true.
+  - The compiler reports every omission on its own.
+  - Review has one target, whether each citation is true.
 
 ## Setup
 
