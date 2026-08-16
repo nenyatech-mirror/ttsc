@@ -812,8 +812,8 @@ export function CouponStackingNotice(props: IProps): JSX.Element;
      Carries over the per-issuer limit recorded in the idea notes. -->
 ```
 
-- If anything in the idea notes **is missing from the requirements, the build breaks**
-- Idea notes, interview records, and existing internal documents occupy the same layer
+- Missing idea-note coverage **breaks the requirements build**
+- Idea notes, interviews, and internal documents share one layer
 - Citations are HTML comments, so **the rendered document stays clean**
 
 ---
@@ -883,7 +883,7 @@ export function CouponStackingNotice(props: IProps): JSX.Element;
 
 # Benchmark
 
-<span class="note">Same requirements · Same engine · Same model · Only the plugin changed</span>
+<span class="note">Same inputs · engine · model · Plugin only</span>
 
 ---
 
@@ -1015,7 +1015,7 @@ Plain coverage falls with scope. **Evidence remains at 100%.**
 - **Causality**: clues, motives, consequences
 - **Continuity**: knowledge, arcs, revisions
 - Historical fiction, fantasy, science fiction, mystery, drama
-- **Napoleon**: one example with 25 principles, 350 settings commitments, and 742 scenes
+- **Napoleon**: 25 principles, 350 setting commitments, 742 scenes
 
 ---
 
