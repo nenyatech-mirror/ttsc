@@ -364,12 +364,11 @@ export function both(): void {}
 /**
  * Verifies a reviewed checklist demands a review of the exclusion as well.
  *
- * Verifying that a declaration does what an item describes and verifying that the item does not apply here are opposite questions, and a checklist is where the second one is written most often, once per host that opts out. Placement is the second half: an exclusion whose carrier the claim's `symbol` does not select answers for every host, and it still owes a review of its own, written beside it on the carrier rather than on any host it discharges.
+ * Verifying that a declaration does what an item describes and verifying that the item does not apply here are opposite questions, and a checklist is where the second one is written most often, once per host that opts out. Both answers stand on the one host that gives them, so both owe their reviews beside them, each carrying the fingerprint the graph asks for its item; a checklist acknowledgement never comes from an exclusion ledger.
  *
  *  1. Require reviews on a checklist and answer one item by citation and one by exclusion on one host.
- *  2. Write both with the fingerprints the graph asks for and assert the claim passes.
- *  3. Move the exclusion onto an unselected ledger carrier and assert it owes, then accepts, its own review there.
- *  4. Write that review on a host the exclusion discharges instead and assert the carrier is still unreviewed.
+ *  2. Assert each tag is reported unreviewed and the graph names a fingerprint for its item.
+ *  3. Write both reviews with the fingerprints the graph asks for and assert the claim passes.
  */
 func TestChecklistDemandsAReviewOfAnExclusionToo(t *testing.T) {
   config := `{"claims":[{
@@ -462,12 +461,12 @@ export var price: number = 1, live: number = 2;
 }
 
 /**
- * Verifies a tag that speaks for no selected host is reported rather than left inert.
+ * Verifies a tag that speaks for no selected host and discharges nothing is reported.
  *
- * Under a checklist every acknowledgement is one host's answer, so a tag on a declaration the claim's `symbol` does not select answers nothing. Spreading it across the claim instead was tried and withdrawn: that reach requires reading "no selected host" as "no host owes this", and two ordinary Markdown shapes satisfy it by accident, so one tag discharged every item for every host and reported nothing.
+ * Under a checklist every acknowledgement is one host's answer, so a tag on a declaration the claim's `symbol` does not select answers nothing there. Spreading it across the claim instead was tried and withdrawn: that reach requires reading "no selected host" as "no host owes this", and two ordinary Markdown shapes satisfy it by accident, so one tag discharged every item for every host and reported nothing. The report is deferred rather than eager, so this case pins the arm where no sibling obligation consumes the tag and the report must still fire.
  *
- *  1. Select functions as hosts and put an exclusion on an exported interface.
- *  2. Assert the tag is reported where it sits.
+ *  1. Select functions as hosts and put an exclusion on an exported interface, with no other obligation to consume it.
+ *  2. Assert the tag is reported with the obligation that recorded it and its target.
  *  3. Assert the hosts still owe every item, so nothing was discharged by it.
  */
 func TestChecklistReportsATagThatAnswersForNoHost(t *testing.T) {
@@ -482,8 +481,9 @@ export interface ILedger {
 export function first(): void {}
 `,
   }, checklistConfig)
-  assertProblemContains(t, messages, "Unhosted @evidenceExclude for 'docs/rules.md#no-whack-a-mole' at src/ledger.ts:1")
-  assertProblemContains(t, messages, "every acknowledgement answers for one selected typescript host, and this declaration sits on none")
+  assertProblemContains(t, messages, "Unhosted @evidenceExclude at src/ledger.ts:1 for Claim 1 reference 1 (markdown, symbols: h2), target 'docs/rules.md#no-whack-a-mole'")
+  assertProblemContains(t, messages, "sits on no selected host and discharges no other obligation")
+  assertProblemContains(t, messages, "Move the tag onto a host of a selected kind (function) in a claim that owes it")
   assertProblemContains(t, messages, "TypeScript function 'first'")
   assertProblemContains(t, messages, "has not acknowledged 1 of 2 checklist item(s): 'docs/rules.md#no-whack-a-mole'")
 }
