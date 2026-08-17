@@ -76,4 +76,61 @@ export interface ITtscEvidenceGraphMarkdownReference extends ITtscEvidenceGraphR
    * @default ["file", "h1", "h2", "h3", "h4"]
    */
   symbol?: TtscEvidenceGraphMarkdownSymbol | TtscEvidenceGraphMarkdownSymbol[];
+
+  /**
+   * Whether this document is a checklist every selected claim host answers item
+   * by item.
+   *
+   * Ordinary coverage asks its question once for the whole claim: has some
+   * declaration, anywhere, acknowledged this unit. One host citing the document
+   * therefore discharges it on behalf of every other host, which is right for a
+   * requirement a single module implements and wrong for a document meant to be
+   * read down a column — development principles, review rules, a release gate.
+   * Set this where the question is whether _each_ host answered _each_ item.
+   *
+   * The denominator is the claim's complete selected host population, so a host
+   * carrying no tag owes every item rather than being absent from the count.
+   * Either tag answers an item: `@evidenceExclude` is how a host records that
+   * an item does not apply to it, and pairing this with `noEvidenceExclude`
+   * refuses that answer and demands positive evidence from every host.
+   *
+   * Two consequences follow and both are deliberate.
+   *
+   * A positive citation answers the item it names and nothing beneath it, and a
+   * target naming no item at all is refused as an aggregate. Both halves are
+   * needed. Under the default selector the document itself is an item, so
+   * refusing only the unnamed scope would let one `@evidence docs/rules.md`
+   * cascade through every heading and tick every box, which is the state this
+   * option exists to end. `@evidenceExclude` keeps the cascade, because "none
+   * of this applies here" is one reviewed decision however many items it
+   * covers, and a host that does not participate at all should not owe one tag
+   * per item to say so.
+   *
+   * Duplicate and conflict detection moves to the host. Two hosts excluding one
+   * item, and one host citing an item another host excludes, are the expected
+   * state of a checklist rather than a duplicate and a contradiction.
+   *
+   * Every acknowledgement is one host's answer, so a tag standing on no
+   * selected host of this claim answers nothing and is reported where it sits.
+   * That covers a declaration whose kind the claim does not select and one
+   * whose position materialized no unit at all. `evidenceExcludeCarriers` is
+   * refused beside this option for the same reason: gathering exclusions into
+   * another file leaves every host outside it unable to record that an item
+   * does not apply. Declaring `noEvidenceExclude` here lifts that refusal,
+   * since a reference accepting no exclusion has none to gather.
+   *
+   * `uniqueEvidence` and `singleEvidencePerSymbol` are refused alongside this
+   * one, at configuration time rather than as coverage failures. They are not
+   * merely redundant here: a checklist requires every host to cite every unit,
+   * which the first forbids the moment a claim has two hosts and the second
+   * forbids the moment the population has two units.
+   *
+   * Pair it with `requireReview` to get the property a checklist is usually
+   * wanted for. Each host's acknowledgement then carries the fingerprint of
+   * that item alone, so editing one item expires every host's answer to it and
+   * nothing else.
+   *
+   * @default false
+   */
+  checklist?: boolean;
 }

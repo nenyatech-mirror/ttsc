@@ -112,6 +112,31 @@ type referencePolicy struct {
   // an `@evidenceReview` whose fingerprint matches the cited scope's current
   // content, so a review expires when the thing it reviewed moves.
   RequireReview bool
+  // Checklist moves the obligation from the reference to each selected claim
+  // host: every host answers every unit, rather than the population being
+  // discharged once by whichever host got there first.
+  //
+  // It is not a peer of the cardinality options even though it decodes beside
+  // them. Those tighten a count inside the existing per-reference obligation;
+  // this one gives the obligation a host dimension, which is why the duplicate
+  // and conflict keys below it become per host and why `UniqueEvidence` and
+  // `SingleEvidencePerSymbol` are refused alongside it rather than composed
+  // with it.
+  //
+  // It also takes the subtree away from a positive citation. A citation answers
+  // the item it names and nothing beneath it, and a target naming no item at all
+  // is refused outright as an aggregate.
+  //
+  // Both halves are needed, and only measuring shows why. Refusing the
+  // unselected ancestor alone left the default Markdown selector, where the file
+  // is itself an item, discharging every heading from one `@evidence
+  // docs/rules.md` — the option was a no-op in the first configuration an
+  // adopter writes, silently. Any selector admitting an ancestor beside a
+  // descendant opens the same hole.
+  //
+  // `@evidenceExclude` keeps the cascade, because "none of this applies here" is
+  // one decision however many items it covers.
+  Checklist bool
 }
 
 // evidenceReview is one verification statement bound to its host and target.
