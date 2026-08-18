@@ -148,15 +148,10 @@ type referencePolicy struct {
 // its review spell one address, and resolving twice would let a review answer a
 // scope its citation does not name.
 type evidenceReview struct {
-  // HostID is the source-position identity, kept only so a carrier with no
-  // semantic identity can still be matched. It must not be the primary key: a
-  // merged identity's halves sit at different positions and therefore carry
-  // different HostIDs, so matching on it alone refuses a review written on
-  // `namespace I` for a citation on `interface I` — placement the graph
-  // elsewhere calls not worth a diagnostic, and which `evidence/review` accepts.
-  HostID string
-  // SemanticHostIDs are the selected graph identities this review is written on,
-  // which is what a citation is matched by.
+  // SemanticHostIDs are the ledger keys this review is written on. They are
+  // normally selected graph identities; an unattached Prisma review uses its
+  // synthetic file identity so the declaration-side position fallback can meet
+  // it. A citation is matched by these keys.
   SemanticHostIDs []string
   // Reviews names which acknowledgement this review answers for. It is part of
   // the match, never inferred: verifying a citation and verifying an exclusion
@@ -300,8 +295,9 @@ type evidenceDeclaration struct {
   ID     string
   HostID string
   // SemanticHostIDs names the selected graph identities that physically host
-  // this declaration. HostID remains the source-position identity used only
-  // for same-block duplicate detection; policy cardinality must not confuse a
+  // this declaration. HostID remains the source-position identity used for
+  // same-block duplicate detection and as the review lookup fallback for a
+  // valid carrier with no semantic host. Policy cardinality must not confuse a
   // declaration position with the public symbol identity it represents.
   SemanticHostIDs []string
   Type            artifactKind
