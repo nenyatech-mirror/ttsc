@@ -496,6 +496,30 @@ Editing a setting expires every review on it, so a revision leaves no stale scen
 
 Napoleon runs on 25 principles, 350 setting commitments, and 742 scenes, and the same graph fits historical fiction, fantasy, science fiction, mystery, and drama alike.
 
+## Checklist documents
+
+The three graphs above ask coverage the same way: has some declaration, anywhere, cited this unit. A [`checklist`](/docs/evidence/claims#checklist-documents) reference asks whether each host answered each item, which is the shape a rules document needs.
+
+```ts
+{
+  name: "specifications answer every review rule",
+  type: "markdown",
+  root: "docs",
+  files: ["features/**/*.md"],
+  symbol: "file",
+  reference: {
+    type: "markdown",
+    root: "docs",
+    files: ["rules/review.md"],
+    symbol: "h2",
+    checklist: true,
+    requireReview: true,
+  },
+}
+```
+
+Every feature specification owes every rule, so the denominator is documents times rules rather than rules alone, and a document carrying no tag owes the whole list. `@evidenceExclude` is how one document records that a rule does not apply to it, and `requireReview` makes each answer expire when the rule it answers is edited rather than when any other one moves.
+
 ## Next
 
 → [Adoption](/docs/evidence/adoption) for how to reach a graph like these from an existing codebase, one claim at a time, or [Claims and References](/docs/evidence/claims) for every option these examples use.

@@ -176,6 +176,7 @@ Carrier eligibility is wider than ownership evidence and no wider than the claim
 - A TypeScript exclusion may sit on any supported public export in a claim file, even when that export's symbol kind is not selected by the claim. Unexported declarations, unsupported locations, and files outside the population do not qualify.
 - A Prisma exclusion may sit on a selected model or field, or in an unattached top-level `///` run in a matching claim file. That permits a lint-only `.schema` ledger outside the Prisma generation glob, which adds no model to the schema. The same unattached position never accepts `@evidence`, because ownership evidence belongs directly above the declaration that carries it.
 - A Markdown exclusion keeps the selected-symbol behavior of ownership evidence: it sits on a host kind the claim selects. Swagger hosts neither tag, because it never makes a claim in the first place.
+- Under a [`checklist`](/docs/evidence/claims#checklist-documents) reference that width stops paying. Every acknowledgement there is one host's own answer, so an exclusion on an eligible carrier that is not a selected host answers no item and is reported where it sits once no other obligation consumes it. `evidenceExcludeCarriers` is refused beside the option for the same reason.
 
 `evidenceExcludeCarriers` on the claim narrows this further to named ledger files. The benchmark template uses one per claim, so a reviewer opens `CONTROLLER_EVIDENCE_EXCLUDE.ts` instead of reading every controller:
 
