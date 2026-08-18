@@ -99,14 +99,46 @@ export interface TtscCachedProjectTransform {
    */
   externalInputPaths?: string[];
   /**
+   * Metadata signature of each out-of-walk input, captured around the read that
+   * proved its {@link externalInputHashes} entry. An input whose signature still
+   * holds carries the recorded content, so revalidation may skip the read.
+   *
+   * Keyed by lexical spelling rather than by physical identity, for the reason
+   * {@link TtscHostInputValidation} states: a symlink or junction spelling and
+   * its selected target deliberately share one identity but have different
+   * metadata, so an identity key would let the two overwrite each other's
+   * signature and force both to be re-read on every delivery.
+   */
+  externalInputSignatures?: Record<string, string>;
+  /**
    * SHA-256 hash of each project-relative input path at the time of the
    * transform.
    */
   inputHashes: Record<string, string>;
+  /**
+   * Metadata signature of each {@link inputHashes} entry whose hash was proven
+   * against an unracing read of the file on disk.
+   *
+   * The generation's own current file is absent at capture: its recorded hash
+   * comes from the bundler's in-memory source, so the walk that produced it
+   * compared nothing. A later delivery of a sibling does compare that file's
+   * disk bytes against the recorded hash, and may record a signature then.
+   */
+  inputSignatures?: Record<string, string>;
   /** Metadata snapshot of every directory in the stable generation walk. */
   projectDirectories?: TtscProjectDirectorySnapshot[];
   /** Live notification state for universal host-input changes. */
   hostInputMutationTracker?: TtscProjectMutationTracker;
+  /**
+   * Universal descriptor/config inputs proven once at generation time, then by
+   * metadata.
+   *
+   * Recorded state of the generation, like the input hashes and the directory
+   * snapshot beside it, rather than state derived from the envelope: an entry
+   * carries the manifest that proved it, so nothing can present one
+   * generation's recorded inputs under another envelope's proof.
+   */
+  hostInputValidation?: TtscHostInputValidation;
   /** Live notification state for file/directory creation, deletion, and rename. */
   projectMutationTracker?: TtscProjectMutationTracker;
   /**
@@ -167,6 +199,25 @@ export interface TtscTransformFilesystemOperations {
   statBigInt(location: string): fs.BigIntStats;
   /** Override path parsing when the observed filesystem is not the host. */
   platform?: NodeJS.Platform;
+  /**
+   * Open one directory's change notification, or throw when the observed
+   * filesystem cannot provide one.
+   *
+   * Left undefined, generations watch the host filesystem: `fs.watch` on POSIX
+   * and an isolated broker process on Windows. An embedder observing another
+   * filesystem supplies its own; a generation whose watch cannot be opened
+   * keeps validating from recorded state instead of losing its cache.
+   *
+   * Supplying one replaces the Windows broker as well, so an embedder that
+   * wraps Node's own `fs.watch` there gives up the isolation that contains the
+   * native abort Node's Windows fs-event backend can raise when a watched
+   * temporary tree is deleted.
+   */
+  watch?(
+    directory: string,
+    listener: (eventType: string, filename: string | null) => void,
+    onError: () => void,
+  ): { close: () => void };
 }
 
 const DEFAULT_FILESYSTEM_OPERATIONS: TtscTransformFilesystemOperations =
@@ -234,6 +285,7 @@ export function createTtscTransformCache(
     statBigInt:
       operations.statBigInt ?? DEFAULT_FILESYSTEM_OPERATIONS.statBigInt,
     platform: operations.platform,
+    watch: operations.watch,
   });
   return cache;
 }
@@ -586,8 +638,6 @@ interface TtscEnvelopeDerivation {
    * files, `undefined` until the first completeness predicate.
    */
   dependenciesComplete?: Set<string>;
-  /** Universal inputs validated once at generation time and then by metadata. */
-  hostInputValidation?: TtscHostInputValidation;
   /**
    * Lazily built identity -> output source index of the `typescript` map (first
    * match wins, mirroring the historical scan). `undefined` until the first
@@ -609,13 +659,32 @@ interface TtscHostInputValidation {
     string,
     {
       path: string;
+      /**
+       * Whether the recorded state of this input came from reading its bytes.
+       * An input that existed but could not be read records a missing state, so
+       * no signature may stand in for it: its metadata holds still while the
+       * bytes behind it appear.
+       */
+      readable: boolean;
       realpath: string | null;
-      signature: string;
+      /**
+       * The signature that may stand in for this entry's content comparison, or
+       * `undefined` when none may. A blocker keeps one regardless: it proves a
+       * kind and an identity rather than content.
+       */
+      signature: string | undefined;
       strict?: true;
     }
   >;
-  /** Identities omitted from the per-module dependency loop below. */
-  readonly identities: Set<string>;
+  /**
+   * Lexical spellings the manifest accounts for, omitted from the per-module
+   * dependency loop below.
+   *
+   * Spellings, not identities: a symlink and its target share one identity but
+   * are two inputs, and skipping the alias because the manifest proved the
+   * target would leave the alias's own retarget unvalidated.
+   */
+  readonly covered: Set<string>;
   /**
    * Missing paths grouped by the nearest directory whose listing proves them
    * absent.
@@ -1360,7 +1429,13 @@ function matchesCachedSource(
     cached.projectMutationTracker !== undefined &&
     cached.hostInputMutationTracker !== undefined
   ) {
-    return matchesNarrowPersistentInputs(cached, file);
+    const narrow = matchesNarrowPersistentInputs(cached, file);
+    if (narrow !== undefined) {
+      return narrow;
+    }
+    // Notifications stopped proving membership after this generation was
+    // produced. Losing the proof is not evidence of a change, so fall through
+    // to the snapshot the entry still carries.
   }
   return matchesCompleteInputSnapshot(cached, currentKey, source);
 }
@@ -1370,28 +1445,30 @@ function matchesCachedSource(
  * affect that file. Project membership is validated once per event-loop turn,
  * so sibling module deliveries share one directory-metadata pass instead of
  * multiplying it by module count.
+ *
+ * Returns `undefined` when this narrow proof is unavailable — live
+ * notifications can no longer prove membership, or the generation carries no
+ * universal-input manifest. That is the absence of a proof, not evidence of a
+ * change, so the caller falls back to complete-snapshot validation instead of
+ * discarding the generation. A reported membership event, a changed universal
+ * input, or a changed derived input is evidence, and returns `false`.
  */
 function matchesNarrowPersistentInputs(
   cached: TtscCachedProjectTransform,
   file: string,
-): boolean {
-  if (!matchesProjectMembership(cached)) {
+): boolean | undefined {
+  if (reportsMembershipChange(cached)) {
     return false;
   }
-  const hostTracker = cached.hostInputMutationTracker;
-  if (
-    hostTracker === undefined ||
-    hostTracker.failed ||
-    hostTracker.membershipChanged
-  ) {
-    return false;
+  if (!notificationsProveMembership(cached)) {
+    return undefined;
   }
   const state = envelopeDerivation(cached);
-  const hostValidation = state.hostInputValidation;
-  if (
-    hostValidation === undefined ||
-    !matchesUniversalHostInputs(cached, hostValidation)
-  ) {
+  const hostValidation = cached.hostInputValidation;
+  if (hostValidation === undefined) {
+    return undefined;
+  }
+  if (!matchesUniversalHostInputs(cached, hostValidation)) {
     return false;
   }
   const inputs = selectWatchInputs({
@@ -1401,14 +1478,113 @@ function matchesNarrowPersistentInputs(
     temporaryTsconfig: cached.temporaryTsconfig,
   });
   for (const input of inputs) {
-    if (hostValidation.identities.has(derivationIdentity(state, input))) {
+    // Skip by spelling, not identity: the manifest proved this exact path, and
+    // an alias of the same physical file is a different input whose own
+    // retarget nothing else would see.
+    if (hostValidation.covered.has(path.resolve(input))) {
       continue;
     }
-    if (!matchesRecordedInput(cached, input)) {
+    if (!matchesProvenInput(cached, state, input)) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Validate one derived input against the generation, skipping the content read
+ * while the recorded metadata signature still holds.
+ *
+ * Sibling deliveries of one generation share most of their derived inputs, and
+ * `graph.globals` is shared by every one of them, so re-reading and re-hashing
+ * the whole derived set per delivery multiplies one generation's proven bytes
+ * by the module count. The derived set is proven the same way the universal
+ * descriptor inputs are ({@link matchesUniversalHostInputs}), under the same
+ * rules: an unchanged signature stands in for the content comparison, and any
+ * signature change falls back to the full comparison. A signature is recorded
+ * only around a read nothing raced, and only for a recorded state that came
+ * from reading the input rather than from failing to.
+ *
+ * The signature carries the physical identity of both the lexical path and its
+ * link target ({@link inputMetadataSignature}), so retargeting a symlink or
+ * junction moves it and the skipped realpath comparison cannot be evaded.
+ */
+function matchesProvenInput(
+  cached: TtscCachedProjectTransform,
+  state: TtscEnvelopeDerivation,
+  input: string,
+): boolean {
+  const slot = inputSignatureSlot(cached, state, input);
+  if (slot === undefined) {
+    return matchesRecordedInput(cached, input);
+  }
+  const filesystem = resultFilesystem(cached.result);
+  const before = inputMetadataSignature(input, filesystem);
+  if (before !== undefined && slot.signatures[slot.key] === before) {
+    return true;
+  }
+  if (!matchesRecordedInput(cached, input)) {
+    return false;
+  }
+  // A recorded `missing` state is the one comparison that succeeds without
+  // reading anything: an unreadable path still reports `missing`, so its
+  // metadata can hold still while the bytes behind it appear. Only content a
+  // read produced may be stood for.
+  const after =
+    slot.recorded === MISSING_INPUT_STATE
+      ? undefined
+      : inputMetadataSignature(input, filesystem);
+  if (after !== undefined && before === after) {
+    slot.signatures[slot.key] = after;
+  } else {
+    delete slot.signatures[slot.key];
+  }
+  return true;
+}
+
+/**
+ * Locate the signature manifest that owns one recorded input, mirroring
+ * {@link matchesRecordedInput}'s own preference for the out-of-walk spelling's
+ * snapshot over the walked project's.
+ *
+ * The manifest is returned whether or not it currently holds a signature for
+ * the input, so a content comparison that succeeds can record one. Without
+ * that, an input whose capture-time metadata was too recent to prove anything
+ * would keep its content read for the whole life of the generation, since
+ * nothing else ever revisits it. Returns `undefined` only for an input the
+ * generation recorded no hash for, which no signature could stand for.
+ */
+function inputSignatureSlot(
+  cached: TtscCachedProjectTransform,
+  state: TtscEnvelopeDerivation,
+  input: string,
+):
+  | { key: string; recorded: string; signatures: Record<string, string> }
+  | undefined {
+  const identity = derivationIdentity(state, input);
+  const external = cached.externalInputHashes ?? {};
+  if (Object.prototype.hasOwnProperty.call(external, identity)) {
+    // The recorded hash is identity-keyed because aliases of one physical file
+    // share its content; the signature is spelling-keyed because they do not
+    // share its metadata.
+    return {
+      key: path.resolve(input),
+      recorded: external[identity]!,
+      signatures: (cached.externalInputSignatures ??= {}),
+    };
+  }
+  const projectKey = toProjectKey(
+    cached.projectRoot,
+    input,
+    state.identityContext,
+  );
+  return Object.prototype.hasOwnProperty.call(cached.inputHashes, projectKey)
+    ? {
+        key: projectKey,
+        recorded: cached.inputHashes[projectKey]!,
+        signatures: (cached.inputSignatures ??= {}),
+      }
+    : undefined;
 }
 
 /**
@@ -1421,10 +1597,30 @@ function matchesUniversalHostInputs(
   cached: TtscCachedProjectTransform,
   validation: TtscHostInputValidation,
 ): boolean {
+  return (
+    matchesUniversalHostInputEntries(cached, validation) &&
+    matchesUniversalHostInputProbes(cached, validation)
+  );
+}
+
+/**
+ * Validate the universal inputs that exist, by metadata first and content only
+ * when that moved.
+ *
+ * Every rejection here is evidence of a change — a vanished path, a moved
+ * physical target, a strict blocker's metadata, differing content — so this
+ * half is safe for a validation path that must never discard a generation for
+ * want of a proof.
+ */
+function matchesUniversalHostInputEntries(
+  cached: TtscCachedProjectTransform,
+  validation: TtscHostInputValidation,
+): boolean {
   const filesystem = resultFilesystem(cached.result);
   for (const entry of validation.entries.values()) {
     const signature = inputMetadataSignature(entry.path, filesystem);
-    if (signature === entry.signature) continue;
+    if (entry.signature !== undefined && signature === entry.signature)
+      continue;
     if (entry.strict === true) return false;
     if (hostInputRealpath(entry.path, filesystem) !== entry.realpath)
       return false;
@@ -1432,8 +1628,32 @@ function matchesUniversalHostInputs(
       return false;
     }
     if (signature === undefined) return false;
-    entry.signature = signature;
+    // Re-earn the proof under the rules the capture applies: an entry whose
+    // recorded state came from reading nothing keeps its content comparison,
+    // and a write racing the read that just proved it records nothing.
+    const after = inputMetadataSignature(entry.path, filesystem);
+    entry.signature =
+      entry.readable && after === signature ? signature : undefined;
   }
+  return true;
+}
+
+/**
+ * Prove the universal inputs that were absent are still absent, through one
+ * exact listing of the nearest directory that can settle it.
+ *
+ * Unlike the entries half, this one rejects on an inability to prove: a
+ * directory that exists but cannot be listed certifies nothing about the
+ * candidates inside it. That is the right answer for the narrow path, which has
+ * no stronger proof to fall back to, but not for the whole-snapshot path, where
+ * the recorded `missing` markers are re-compared directly and losing a proof
+ * must not cost the cache.
+ */
+function matchesUniversalHostInputProbes(
+  cached: TtscCachedProjectTransform,
+  validation: TtscHostInputValidation,
+): boolean {
+  const filesystem = resultFilesystem(cached.result);
   for (const [directory, names] of validation.missing) {
     let entries: fs.Dirent[];
     try {
@@ -1479,7 +1699,7 @@ function captureUniversalHostInputValidation(
   const state = envelopeDerivation(cached);
   const validation: TtscHostInputValidation = {
     entries: new Map(),
-    identities: new Set(),
+    covered: new Set(),
     missing: new Map(),
   };
   for (const input of selectPersistentHostInputs({
@@ -1500,14 +1720,24 @@ function captureUniversalHostInputValidation(
     // Every persistent universal input must carry an evaluation-time
     // fingerprint. If a plugin/native host cannot provide one, keep the fresh
     // result but decline narrow long-lived reuse.
+    let readable = false;
     if (expected === undefined) {
       const current = path.resolve(currentFile);
       if (path.resolve(input) !== current) return undefined;
       // The current module may be supplied from an unsaved editor buffer. Its
       // generation snapshot is overlaid below from `currentSource`, so a disk
-      // fingerprint would be both unavailable and the wrong authority.
-    } else if (expected !== hostInputStateHash(input, filesystem)) {
-      return undefined;
+      // fingerprint would be both unavailable and the wrong authority. The
+      // recorded state is the bundler's, so a signature of the disk cannot
+      // stand for it however readable that disk is.
+    } else {
+      const current = hostInputStateHash(input, filesystem);
+      if (expected !== current) {
+        return undefined;
+      }
+      // A path both sides agree they could not read carries no bytes for a
+      // signature to stand for. It still belongs in the manifest, so the
+      // content comparison keeps running for it on every delivery.
+      readable = current !== null;
     }
     const absoluteInput = path.resolve(input);
     if (generationRealpaths !== undefined) {
@@ -1525,8 +1755,7 @@ function captureUniversalHostInputValidation(
         return undefined;
       }
     }
-    const identity = derivationIdentity(state, input);
-    validation.identities.add(identity);
+    validation.covered.add(path.resolve(input));
     const before = inputMetadataSignature(input, filesystem);
     if (!matchesRecordedInput(cached, input)) return undefined;
     const after = inputMetadataSignature(input, filesystem);
@@ -1537,25 +1766,32 @@ function captureUniversalHostInputValidation(
       // but both lexical paths must survive so retargeting the alias is visible.
       validation.entries.set(path.resolve(input), {
         path: input,
+        readable,
         realpath: hostInputRealpath(input, filesystem),
-        signature: after,
+        signature: readable ? after : undefined,
       });
       continue;
     }
     const probe = missingPathProbe(input, filesystem);
     if (probe.blocker !== undefined) {
-      const blockerIdentity = derivationIdentity(state, probe.blocker);
       const signature = inputMetadataSignature(probe.blocker, filesystem);
       if (signature === undefined) return undefined;
-      validation.identities.add(blockerIdentity);
+      // A blocker proves a kind and an identity, not content: it is the
+      // non-directory ancestor that makes everything below it unreachable, and
+      // it cannot stop being that without its metadata moving. So it keeps a
+      // usable signature whether or not anything read it.
+      validation.covered.add(path.resolve(probe.blocker));
       validation.entries.set(path.resolve(probe.blocker), {
         path: probe.blocker,
+        readable: true,
         realpath: hostInputRealpath(probe.blocker, filesystem),
         signature,
         strict: true,
       });
       continue;
     }
+    // The probe below proves this exact spelling absent, so the per-module loop
+    // need not re-derive it either.
     let names = validation.missing.get(probe.directory);
     if (names === undefined) {
       names = new Set<string>();
@@ -1568,9 +1804,21 @@ function captureUniversalHostInputValidation(
       ),
     );
   }
-  state.hostInputValidation = validation;
+  cached.hostInputValidation = validation;
   return validation;
 }
+
+/**
+ * The recorded state of an input the generation read nothing from: absent, or
+ * present but unreadable. It is deliberately not a hash, so no signature may
+ * stand in for it: the metadata of an unreadable path holds still while the
+ * bytes behind it appear.
+ *
+ * A directory is not this state. It records the hash of a marker instead, which
+ * a signature may stand for, because the mode both halves of the signature
+ * carry cannot change without the path ceasing to be that directory.
+ */
+const MISSING_INPUT_STATE = "missing";
 
 /** Metadata identity whose stability lets a generation reuse a content hash. */
 function inputMetadataSignature(
@@ -1732,21 +1980,59 @@ function missingPathProbe(
   }
 }
 
-/** Fall back to the historical whole-envelope validation without a graph. */
+/**
+ * Prove one generation from its own recorded snapshot, with no help from live
+ * notifications.
+ *
+ * This is the fallback for a graph-free envelope and for a generation whose
+ * watchers could not be opened or have since failed: losing the notification
+ * proof must cost the narrow path, not the cache. The walk re-proves membership
+ * directly — the recorded directory signatures plus the recorded file-key
+ * universe — so a created, deleted, or renamed input still invalidates without
+ * any watcher.
+ */
 function matchesCompleteInputSnapshot(
   cached: TtscCachedProjectTransform,
   currentKey: string,
   source: string,
 ): boolean {
-  if (cached.projectSnapshotComplete !== true) {
+  if (
+    cached.projectSnapshotComplete !== true ||
+    cached.projectDirectories === undefined
+  ) {
+    return false;
+  }
+  // Universal descriptor/config inputs carry a physical-identity proof that no
+  // content comparison can replace: retargeting a symlinked input to a
+  // byte-identical file selects a different file, and its own transitive
+  // requires with it. Only the graph half of the out-of-walk snapshot records
+  // realpaths, so without this the fallback would quietly hold a lower standard
+  // than the narrow path it stands in for.
+  const state = envelopeDerivation(cached);
+  const hostValidation = cached.hostInputValidation;
+  if (
+    hostValidation === undefined ||
+    !matchesUniversalHostInputEntries(cached, hostValidation)
+  ) {
     return false;
   }
   const current = collectProjectInputSnapshot(
     cached.projectRoot,
-    envelopeDerivation(cached).identityContext,
+    state.identityContext,
     resultFilesystem(cached.result),
+    cached.inputSignatures === undefined
+      ? undefined
+      : { hashes: cached.inputHashes, signatures: cached.inputSignatures },
   );
   if (!current.complete) {
+    return false;
+  }
+  if (
+    !sameProjectDirectories(
+      cached.projectDirectories,
+      current.projectDirectories,
+    )
+  ) {
     return false;
   }
   current.hashes[currentKey] = hashText(source);
@@ -1761,11 +2047,49 @@ function matchesCompleteInputSnapshot(
   // edge requires editing an in-walk source, and a new global or config file
   // requires a tsconfig or package manifest change, both of which the project
   // walk above already detects.
-  const externalHashes = cached.externalInputHashes ?? {};
-  return (
-    sameHashes(externalHashes, collectCachedExternalInputHashes(cached)) &&
-    matchesExternalInputRealpaths(cached)
-  );
+  const externalCurrent = matchesCachedExternalInputs(cached);
+  if (!externalCurrent.matches || !matchesExternalInputRealpaths(cached)) {
+    return false;
+  }
+  adoptProvenSignatures(cached, {
+    currentKey,
+    external: externalCurrent.signatures,
+    project: current.fileSignatures,
+  });
+  return true;
+}
+
+/**
+ * Adopt the signatures captured while this walk proved every recorded input
+ * still carries its recorded content.
+ *
+ * Without this, a metadata-only change — a touch, or a rewrite of identical
+ * bytes — costs a re-read on every later delivery for the rest of the
+ * generation's life, because the recorded signature can never match again. The
+ * narrow path self-heals through {@link matchesProvenInput}; this is the same
+ * refresh for the path that proves the whole snapshot at once.
+ *
+ * The delivered file is the single exclusion: its recorded hash is the source
+ * the bundler supplied, so the disk bytes this walk read for it were compared
+ * against nothing.
+ */
+function adoptProvenSignatures(
+  cached: TtscCachedProjectTransform,
+  proven: {
+    currentKey: string;
+    external: Record<string, string>;
+    project: Record<string, string>;
+  },
+): void {
+  const projectSignatures = (cached.inputSignatures ??= {});
+  for (const [key, signature] of Object.entries(proven.project)) {
+    if (key === proven.currentKey) continue;
+    projectSignatures[key] = signature;
+  }
+  const externalSignatures = (cached.externalInputSignatures ??= {});
+  for (const [spelling, signature] of Object.entries(proven.external)) {
+    externalSignatures[spelling] = signature;
+  }
 }
 
 /** Re-check graph-owned physical identities in complete-snapshot fallback. */
@@ -1806,13 +2130,27 @@ function captureExternalInputSnapshot(
   complete: boolean;
   hashes: Record<string, string>;
   realpaths: Record<string, string | null>;
+  signatures: Record<string, string>;
 } {
   const state = envelopeDerivation(cached);
   const filesystem = resultFilesystem(cached.result);
   const graph = envelopeGraphIndexes(state, cached);
   const hashes: Record<string, string> = {};
   const realpaths: Record<string, string | null> = {};
+  const signatures: Record<string, string> = {};
   let complete = true;
+  // Sandwich every read between two metadata signatures. Only a signature that
+  // survived its own read may stand in for the content comparison; a write
+  // racing the capture leaves the input without one, so revalidation keeps
+  // re-reading it.
+  const record = (
+    input: string,
+    before: string | undefined,
+    after: string | undefined,
+  ): void => {
+    if (after !== undefined && before === after)
+      signatures[path.resolve(input)] = after;
+  };
   for (const input of paths) {
     const identity = derivationIdentity(state, input);
     if (graph.members.has(identity)) {
@@ -1821,7 +2159,9 @@ function captureExternalInputSnapshot(
         complete = false;
         continue;
       }
+      const before = inputMetadataSignature(input, filesystem);
       const currentHash = graphInputStateHash(input, filesystem);
+      const after = inputMetadataSignature(input, filesystem);
       if (
         currentHash !== proof.hash ||
         !sameHostInputRealpath(
@@ -1831,14 +2171,24 @@ function captureExternalInputSnapshot(
         )
       ) {
         complete = false;
+      } else if (currentHash !== null) {
+        // The recorded hash is the compiler's own proof, so a signature may
+        // only stand for it once the current bytes were shown to match it.
+        // A path with no readable content has no bytes to stand for: it can
+        // hold stable metadata while becoming readable, so it keeps the read.
+        record(input, before, after);
       }
-      hashes[identity] = proof.hash ?? "missing";
+      hashes[identity] = proof.hash ?? MISSING_INPUT_STATE;
       realpaths[identity] = proof.realpath;
       continue;
     }
-    hashes[identity] = hostInputStateHash(input, filesystem) ?? "missing";
+    const before = inputMetadataSignature(input, filesystem);
+    const hash = hostInputStateHash(input, filesystem);
+    const after = inputMetadataSignature(input, filesystem);
+    hashes[identity] = hash ?? MISSING_INPUT_STATE;
+    if (hash !== null) record(input, before, after);
   }
-  return { complete, hashes, realpaths };
+  return { complete, hashes, realpaths, signatures };
 }
 
 /** Verify every graph member still has the state read by the compiler. */
@@ -1928,9 +2278,9 @@ function matchesRecordedInput(
     const current = graphInput
       ? graphInputStateHash(input, filesystem)
       : hostInputStateHash(input, filesystem);
-    return recorded === (current ?? "missing");
+    return recorded === (current ?? MISSING_INPUT_STATE);
   } catch {
-    return recorded === "missing";
+    return recorded === MISSING_INPUT_STATE;
   }
 }
 
@@ -1964,6 +2314,10 @@ function collectProjectInputSnapshot(
   projectRoot: string,
   identities: FilesystemPathIdentityContext,
   filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+  proven?: {
+    hashes: Record<string, string>;
+    signatures: Record<string, string>;
+  },
 ): {
   complete: boolean;
   fileSignatures: Record<string, string>;
@@ -1977,9 +2331,22 @@ function collectProjectInputSnapshot(
   for (const file of walked.files) {
     try {
       const before = inputMetadataSignature(file, filesystem);
+      const key = toProjectKey(projectRoot, file, identities);
+      // A file whose signature still equals the one captured around the read
+      // that produced the recorded hash carries that content, so the whole
+      // project does not have to be re-read to prove one delivery.
+      if (
+        before !== undefined &&
+        proven !== undefined &&
+        proven.signatures[key] === before &&
+        Object.prototype.hasOwnProperty.call(proven.hashes, key)
+      ) {
+        hashes[key] = proven.hashes[key]!;
+        fileSignatures[key] = before;
+        continue;
+      }
       const contents = filesystem.readFile(file);
       const after = inputMetadataSignature(file, filesystem);
-      const key = toProjectKey(projectRoot, file, identities);
       hashes[key] = hashText(contents);
       if (before === undefined || after === undefined || before !== after) {
         complete = false;
@@ -2103,6 +2470,31 @@ function sameProjectDirectories(
   );
 }
 
+/**
+ * Open one directory's change notification through the cache-owned watch seam,
+ * falling back to the host's own `fs.watch`. Throws exactly where the
+ * underlying watch does, so callers classify a registration failure
+ * themselves.
+ */
+function openDirectoryWatch(
+  filesystem: TtscTransformFilesystemOperations,
+  directory: string,
+  listener: (eventType: string, filename: string | null) => void,
+  onError: () => void,
+): { close: () => void } {
+  if (filesystem.watch !== undefined) {
+    return filesystem.watch(directory, listener, onError);
+  }
+  const watcher = fs.watch(
+    directory,
+    { persistent: false },
+    (eventType, filename) =>
+      listener(eventType, filename === null ? null : String(filename)),
+  );
+  watcher.on("error", onError);
+  return { close: () => watcher.close() };
+}
+
 /** Watch every walked directory for membership changes after generation. */
 async function createProjectMutationTracker(
   directories: readonly TtscProjectDirectorySnapshot[],
@@ -2113,7 +2505,7 @@ async function createProjectMutationTracker(
     failed: false,
     membershipChanged: false,
   };
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && filesystem.watch === undefined) {
     await registerWindowsProjectMutationTracker(
       tracker,
       directories.map((directory) => ({ directory: directory.path })),
@@ -2122,24 +2514,25 @@ async function createProjectMutationTracker(
     );
     return tracker;
   }
-  const watchers: fs.FSWatcher[] = [];
+  const watchers: { close: () => void }[] = [];
   tracker.close = () => {
     for (const watcher of watchers) watcher.close();
     watchers.length = 0;
   };
   for (const directory of directories) {
     try {
-      const watcher = fs.watch(
-        directory.path,
-        { persistent: false },
-        (eventType) => {
-          if (eventType === "rename") tracker.membershipChanged = true;
-        },
+      watchers.push(
+        openDirectoryWatch(
+          filesystem,
+          directory.path,
+          (eventType) => {
+            if (eventType === "rename") tracker.membershipChanged = true;
+          },
+          () => {
+            tracker.failed = true;
+          },
+        ),
       );
-      watcher.on("error", () => {
-        tracker.failed = true;
-      });
-      watchers.push(watcher);
     } catch {
       tracker.failed = true;
     }
@@ -2187,7 +2580,7 @@ async function createHostInputMutationTracker(
     failed: false,
     membershipChanged: false,
   };
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && filesystem.watch === undefined) {
     await registerWindowsProjectMutationTracker(
       tracker,
       locations,
@@ -2196,7 +2589,7 @@ async function createHostInputMutationTracker(
     );
     return tracker;
   }
-  const watchers: fs.FSWatcher[] = [];
+  const watchers: { close: () => void }[] = [];
   tracker.close = () => {
     for (const watcher of watchers) watcher.close();
     watchers.length = 0;
@@ -2205,23 +2598,24 @@ async function createHostInputMutationTracker(
     try {
       const names = new Set(location.names);
       const caseSensitive = identities.caseSensitive(location.directory);
-      const watcher = fs.watch(
-        location.directory,
-        { persistent: false },
-        (_eventType, filename) => {
-          const reported =
-            filename === null
-              ? null
-              : normalizeHostInputName(String(filename), caseSensitive);
-          if (reported === null || names.has(reported)) {
-            tracker.membershipChanged = true;
-          }
-        },
+      watchers.push(
+        openDirectoryWatch(
+          filesystem,
+          location.directory,
+          (_eventType, filename) => {
+            const reported =
+              filename === null
+                ? null
+                : normalizeHostInputName(filename, caseSensitive);
+            if (reported === null || names.has(reported)) {
+              tracker.membershipChanged = true;
+            }
+          },
+          () => {
+            tracker.failed = true;
+          },
+        ),
       );
-      watcher.on("error", () => {
-        tracker.failed = true;
-      });
-      watchers.push(watcher);
     } catch {
       tracker.failed = true;
     }
@@ -2398,14 +2792,35 @@ const WINDOWS_WATCH_BROKER_SOURCE = [
   "}",
 ].join("\n");
 
-/** Report whether live directory notifications preserve project membership. */
-function matchesProjectMembership(cached: TtscCachedProjectTransform): boolean {
-  const tracker = cached.projectMutationTracker;
+/**
+ * Report whether either live notification observed a membership event. This is
+ * positive evidence that the generation is stale, so it outranks the question
+ * of whether the notifications still work.
+ */
+function reportsMembershipChange(cached: TtscCachedProjectTransform): boolean {
   return (
-    tracker !== undefined &&
-    tracker.failed === false &&
-    tracker.membershipChanged === false
+    cached.projectMutationTracker?.membershipChanged === true ||
+    cached.hostInputMutationTracker?.membershipChanged === true
   );
+}
+
+/**
+ * Report whether both live notifications can still prove membership. A watcher
+ * that failed to register, or that errored after the generation was produced,
+ * proves nothing either way — it never proves the generation stale.
+ */
+function notificationsProveMembership(
+  cached: TtscCachedProjectTransform,
+): boolean {
+  for (const tracker of [
+    cached.projectMutationTracker,
+    cached.hostInputMutationTracker,
+  ]) {
+    if (tracker === undefined || tracker.failed) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -2511,29 +2926,69 @@ export function collectExternalInputHashes(
     if (identity in hashes) {
       continue;
     }
-    hashes[identity] = hostInputStateHash(file, filesystem) ?? "missing";
+    hashes[identity] =
+      hostInputStateHash(file, filesystem) ?? MISSING_INPUT_STATE;
   }
   return hashes;
 }
 
-/** Re-hash a cached mixed graph/dependency input set with its owning codec. */
-function collectCachedExternalInputHashes(
-  cached: TtscCachedProjectTransform,
-): Record<string, string> {
-  const hashes: Record<string, string> = {};
+/**
+ * Re-check a cached mixed graph/dependency input set with its owning codec,
+ * reusing the recorded hash of any input whose metadata signature still holds
+ * and reporting the signatures this pass captured.
+ *
+ * The caller adopts those signatures only once every input is proven unchanged,
+ * so a signature never outlives the content comparison that justified it.
+ */
+function matchesCachedExternalInputs(cached: TtscCachedProjectTransform): {
+  matches: boolean;
+  signatures: Record<string, string>;
+} {
+  const signatures: Record<string, string> = {};
+  let matches = true;
   const state = envelopeDerivation(cached);
   const graphRealpaths = cached.externalInputRealpaths ?? {};
   const filesystem = resultFilesystem(cached.result);
+  const recordedHashes = cached.externalInputHashes ?? {};
+  const recordedSignatures = cached.externalInputSignatures ?? {};
+  // Compare each spelling against the recorded state under its own name. Two
+  // spellings share one identity exactly when they selected one physical file
+  // at generation time, which is the state a retarget ends, so neither may
+  // answer for the other: skipping the second would leave a retargeted alias
+  // unvalidated, and comparing them only through a shared key would let
+  // whichever came first decide.
   for (const file of cached.externalInputPaths ??
     Object.keys(cached.externalInputHashes ?? {})) {
     const identity = derivationIdentity(state, file);
-    if (identity in hashes) continue;
-    hashes[identity] =
-      (Object.prototype.hasOwnProperty.call(graphRealpaths, identity)
-        ? graphInputStateHash(file, filesystem)
-        : hostInputStateHash(file, filesystem)) ?? "missing";
+    const spelling = path.resolve(file);
+    // Reuse the recorded hash of an out-of-walk input whose signature still
+    // equals the one captured around the read that proved it. The signature is
+    // keyed by this exact spelling, so an alias of the same physical file
+    // cannot answer for it.
+    const before = inputMetadataSignature(file, filesystem);
+    if (
+      before !== undefined &&
+      Object.prototype.hasOwnProperty.call(recordedSignatures, spelling) &&
+      Object.prototype.hasOwnProperty.call(recordedHashes, identity) &&
+      before === recordedSignatures[spelling]
+    ) {
+      continue;
+    }
+    const hash = Object.prototype.hasOwnProperty.call(graphRealpaths, identity)
+      ? graphInputStateHash(file, filesystem)
+      : hostInputStateHash(file, filesystem);
+    const after = inputMetadataSignature(file, filesystem);
+    if (
+      !Object.prototype.hasOwnProperty.call(recordedHashes, identity) ||
+      recordedHashes[identity] !== (hash ?? MISSING_INPUT_STATE)
+    ) {
+      matches = false;
+    }
+    if (hash !== null && after !== undefined && before === after) {
+      signatures[spelling] = after;
+    }
   }
-  return hashes;
+  return { matches, signatures };
 }
 
 /**
@@ -2751,6 +3206,11 @@ async function transformProject(props: {
       identities,
       props.filesystem,
     );
+    // Whether the recorded snapshot describes one coherent state of the
+    // project. A membership event during the compile taints it exactly like an
+    // unstable walk pair; whether notifications can be *opened* is a separate
+    // fact, tracked below, because a generation with no watcher is still
+    // provable from its own recorded state.
     let stableProjectSnapshot =
       before.complete &&
       inputSnapshot.complete &&
@@ -2760,15 +3220,21 @@ async function transformProject(props: {
         before.projectDirectories,
         inputSnapshot.projectDirectories,
       ) &&
-      tracker?.failed !== true &&
       tracker?.membershipChanged !== true &&
-      hostInputTracker?.failed !== true &&
       hostInputTracker?.membershipChanged !== true;
+    const notificationsAvailable =
+      tracker?.failed !== true && hostInputTracker?.failed !== true;
     // Overlay the in-memory source only after proving the two on-disk snapshots
     // stable; an unsaved editor buffer must not look like a compile-time race.
-    inputSnapshot.hashes[
-      toProjectKey(projectRoot, props.currentFile, identities)
-    ] = hashText(props.currentSource);
+    const currentFileKey = toProjectKey(
+      projectRoot,
+      props.currentFile,
+      identities,
+    );
+    inputSnapshot.hashes[currentFileKey] = hashText(props.currentSource);
+    // That overlay makes this one key the only recorded hash a disk signature
+    // cannot stand for: the bytes it names came from the bundler, not the file.
+    delete inputSnapshot.fileSignatures[currentFileKey];
     const cached: TtscCachedProjectTransform = {
       // Capture the out-of-walk input hashes while the generation is fresh so
       // cache validation can re-check them; computed before dispose so the
@@ -2777,6 +3243,7 @@ async function transformProject(props: {
       externalInputRealpaths: {},
       externalInputPaths,
       inputHashes: inputSnapshot.hashes,
+      inputSignatures: inputSnapshot.fileSignatures,
       projectDirectories: inputSnapshot.projectDirectories,
       projectSnapshotComplete: false,
       projectRoot,
@@ -2793,6 +3260,7 @@ async function transformProject(props: {
     );
     cached.externalInputHashes = externalInputSnapshot.hashes;
     cached.externalInputRealpaths = externalInputSnapshot.realpaths;
+    cached.externalInputSignatures = externalInputSnapshot.signatures;
     stableProjectSnapshot =
       stableProjectSnapshot &&
       matchesCompilerGraphInputProofs(cached) &&
@@ -2800,16 +3268,18 @@ async function transformProject(props: {
       captureUniversalHostInputValidation(cached, props.currentFile) !==
         undefined;
     cached.projectSnapshotComplete = stableProjectSnapshot;
-    if (stableProjectSnapshot && tracker !== undefined) {
+    // Attach notifications only while they can actually prove membership. A
+    // generation that could not open its watchers keeps its recorded snapshot
+    // and validates through it, rather than losing the cache entirely.
+    const notifying = stableProjectSnapshot && notificationsAvailable;
+    if (notifying && tracker !== undefined) {
       cached.projectMutationTracker = tracker;
     }
-    if (stableProjectSnapshot && hostInputTracker !== undefined) {
+    if (notifying && hostInputTracker !== undefined) {
       cached.hostInputMutationTracker = hostInputTracker;
     }
     retainTracker =
-      stableProjectSnapshot &&
-      tracker !== undefined &&
-      hostInputTracker !== undefined;
+      notifying && tracker !== undefined && hostInputTracker !== undefined;
     return cached;
   } finally {
     try {
