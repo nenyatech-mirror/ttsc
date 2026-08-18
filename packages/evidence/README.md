@@ -106,6 +106,16 @@ One claim: the components under `src` implement the docs, so every H2 and H3 und
 
 [The rule reference](https://ttsc.dev/docs/evidence/rules) has four more rules beside `evidence/graph`, and [the claim reference](https://ttsc.dev/docs/evidence/claims) has every claim option.
 
+### Checklists
+
+Coverage asks its question once per unit: has anyone cited this. Where a document is read down a column, such as development rules or a release gate, the question is whether each file answered each item.
+
+```ts
+{ type: "markdown", files: ["docs/rules.md"], symbol: "h2", checklist: true }
+```
+
+Every selected host then owes every item, and a file carrying no tag owes the whole list.
+
 ### Tags
 
 The configuration is written once. The tags are written forever: `@evidence` cites, `@evidenceReview` verifies, and `@evidenceExclude` declines. [The tag reference](https://ttsc.dev/docs/evidence/tags) has the full grammar.
