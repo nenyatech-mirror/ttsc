@@ -222,8 +222,15 @@ func populationRootLabel(base populationBase) string {
   return base.Display
 }
 
-// unreadableBaseProblem reports a declared root that is not a readable
+// missingBaseDirectoryProblem reports a declared root that is not an existing
 // directory.
+//
+// The test is a stat, and any failure of it counts as absence — a path occupied
+// by a file, and an unreachable parent alike. The Markdown and Prisma messages
+// may still lead with "could not read", because the walk each of those callers
+// is about to run is the read the root exists to serve, and it is skipped only
+// because the root is not there. The predicate's own name may not, because the
+// third caller reads nothing and asks the same question.
 //
 // The default base is excluded because `Check` already validated the project
 // root, and its diagnostic names the ttsc project identity as the repair rather
@@ -232,7 +239,32 @@ func populationRootLabel(base populationBase) string {
 // Both spellings appear. The relative one is the property the author has to
 // edit, and the absolute one is where that property actually landed — which is
 // the whole question the moment a root ascends out of the project.
-func unreadableBaseProblem(base populationBase, kind artifactKind) string {
+//
+// TypeScript is told apart in the verb and in the repair clause. Its root
+// re-bases addressing over sources the Program already holds and never scans a
+// directory, so a message about reading one would name an access this artifact
+// kind never attempts.
+//
+// The verb also has to stay clear of the path sense beside it. "Resolves to"
+// and "resolves against" are both composition, and a lead clause saying the
+// root could not be resolved would make one sentence carry that sense and its
+// opposite, in the one diagnostic whose whole job is to stop a misreading.
+//
+// Keep the two facts of the repair clause apart. The root spelling resolves
+// against the project root; the sources re-base onto the root. Merging them
+// into "re-bases Program sources against the ttsc project root" states the
+// reverse of what the property does, and reads as though declaring it changed
+// nothing — which is the one conclusion an author must not draw here.
+//
+// Every repair clause takes two steps, and that part is not about TypeScript at
+// all. This stat is satisfied by an empty directory, so creating one silences
+// the diagnostic and leaves the population exactly as empty — and for a claim
+// that is worse than the diagnostic was, because an empty healthy claim
+// deactivates without a word. Both branches therefore ask for what the
+// directory must hold, and the split is disk against Program rather than one
+// noun against another: the walkers want the sources on disk, and TypeScript
+// wants them in the Program.
+func missingBaseDirectoryProblem(base populationBase, kind artifactKind) string {
   if base.Default {
     return ""
   }
@@ -240,9 +272,16 @@ func unreadableBaseProblem(base populationBase, kind artifactKind) string {
   if err == nil && info.IsDir() {
     return ""
   }
+  if kind == artifactTypeScript {
+    return "Evidence graph found no directory at the " + string(kind) + " root '" +
+      populationRootLabel(base) + "', which resolves to '" + filepath.ToSlash(base.Absolute) +
+      "'. Correct the 'root' property, or add that directory and make its sources part of the tsconfig Program; it resolves against the ttsc project root, and a " + string(kind) +
+      " root re-bases Program sources onto itself rather than scanning the filesystem."
+  }
   return "Evidence graph could not read the " + string(kind) + " root '" +
     populationRootLabel(base) + "', which resolves to '" + filepath.ToSlash(base.Absolute) +
-    "'. Create the directory, or correct the 'root' property; it resolves against the ttsc project root."
+    "'. Correct the 'root' property, or create that directory and the " + string(kind) +
+    " sources it should hold; it resolves against the ttsc project root, and an empty directory leaves the population just as empty."
 }
 
 // normalizeRootPath validates a declared root without resolving it.

@@ -68,6 +68,13 @@ func (graphRule) Check(ctx *rule.ProjectContext) {
     root,
     claimPopulationConfig(config, artifactPrisma),
   )
+  problems = append(
+    problems,
+    typeScriptBaseProblems(
+      claimPopulationConfig(config, artifactTypeScript),
+      typescript,
+    )...,
+  )
   problems = append(problems, markdownClaimProblems...)
   problems = append(problems, prismaClaimProblems...)
   // Governance is judged against the configuration as declared, before
@@ -163,8 +170,14 @@ func claimPopulationConfig(
 //
 // TypeScript, Prisma, and Markdown are the three claim-capable artifact kinds.
 // A healthy zero-file match is empty and therefore inactive, including when a
-// typo caused it. Unhealthy or unreadable populations stay active because
-// failed input cannot prove the selected population is empty.
+// typo caused it. An unhealthy population stays active because failed input
+// cannot prove the selected population is empty.
+//
+// Health is the whole test, and a declared root that is not a directory is one
+// of the things it now answers for every kind rather than for two of them.
+// Asking missingBaseDirectoryProblem again here kept a TypeScript claim alive
+// on a fact this function then had no way to report, which is how a bad root
+// came to be answered with a glob diagnostic.
 func activeGraphConfig(
   config graphConfig,
   markdown map[string]*artifactInventory,
@@ -193,14 +206,19 @@ func claimIsInactive(
   claim claimSpec,
   inventories map[string]*artifactInventory,
 ) bool {
+  // The default arm is unreachable: decodeClaim refuses a reference-only kind
+  // and any kind problem returns from Check before activation runs. It stays as
+  // the place a fourth claim-capable kind announces itself, and such a kind
+  // owes this switch a case and a population loader that records its failures —
+  // without both it would go active and empty with nothing to say, which is the
+  // shape this function's own history is about.
   switch claim.Type {
   case artifactMarkdown, artifactPrisma, artifactTypeScript:
   default:
     return false
   }
   paths := matchingInventoryPaths(inventories, claim.Base, claim.Files)
-  if !populationIsHealthy(inventories, claim.Base, paths) ||
-    unreadableBaseProblem(claim.Base, claim.Type) != "" {
+  if !populationIsHealthy(inventories, claim.Base, paths) {
     return false
   }
   for _, path := range paths {
@@ -256,12 +274,13 @@ func materializeClaimStates(
         )
       }
     }
-    if len(paths) == 0 && state.Healthy {
-      problems = append(
-        problems,
-        claimLabel(claim)+" matched no "+string(claim.Type)+" files for "+describePopulation(claim.Base, claim.Files)+". Fix the globs or the root they resolve against; '*' stays within one segment, '**' crosses segments, and a bare directory is not recursive.",
-      )
-    }
+    // No claim-side empty-match diagnostic belongs here. A claim arrives
+    // already active, which means it either selected a host — so it matched a
+    // path — or its population is unhealthy, and an unhealthy one is reported
+    // at its own cause by the loader that failed. The message removed from this
+    // spot told the author to fix globs that were fine, and the only state that
+    // ever reached it was a TypeScript root that did not resolve, which now
+    // says so itself.
     hostsByID := map[string]bool{}
     for _, path := range paths {
       for _, unit := range inventories[path].Units {
@@ -683,16 +702,25 @@ func evaluateEvidenceGraph(
       single := reference.Spec.Policy.SingleEvidencePerSymbol
       unique := reference.Spec.Policy.UniqueEvidence
       checklist := reference.Spec.Policy.Checklist
-      // An empty population owes nothing and normally ends the reference
-      // here. A healthy empty one still judges hosts under
-      // singleEvidencePerSymbol, because every selected host then truthfully
-      // cites zero units rather than the one it owes.
+      // An empty population ends the reference, for every policy alike.
       //
-      // A checklist is not in that company. Its host owes every unit, so an
-      // empty population leaves every host owing nothing and passing
-      // truthfully; there is no count it can fall short of.
-      if len(reference.Units) == 0 &&
-        (!single || !state.Healthy || !reference.Healthy || len(reference.Paths) == 0) {
+      // singleEvidencePerSymbol used to be excepted, on the argument that each
+      // selected host then truthfully cites zero units rather than the one it
+      // owes. The count is true and the conclusion does not follow: the
+      // materializer has already reported why the population is empty, and this
+      // added one message per host asking each of them to cite a unit that does
+      // not exist — a repair the population makes impossible, scaled by host
+      // count. It is the same derived finding the loader-failure path refuses
+      // to produce, and it was refused there for the same reason.
+      //
+      // The exception was also conditional on len(Paths) != 0, so the identical
+      // empty population was judged or skipped depending on whether any file
+      // happened to match, which no argument ever covered.
+      //
+      // Nothing else is lost by leaving early. Every diagnostic below reaches a
+      // declaration through reference.UnitsByScope, which an empty population
+      // leaves empty, so each one already skips every declaration it visits.
+      if len(reference.Units) == 0 {
         continue
       }
       acknowledged := map[string]bool{}
@@ -1006,7 +1034,10 @@ func evaluateEvidenceGraph(
           )
         }
       }
-      if !state.Healthy || !reference.Healthy || len(reference.Paths) == 0 {
+      // Health alone gates the per-host policies. The path count that used to
+      // sit here answered the empty-population question a second time, and a
+      // reference with units has matched a path by construction.
+      if !state.Healthy || !reference.Healthy {
         continue
       }
       if single {
