@@ -934,3 +934,360 @@ func TestADefaultTypeScriptBaseIsNotRefusedForAChain(t *testing.T) {
     )
   }
 }
+
+/**
+ * Verifies a TypeScript claim rooted inside a linked directory keeps its hosts.
+ *
+ * The link is on an ancestor of the declared root rather than on the root, which
+ * `os.Lstat` of the leaf cannot see: it reports a directory, because traversal
+ * through a link is transparent. Nothing resolved it, the Program spelled its
+ * sources the other way, every comparison failed, and the claim deactivated
+ * without a word. Measured before the repair: no diagnostic at all.
+ *
+ * This is the shape a package manager installs. The workspace dependency is the
+ * link and the root an author declares is a directory inside it.
+ *
+ *  1. Link a directory onto the workspace and root a claim at a path inside it.
+ *  2. Leave the reference's selected section uncited.
+ *  3. Assert the claim is active and its host is named through the declared root.
+ */
+func TestATypeScriptClaimRootedInsideALinkKeepsItsHosts(t *testing.T) {
+  workspace := t.TempDir()
+  project := filepath.Join(workspace, "project")
+  if err := os.MkdirAll(project, 0o755); err != nil {
+    t.Fatal(err)
+  }
+  if err := linkDirectory(workspace, filepath.Join(workspace, "mirror")); err != nil {
+    t.Skipf("this platform refused to create a link: %v", err)
+  }
+  messages := runRootedGraphIn(t, workspace, map[string]string{
+    "project/docs/pricing.md": "## Discounts {#discounts}\n",
+    "project/src/sale.ts":     "/** @evidence */\nexport interface ISale {}\n",
+  }, `{"claims":[{
+    "type":"typescript",
+    "root":"../mirror/project",
+    "files":["src/**/*.ts"],
+    "symbol":"type",
+    "reference":{"type":"markdown","files":["docs/**/*.md"],"symbol":"h2"}
+  }]}`)
+  assertProblemContains(
+    t,
+    messages,
+    "Missing acknowledgement for 'docs/pricing.md#discounts'",
+  )
+  assertProblemContains(t, messages, "../mirror/project/src/sale.ts")
+}
+
+/**
+ * Verifies a walker rooted inside a link is unchanged by the same repair.
+ *
+ * The two walkers were never affected: they generate every path they compare
+ * from the base they were handed, so a linked ancestor is transparent to them in
+ * the way the filesystem intends. The repair moves what the base resolves to, and
+ * this is the negative twin that says their addressing did not move with it.
+ *
+ *  1. Root a Markdown reference at a path inside a linked directory.
+ *  2. Leave its section uncited.
+ *  3. Assert the location is spelled through the declared root, not the link's
+ *     target.
+ */
+func TestAMarkdownRootInsideALinkIsUnchanged(t *testing.T) {
+  workspace := t.TempDir()
+  documents := filepath.Join(workspace, "documents", "requirements")
+  if err := os.MkdirAll(documents, 0o755); err != nil {
+    t.Fatal(err)
+  }
+  if err := os.WriteFile(
+    filepath.Join(documents, "pricing.md"),
+    []byte("## Discounts {#discounts}\n"),
+    0o644,
+  ); err != nil {
+    t.Fatal(err)
+  }
+  if err := linkDirectory(workspace, filepath.Join(workspace, "mirror")); err != nil {
+    t.Skipf("this platform refused to create a link: %v", err)
+  }
+  messages := runRootedGraphIn(t, workspace, map[string]string{
+    "project/src/sale.ts": "export interface ISale {}\n",
+  }, `{"claims":[{
+    "type":"typescript",
+    "files":["src/**/*.ts"],
+    "symbol":"type",
+    "reference":{
+      "type":"markdown",
+      "root":"../mirror/documents",
+      "files":["requirements/**/*.md"],
+      "symbol":"h2"
+    }
+  }]}`)
+  assertProblemContains(
+    t,
+    messages,
+    "Missing acknowledgement for 'requirements/pricing.md#discounts'",
+  )
+  assertProblemContains(t, messages, "at ../mirror/documents/requirements/pricing.md:1")
+}
+
+/**
+ * Verifies a chain past the resolver is refused on an ancestor of the root too.
+ *
+ * The twin of the case above, one component further up, and the shape that
+ * makes the refusal worth having: the declared root itself is an ordinary
+ * directory, so every stat of it answers directory and the leaf tells nobody
+ * that the path reaching it is still a link. The filesystem opens it anyway,
+ * the Program spells its sources through the other side, and the claim
+ * deactivates in silence — which is what #1269 recorded and what asking every
+ * component, rather than only the last, is for.
+ *
+ *  1. Build a chain longer than the resolver follows onto the workspace.
+ *  2. Root a TypeScript claim at a real directory inside the chain's head.
+ *  3. Assert the root is refused rather than selecting nothing.
+ */
+func TestALinkChainAboveARootIsRefusedForTypeScriptToo(t *testing.T) {
+  workspace := t.TempDir()
+  project := filepath.Join(workspace, "project")
+  if err := os.MkdirAll(project, 0o755); err != nil {
+    t.Fatal(err)
+  }
+  previous := workspace
+  head := ""
+  for hop := range 34 {
+    head = "hop" + decimal(hop)
+    link := filepath.Join(workspace, head)
+    if err := linkDirectory(previous, link); err != nil {
+      t.Skipf("this platform refused to create a link: %v", err)
+    }
+    previous = link
+  }
+  declared := "../" + head + "/project"
+  if _, err := os.Stat(filepath.Join(workspace, head, "project")); err != nil {
+    t.Skipf(
+      "this platform did not follow the chain to a directory either (%v), so the stat gate answers first",
+      err,
+    )
+  }
+  messages := runRootedGraphIn(t, workspace, map[string]string{
+    "project/docs/pricing.md": "## Discounts {#discounts}\n",
+    "project/src/sale.ts":     "export interface ISale {}\n",
+  }, `{"claims":[{
+    "type":"typescript",
+    "root":"`+declared+`",
+    "files":["src/**/*.ts"],
+    "symbol":"type",
+    "reference":{"type":"markdown","files":["docs/**/*.md"],"symbol":"h2"}
+  }]}`)
+  assertProblemContains(
+    t,
+    messages,
+    "found no directory at the end of the typescript root '"+declared+"'",
+  )
+  // The sentence was written for a chain at the root and reports one above it
+  // too, so it says the path passes through a chain rather than that it is one.
+  assertProblemContains(
+    t,
+    messages,
+    "passes through a chain of links longer than this rule follows",
+  )
+}
+
+/**
+ * Verifies a path with no link in it resolves to the spelling it arrived as.
+ *
+ * The resolution walks components, and a volume is the one prefix that is not
+ * one: a drive root and a UNC share carry their own separator, and a share root
+ * has nothing after it at all. Recomposing such a base from the pieces the walk
+ * starts with returns a path one character from the one it was given, which
+ * names the same directory and compares as though it did not — so every
+ * consumer that asks whether resolution moved the base would answer yes forever
+ * on a base with no link in it, and pay the second spelling on every file.
+ *
+ * The names below are deliberately fictional. A shape this case can judge only
+ * by its spelling has to be one no machine running it has made real, because a
+ * link anywhere on such a path would change the answer correctly.
+ *
+ *  1. Take each volume and root shape this platform can spell.
+ *  2. Resolve it with no link anywhere on the path.
+ *  3. Assert the answer is the cleaned input, byte for byte.
+ */
+func TestAPathWithNoLinkResolvesToItsOwnSpelling(t *testing.T) {
+  shapes := []string{}
+  if runtime.GOOS == "windows" {
+    shapes = append(
+      shapes,
+      `C:\`,
+      `C:\ttsc-evidence-sales`,
+      `C:\ttsc-evidence-sales\schema`,
+      `\\ttsc-evidence-server\share`,
+      `\\ttsc-evidence-server\share\sales`,
+      `//ttsc-evidence-server/share`,
+      `\\?\C:\ttsc-evidence-sales`,
+    )
+  } else {
+    shapes = append(
+      shapes,
+      "/",
+      "/ttsc-evidence-sales",
+      "/ttsc-evidence-sales/schema",
+    )
+  }
+  for _, shape := range shapes {
+    resolved, ok := resolveLinkedPath(shape)
+    if !ok {
+      t.Fatalf("resolving '%s' must settle when no link is on it", shape)
+    }
+    if want := filepath.Clean(shape); resolved != want {
+      t.Fatalf("resolving '%s' gave '%s'; want '%s'", shape, resolved, want)
+    }
+  }
+}
+
+/**
+ * Verifies a real directory resolves to the directory it is.
+ *
+ * The case above judges spellings, which only a path nothing has made real can
+ * be judged by. A directory that exists is the other half, and it is asked the
+ * other question: an absent path ends every chain at its first `os.Lstat`,
+ * while a present one walks the resolver's whole body at every component. What
+ * it must answer is the same directory, not the same string — a platform whose
+ * temporary directory sits behind a link of its own, as macOS's `/var` does,
+ * changes the spelling for the very reason this resolution exists.
+ *
+ *  1. Take a real directory this platform allocated.
+ *  2. Resolve it.
+ *  3. Assert the answer is the same directory the filesystem knows.
+ */
+func TestARealDirectoryResolvesToTheDirectoryItIs(t *testing.T) {
+  directory := t.TempDir()
+  resolved, ok := resolveLinkedPath(directory)
+  if !ok {
+    t.Fatalf("resolving '%s' must settle", directory)
+  }
+  declared, err := os.Stat(directory)
+  if err != nil {
+    t.Fatal(err)
+  }
+  answered, err := os.Stat(resolved)
+  if err != nil {
+    t.Fatalf("resolving '%s' gave '%s', which does not open: %v", directory, resolved, err)
+  }
+  if !os.SameFile(declared, answered) {
+    t.Fatalf("resolving '%s' gave '%s', which is another directory", directory, resolved)
+  }
+}
+
+/**
+ * Verifies a chain ending on the last hop this rule follows still resolves.
+ *
+ * The bound counts links followed, not answers given, and the difference is a
+ * root that works. A chain whose last link lands on its directory exactly as
+ * the last iteration is spent has resolved — the loop simply had none left to
+ * look with — and the filesystem follows more than this on every platform. The
+ * refusal beside this case is for a chain still going, and reporting one for
+ * the other would take a population that loads and fail it. This is the
+ * boundary between them, one hop below the case above.
+ *
+ *  1. Build a chain of exactly the length this rule follows.
+ *  2. Root a TypeScript claim at its head and run the rule.
+ *  3. Assert the population loads and owes its ordinary acknowledgement.
+ */
+func TestALinkChainEndingOnTheLastFollowedHopResolves(t *testing.T) {
+  workspace := t.TempDir()
+  project := filepath.Join(workspace, "project")
+  if err := os.MkdirAll(project, 0o755); err != nil {
+    t.Fatal(err)
+  }
+  previous := project
+  head := ""
+  for hop := range 32 {
+    head = "hop" + decimal(hop)
+    link := filepath.Join(workspace, head)
+    if err := linkDirectory(previous, link); err != nil {
+      t.Skipf("this platform refused to create a link: %v", err)
+    }
+    previous = link
+  }
+  declared := "../" + head
+  if _, err := os.Stat(filepath.Join(workspace, head)); err != nil {
+    t.Skipf("this platform does not follow a chain this long either (%v)", err)
+  }
+  messages := runRootedGraphIn(t, workspace, map[string]string{
+    "project/docs/pricing.md": "## Discounts {#discounts}\n",
+    "project/src/sale.ts":     "export interface ISale {}\n",
+  }, `{"claims":[{
+    "type":"typescript",
+    "root":"`+declared+`",
+    "files":["src/**/*.ts"],
+    "symbol":"type",
+    "reference":{"type":"markdown","files":["docs/**/*.md"],"symbol":"h2"}
+  }]}`)
+  for _, message := range messages {
+    if strings.Contains(message, "found no directory at the end of") {
+      t.Fatalf("a chain of exactly the followed length resolves:\n%s", strings.Join(messages, "\n"))
+    }
+  }
+  // The population loaded, so the claim owes what any loaded population owes.
+  assertProblemContains(t, messages, "Missing acknowledgement for 'docs/pricing.md#discounts'")
+}
+
+/**
+ * Verifies the resolver follows exactly the number of links it claims to.
+ *
+ * The two graph cases either side of the boundary bracket it without pinning
+ * it: raising the bound by one leaves both of them green, because the refusal
+ * they assert is built well past either value. The bound is a single number
+ * that decides whether a working root is refused, so it is measured directly
+ * and at the two values that touch it.
+ *
+ *  1. Build one chain and take three lengths of it.
+ *  2. Resolve each from its own head.
+ *  3. Assert the last followed hop settles and the one after it does not.
+ */
+func TestTheResolverFollowsExactlyItsBoundOfLinks(t *testing.T) {
+  workspace := t.TempDir()
+  target := filepath.Join(workspace, "target")
+  if err := os.MkdirAll(target, 0o755); err != nil {
+    t.Fatal(err)
+  }
+  heads := []string{}
+  previous := target
+  for hop := range 33 {
+    link := filepath.Join(workspace, "hop"+decimal(hop))
+    if err := linkDirectory(previous, link); err != nil {
+      t.Skipf("this platform refused to create a link: %v", err)
+    }
+    heads = append(heads, link)
+    previous = link
+  }
+  // `hop[index]` is index+1 links above the directory, and the resolver's own
+  // `os.Stat` walks the whole chain at once — so a platform that stops before
+  // this one does answers the deepest case before the bound can.
+  if _, err := os.Stat(heads[32]); err != nil {
+    t.Skipf("this platform does not follow 33 links either (%v)", err)
+  }
+  for _, expected := range []struct {
+    links   int
+    settles bool
+  }{
+    {links: 31, settles: true},
+    {links: 32, settles: true},
+    {links: 33, settles: false},
+  } {
+    resolved, settled := resolveLinkedDirectory(heads[expected.links-1])
+    if settled != expected.settles {
+      t.Fatalf(
+        "a chain of %d links settled=%v, want %v; resolved to '%s'",
+        expected.links,
+        settled,
+        expected.settles,
+        resolved,
+      )
+    }
+    if !settled {
+      continue
+    }
+    landed, err := os.Lstat(resolved)
+    if err != nil || !landed.IsDir() {
+      t.Fatalf("a chain of %d links settled on '%s', which is not a directory", expected.links, resolved)
+    }
+  }
+}

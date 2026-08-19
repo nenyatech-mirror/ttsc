@@ -503,33 +503,100 @@ func describeBaseDirectoryProblem(
 //
 // A declared root may be a link, and `os.Stat` accepts one as a directory when
 // the gate reads it, so a consumer that then compares paths against the base has
-// to compare against what the link names. `resolveLinkedDirectory` is this
-// package's answer for an installed package and handles the Windows junction
-// `filepath.EvalSymlinks` returns unchanged.
+// to compare against what the link names. The filesystem never needs this: it
+// opens a path through any link transparently. A comparison does, because the
+// two sides are strings and only one of them was spelled by this rule.
 //
-// The answer is verified rather than trusted, and every caller shares that
-// verification. The resolver gives up after a fixed number of hops and returns
-// the link it stopped on, while the stat in `baseDirectoryProblem` follows
-// further on Linux and on Windows, so a long enough chain passes the gate and
-// leaves whoever trusted the resolver holding a link.
+// Every component is resolved, not only the leaf. A link on an ancestor is
+// exactly what `os.Lstat` of the leaf cannot see, and it is the shape a package
+// manager installs: the workspace dependency is the link and the root an author
+// declares is a directory inside it. Resolving only the leaf left that silent,
+// which is what #1269 recorded.
 //
-// Darwin and the BSDs stop at the same number of hops, so for a declared root the
-// gate answers first and the refusal is unreachable there. The default base is
-// not gated at all, because `baseDirectoryProblem` returns on it without
-// stat'ing anything, so a walker reaches this refusal for the project root on
-// every platform.
+// The answer is verified rather than trusted, at every component and not only
+// at the last. `resolveLinkedDirectory` gives up after a fixed number of hops
+// and returns the link it stopped on, while the stat in `baseDirectoryProblem`
+// follows further on Linux and on Windows, so a long enough chain passes the
+// gate and leaves whoever trusted the resolver holding a link. Asking only the
+// leaf would miss it on an ancestor for the same reason `os.Lstat` does:
+// traversal through a link is transparent, so the remaining components still
+// name a real directory and the last stat says so. Darwin and the BSDs stop at
+// the same number of hops, so for a declared root the gate answers first and
+// the refusal is unreachable there. The default base is not gated at all,
+// because `baseDirectoryProblem` returns on it without stat'ing anything, so a
+// walker reaches this refusal for the project root on every platform.
 //
-// A base that is not a link costs one `os.Lstat` inside the resolver and one
-// here, per base and per pass. Only the last component is resolved: a link on an
-// ancestor is transparent to `Lstat` of the leaf, which #1269 records.
+// A base that is not a link costs one `os.Lstat` per path component plus one
+// for this answer, where resolving the leaf alone cost two. It is paid per call
+// rather than per file, and the call count is the graph's own shape rather than
+// this function's: claim-side populations are materialized before the whole
+// configuration, so a base is asked once for each load it appears in. That is
+// at most twice for a Markdown or Prisma claim base and once for its reference
+// bases, and twice those numbers for TypeScript, whose gate asks beside the
+// pass that builds its match table and whose governance pass builds one more
+// from the configuration as declared. All of it stays off the loop this feeds,
+// which is every source file of the project.
 func resolvedBaseDirectory(base populationBase) (string, bool) {
-  from := filepath.FromSlash(resolveLinkedDirectory(base.Absolute))
+  from, resolved := resolveLinkedPath(base.Absolute)
+  if !resolved {
+    return from, false
+  }
   info, err := os.Lstat(from)
   return from, err == nil && info.IsDir()
 }
 
+// resolveLinkedPath resolves a link at any component of an absolute path.
+//
+// `filepath.EvalSymlinks` does this in one call and cannot be used, for the
+// reason `resolveLinkedDirectory` exists at all: it returns a Windows junction
+// unchanged, which is the link a package manager creates there. So the walk is
+// by hand, and it asks the same resolver at every prefix.
+//
+// The volume is taken off first and never split. A Windows drive root and a UNC
+// share are one component whose separator is part of them, and joining their
+// pieces back would name a different location, which is the same hazard
+// `normalizeRootPath` hand-cleans for a declared spelling. A base that is the
+// share itself has nothing left to walk, and it returns unchanged rather than
+// gaining the separator this walk starts from: a spelling that differs from
+// the base by one character resolves to the same directory and compares as
+// though it did not, so every consumer would pay the second spelling forever
+// on a path with no link in it.
+//
+// A component whose chain outran the resolver ends the walk. Joining the rest
+// onto it would produce a path the filesystem opens and every string
+// comparison misses, which is #1269 exactly, one component further up than the
+// case that opened it.
+func resolveLinkedPath(absolute string) (string, bool) {
+  volume := filepath.VolumeName(absolute)
+  rest := absolute[len(volume):]
+  current := volume + string(filepath.Separator)
+  walked := false
+  for _, segment := range strings.Split(filepath.ToSlash(rest), "/") {
+    if segment == "" {
+      continue
+    }
+    walked = true
+    resolved, settled := resolveLinkedDirectory(filepath.Join(current, segment))
+    if !settled {
+      return filepath.FromSlash(resolved), false
+    }
+    current = resolved
+  }
+  if !walked {
+    return filepath.Clean(absolute), true
+  }
+  return filepath.FromSlash(current), true
+}
+
 // unresolvedBaseProblem reports a base whose links this rule stops following
 // before they reach a directory.
+//
+// The chain may be the root itself or any directory above it, so the sentence
+// says the path passes through one rather than that it is one. Naming the
+// component would be more precise and is deliberately not done: this message
+// already carries the declared spelling and, where they differ, the path it
+// resolves to, and a third path would cost more to read than the component
+// buys — the repair is the same wherever on the path the chain sits.
 //
 // Every artifact kind gets this sentence, because the failure is the resolver's
 // bound rather than anything a walk or a Program does, and the kind appears only
@@ -558,7 +625,7 @@ func unresolvedBaseProblem(base populationBase, kind artifactKind) string {
   if resolved := filepath.ToSlash(base.Absolute); label != resolved {
     message += ", which resolves to '" + resolved + "'"
   }
-  message += ". That path is a chain of links longer than this rule follows. "
+  message += ". That path passes through a chain of links longer than this rule follows. "
   if base.Default {
     return message + "Run ttsc against the directory those links end at."
   }
