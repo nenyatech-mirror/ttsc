@@ -40,8 +40,10 @@ const virtualModulePattern = /\0/;
  * The factory resolves raw options once, creates a per-build transform cache,
  * and captures Vite alias configuration via the `vite.configResolved` hook so
  * that path aliases are forwarded to the generated tsconfig overlay. Real build
- * lifecycles use a per-build cache; Vite's development server keeps persistent
- * validation because its one `buildStart` spans later HMR edits.
+ * lifecycles use a per-build cache; a watching Vite development server keeps
+ * persistent validation because its one `buildStart` spans later HMR edits,
+ * while a dev server configured without a watcher takes the build-scoped path
+ * with them, having declared it will observe no edit at all.
  */
 const unpluginFactory: UnpluginFactory<
   TtscUnpluginOptions | undefined,
@@ -94,7 +96,22 @@ const unpluginFactory: UnpluginFactory<
     },
 
     buildStart() {
-      if (viteCommand === "serve") {
+      // Persistent validation exists for a session that spans edits it can
+      // observe, and a dev server told to open no watcher is not one:
+      // `server.watch: null` leaves Vite with no change channel at all, so no
+      // edit can reach the session, nothing invalidates what one touched, and
+      // no client is hot-updated. Validating each delivery there does not buy
+      // freshness, it buys incoherence — modules delivered before an edit and
+      // after it would come from two different compilations of one program —
+      // while costing a full derived-input proof per delivered module. The
+      // build-scoped lifecycle settles each module's first delivery against the
+      // generation the session started from, exactly as a build does, and still
+      // revalidates a module this session already delivered. A one-shot suite
+      // configures precisely this server (`vitest --run` sets `server.watch =
+      // null`) and is the workload behind samchon/ttsc#970
+      // (samchon/ttsc#1260). The neighbouring watch-registration decision reads
+      // the same two properties for the same reason.
+      if (viteCommand === "serve" && viteWatching) {
         resetTtscTransformCache(transformCache);
       } else {
         beginTtscTransformBuild(transformCache);
