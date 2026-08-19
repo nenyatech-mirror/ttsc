@@ -163,6 +163,19 @@ const (
   // type it mentions (a parameter, return, property, or alias type). It is not a
   // runtime call, so an impact query can filter value edges from type edges.
   EdgeTypeRef EdgeKind = "type-ref"
+  // EdgeDocRef is a reference from a declaration to a symbol its own
+  // documentation names through an inline link. The checker resolves the name
+  // and counts it as a use — an import that exists only to support one survives
+  // `noUnusedLocals` — so the relationship is a compiler fact like every other
+  // edge here, and it was the one class of resolved reference the graph held no
+  // edge for.
+  //
+  // It is its own kind rather than a type-ref because it is not a type
+  // position: a link may name a function, and a consumer filtering type edges
+  // from value edges would be told a documentation mention is one or the other
+  // when it is neither. The tag around the link decides nothing; a link under
+  // `@evidence`, under `@see`, or in ordinary prose is one relation.
+  EdgeDocRef EdgeKind = "doc-ref"
   // EdgeExports runs from a module to a declaration its export table resolves
   // to, through re-exports and barrels. It records which surface a symbol is
   // public on, which the Exported flag cannot: a package's front door and its
@@ -204,6 +217,26 @@ type Graph struct {
   // re-parsing source. It is dump-only metadata, separate from Edges so the
   // existing checker-resolved relationships are untouched.
   Decorators []*Decorator
+  // DocTags holds the documentation tags TypeScript does not recognize, written
+  // on the workspace's declarations and captured verbatim so the JSON dump can
+  // attach them to each target node. A convention that attaches a declaration to
+  // something outside the type system — a specification section, an API
+  // operation, a reference document — writes it here and nowhere the graph could
+  // otherwise see. Dump-only metadata, separate from Edges for the same reason
+  // Decorators is.
+  DocTags []*DocTag
+  // docTagPositions deduplicates DocTags by where each tag is written, so a
+  // declaration presented to putDeclaredNode more than once contributes its tags
+  // once. Build-only, like bodyNodes.
+  docTagPositions map[docTagKey]struct{}
+  // docHosts are the declarations the node pass found documentation on, paired
+  // with the node it attributed them to and keyed by their file. The edge pass
+  // resolves documentation links from this set rather than from a walk of its
+  // own, so both halves of a citation cover the same declarations, and it asks
+  // per file so a project's whole documented population is never rescanned for
+  // each one. Build-only.
+  docHosts         map[string][]docHost
+  docHostPositions map[docTagKey]struct{}
   // bodyNodes tracks whether a callable node's display span is the overload
   // implementation rather than an overload signature. It is build-only metadata
   // and intentionally stays out of JSON dumps.
