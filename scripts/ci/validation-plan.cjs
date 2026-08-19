@@ -463,7 +463,23 @@ function planForPaths(files) {
       continue;
     }
     if (file.startsWith("packages/evidence/")) {
-      add(["evidence", "go"], file);
+      // `windows-go` is selected because this package's behavior is decided by
+      // platform path semantics rather than incidentally affected by them.
+      // `filepath.IsAbs` calls `/srv/x` relative there and a drive-lettered path
+      // absolute, `filepath.Rel` errors across volumes so a location falls back
+      // to an absolute spelling, a drive root carries its own separator, and a
+      // junction is read through `os.Readlink` where `EvalSymlinks` returns it
+      // unchanged.
+      //
+      // Two kinds of case need this lane. One asserts a different answer per
+      // platform, so running it on `go` alone proves only the POSIX half. The
+      // other reads a Windows junction, which is a reparse point rather than a
+      // symbolic link, so `resolveLinkedDirectory` takes the same branches over
+      // different operating-system behavior and only this lane exercises that
+      // side of `os.Readlink`. The doubled terminator Windows writes is pinned
+      // from a hand-built error and runs everywhere, so this lane is not what
+      // proves that one.
+      add(["evidence", "go", "windows-go"], file);
       continue;
     }
     if (file.startsWith("benchmarks/evidence/")) {

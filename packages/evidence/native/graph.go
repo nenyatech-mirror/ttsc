@@ -175,7 +175,7 @@ func claimPopulationConfig(
 //
 // Health is the whole test, and a declared root that is not a directory is one
 // of the things it now answers for every kind rather than for two of them.
-// Asking missingBaseDirectoryProblem again here kept a TypeScript claim alive
+// Asking baseDirectoryProblem again here kept a TypeScript claim alive
 // on a fact this function then had no way to report, which is how a bad root
 // came to be answered with a glob diagnostic.
 func activeGraphConfig(
@@ -1403,7 +1403,7 @@ func materializeEntryReference(
   if failure := loader.failure(entry); failure != "" {
     state.Healthy = false
     return state, []string{
-      claimLabel(claim) + " " + referenceLabel(reference) + " could not read TypeScript entry '" + entry + "': " + failure + ". Fix filesystem access or the package installation; coverage cannot be evaluated from a partial entry graph.",
+      claimLabel(claim) + " " + referenceLabel(reference) + " could not read TypeScript entry '" + entry + "': " + causeReason(failure) + ". Fix filesystem access or the package installation; coverage cannot be evaluated from a partial entry graph.",
     }
   }
   if len(state.Units) == 0 {
@@ -1529,7 +1529,7 @@ func materializePackageGlobReference(
   if walkProblem != "" {
     state.Healthy = false
     return state, []string{
-      claimLabel(claim) + " " + referenceLabel(reference) + " could not inspect TypeScript package '" + reference.Package + "': " + walkProblem + ". Fix filesystem access or reinstall the package; coverage cannot be evaluated from a partial population.",
+      claimLabel(claim) + " " + referenceLabel(reference) + " could not inspect TypeScript package '" + reference.Package + "': " + causeReason(walkProblem) + ". Fix filesystem access or reinstall the package; coverage cannot be evaluated from a partial population.",
     }
   }
   problems := []string{}
@@ -1542,7 +1542,7 @@ func materializePackageGlobReference(
       state.Healthy = false
       problems = append(
         problems,
-        claimLabel(claim)+" "+referenceLabel(reference)+" could not read TypeScript source '"+candidate+"': "+loader.failure(candidate)+". Fix filesystem access or reinstall the package; coverage cannot be evaluated from a partial population.",
+        claimLabel(claim)+" "+referenceLabel(reference)+" could not read TypeScript source '"+candidate+"': "+causeReason(loader.failure(candidate))+". Fix filesystem access or reinstall the package; coverage cannot be evaluated from a partial population.",
       )
       continue
     }

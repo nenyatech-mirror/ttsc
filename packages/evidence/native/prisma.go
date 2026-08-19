@@ -169,7 +169,7 @@ func loadPrismaInventories(
 
   result, err := normalizePrismaSet(root, sources)
   if err != nil {
-    message := "Evidence graph could not run its Prisma schema loader: " + err.Error() + ". Prisma references require Node.js and a resolvable @prisma/prisma-schema-wasm."
+    message := "Evidence graph could not run its Prisma schema loader: " + causeText(err) + ". Prisma references require Node.js and a resolvable @prisma/prisma-schema-wasm."
     return inventories, append(problems, failPrismaSet(inventories, sources, message))
   }
 
@@ -234,42 +234,58 @@ func configuredPrismaAddressesWithHealth(
   failedBases := []populationBase{}
   problems := []string{}
   for _, base := range configuredBases(config, artifactPrisma) {
-    if problem := missingBaseDirectoryProblem(base, artifactPrisma); problem != "" {
+    if problem := baseDirectoryProblem(base, artifactPrisma); problem != "" {
       problems = append(problems, problem)
       failedBases = append(failedBases, base)
       continue
     }
     baseFailed := false
-    err := filepath.WalkDir(base.Absolute, func(current string, entry fs.DirEntry, walkErr error) error {
+    from, resolved := resolvedBaseDirectory(base)
+    if !resolved {
+      problems = append(problems, unresolvedBaseProblem(base, artifactPrisma))
+      failedBases = append(failedBases, base)
+      continue
+    }
+    err := filepath.WalkDir(from, func(current string, entry fs.DirEntry, walkErr error) error {
       if walkErr != nil {
-        relative, ok := relativeProjectPath(base.Absolute, current)
-        relevant := ok &&
-          (matchesConfiguredPrismaFile(config, base, relative) ||
-            couldContainConfiguredPrisma(config, base, relative))
-        if !relevant {
-          if entry != nil && entry.IsDir() {
-            return filepath.SkipDir
-          }
-          return nil
+        // The walk root belongs to its population by construction, so a
+        // failure to list it is a failure of the population. The relevance test
+        // below is written for an entry inside the base and reached the base
+        // itself only by accident, on a decision the glob shape made;
+        // `loadMarkdownBase` records that history in full. Leaving this
+        // exemption in one walker would decide an identical filesystem state by
+        // artifact kind.
+        if current == from {
+          return walkErr
         }
-        baseFailed = true
-        problems = append(problems, "Evidence graph could not inspect '"+current+"': "+walkErr.Error()+". Fix filesystem access so configured Prisma sources can be indexed.")
-        if entry != nil && entry.IsDir() {
-          return filepath.SkipDir
+        problem, relevant := unreadableEntryProblem(
+          base,
+          from,
+          "Prisma",
+          current,
+          walkErr,
+          func(relative string) bool {
+            return matchesConfiguredPrismaFile(config, base, relative) ||
+              couldContainConfiguredPrisma(config, base, relative)
+          },
+        )
+        if relevant {
+          baseFailed = true
+          problems = append(problems, problem)
         }
-        return nil
+        return filepath.SkipDir
       }
       if entry.IsDir() {
-        if current == base.Absolute {
+        if current == from {
           return nil
         }
-        relative, ok := relativeProjectPath(base.Absolute, current)
+        relative, ok := relativeProjectPath(from, current)
         if !ok || !couldContainConfiguredPrisma(config, base, relative) {
           return filepath.SkipDir
         }
         return nil
       }
-      relative, ok := relativeProjectPath(base.Absolute, current)
+      relative, ok := relativeProjectPath(from, current)
       if !ok || !matchesConfiguredPrismaFile(config, base, relative) {
         return nil
       }
@@ -278,7 +294,7 @@ func configuredPrismaAddressesWithHealth(
     })
     if err != nil {
       baseFailed = true
-      problems = append(problems, "Evidence graph could not walk Prisma root '"+populationRootLabel(base)+"': "+err.Error()+".")
+      problems = append(problems, unlistableBaseProblem(base, "Prisma", err))
     }
     if baseFailed {
       failedBases = append(failedBases, base)
@@ -763,7 +779,7 @@ func prismaBuriedTag(trimmed string) bool {
 // the only place a location survives: a successful parse carries no positions
 // at all, while a rejection names the file and line the author has to open.
 func prismaNormalizationFailure(message string) string {
-  reason := strings.TrimSpace(message)
+  reason := causeReason(strings.TrimSpace(message))
   if reason == "" {
     reason = "the parser reported no reason"
   }

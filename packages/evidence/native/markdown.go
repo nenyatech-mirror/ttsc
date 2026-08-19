@@ -41,39 +41,64 @@ func loadMarkdownBase(
   inventories map[string]*artifactInventory,
 ) []string {
   problems := []string{}
-  if problem := missingBaseDirectoryProblem(base, artifactMarkdown); problem != "" {
+  if problem := baseDirectoryProblem(base, artifactMarkdown); problem != "" {
     recordPopulationFailure(inventories, artifactMarkdown, base)
     return []string{problem}
   }
-  err := filepath.WalkDir(base.Absolute, func(current string, entry fs.DirEntry, walkErr error) error {
+  from, resolved := resolvedBaseDirectory(base)
+  if !resolved {
+    recordPopulationFailure(inventories, artifactMarkdown, base)
+    return []string{unresolvedBaseProblem(base, artifactMarkdown)}
+  }
+  err := filepath.WalkDir(from, func(current string, entry fs.DirEntry, walkErr error) error {
     if walkErr != nil {
-      relative, ok := relativeProjectPath(base.Absolute, current)
-      relevant := ok &&
-        (matchesConfiguredMarkdownFile(config, base, relative) ||
-          couldContainConfiguredMarkdown(config, base, relative))
-      if !relevant {
-        if entry != nil && entry.IsDir() {
-          return filepath.SkipDir
-        }
-        return nil
+      // The walk root belongs to its population by construction, so a failure
+      // to list it is a failure of the population and is never decided by what
+      // the globs happen to select. The relevance test below answers for an
+      // entry inside the base, and it answers for the base itself only by
+      // accident: its base-relative path is ".", which `couldMatchDescendant`
+      // calls true under a pattern opening with `**` and false under one
+      // opening with a segment. So the one failure that empties the whole
+      // population was reported or discarded by the shape of the globs. The
+      // success branch already exempts the base; this is that exemption on the
+      // error side.
+      //
+      // Returning the error ends the walk and carries the failure to the
+      // handler below, which is where a population-level finding belongs and
+      // where the population is recorded failed rather than healthy and empty.
+      if current == from {
+        return walkErr
       }
-      recordPopulationFailure(inventories, artifactMarkdown, base)
-      problems = append(problems, "Evidence graph could not inspect '"+current+"': "+walkErr.Error()+". Fix filesystem access so configured Markdown sources can be indexed.")
-      if entry != nil && entry.IsDir() {
-        return filepath.SkipDir
+      problem, relevant := unreadableEntryProblem(
+        base,
+        from,
+        "Markdown",
+        current,
+        walkErr,
+        func(relative string) bool {
+          return matchesConfiguredMarkdownFile(config, base, relative) ||
+            couldContainConfiguredMarkdown(config, base, relative)
+        },
+      )
+      if relevant {
+        recordPopulationFailure(inventories, artifactMarkdown, base)
+        problems = append(problems, problem)
       }
-      return nil
+      // `WalkDir` passes a nil entry only for its root, which the guard above
+      // answers, so this error belongs to a directory whose listing failed and
+      // the walk continues with its siblings.
+      return filepath.SkipDir
     }
     if entry.IsDir() {
-      if current != base.Absolute {
-        relative, ok := relativeProjectPath(base.Absolute, current)
+      if current != from {
+        relative, ok := relativeProjectPath(from, current)
         if !ok || !couldContainConfiguredMarkdown(config, base, relative) {
           return filepath.SkipDir
         }
       }
       return nil
     }
-    relative, ok := relativeProjectPath(base.Absolute, current)
+    relative, ok := relativeProjectPath(from, current)
     if !ok {
       return nil
     }
@@ -88,7 +113,7 @@ func loadMarkdownBase(
         Type:       artifactMarkdown,
         LoadFailed: true,
       }
-      problems = append(problems, "Evidence graph could not read Markdown file '"+address.Display+"': "+readErr.Error()+". Fix filesystem access or exclude the file from configured globs.")
+      problems = append(problems, "Evidence graph could not read Markdown file '"+address.Display+"': "+causeText(readErr)+". Fix filesystem access or exclude the file from configured globs.")
       return nil
     }
     inventory, _ := scanMarkdownInventory(address, string(content))
@@ -107,7 +132,7 @@ func loadMarkdownBase(
   })
   if err != nil {
     recordPopulationFailure(inventories, artifactMarkdown, base)
-    problems = append(problems, "Evidence graph could not walk Markdown root '"+populationRootLabel(base)+"': "+err.Error()+".")
+    problems = append(problems, unlistableBaseProblem(base, "Markdown", err))
   }
   return problems
 }

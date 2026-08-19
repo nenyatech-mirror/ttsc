@@ -66,6 +66,11 @@ type claimSpec struct {
   // the resolved Base because the two are produced at different times: the
   // spelling decodes from options alone, while the resolution needs a project
   // identity the decoder never sees.
+  //
+  // `Base.Declared` holds the same spelling once a project identity exists, and
+  // the two are not interchangeable. Read this one before resolution, which is
+  // what `ProjectInputs` does to publish a topology without touching the
+  // filesystem, and read the base's after it, which is what a diagnostic does.
   Root  string
   Base  populationBase
   Files globSet
@@ -325,12 +330,19 @@ func (declaration *evidenceDeclaration) valid() bool {
 type artifactInventory struct {
   // Address is the population-relative identity used for units and
   // declarations. It differs from Path when a configured root moves the
-  // address space while diagnostics remain project-relative.
+  // address space while a diagnostic keeps naming the file the way a reader
+  // opens it.
   Address string
-  // Path is the location a diagnostic names: project-relative, ascending with
-  // `..` when the file sits above the project root. It is not the key this
-  // inventory is filed under — that key carries the population base as well,
-  // because one file reached through two roots owns two sets of targets.
+  // Path is the source a diagnostic names. For a file it is spelled the way a
+  // reader opens it: project-relative, ascending with `..` when the file sits
+  // above the project root, and absolute when no relative spelling exists. A
+  // Swagger document is its configured source instead, which may be a URL, and
+  // the diagnostics for that kind print it through `displaySwaggerSource` rather
+  // than from here.
+  //
+  // It is not the key this inventory is filed under — that key carries the
+  // population base as well, because one file reached through two roots owns two
+  // sets of targets.
   Path         string
   Type         artifactKind
   Units        []*evidenceUnit

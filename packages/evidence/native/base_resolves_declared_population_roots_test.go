@@ -31,7 +31,23 @@ func runRootedGraph(
   config string,
 ) []string {
   t.Helper()
-  workspace := t.TempDir()
+  return runRootedGraphIn(t, t.TempDir(), files, config)
+}
+
+// runRootedGraphIn drives the same workspace from a caller-owned directory, for
+// the cases whose configuration has to name that directory.
+//
+// An absolute declared root cannot be written into a literal config string
+// against a workspace the helper allocates for itself, and it is the one form
+// where the declared spelling and the derived one differ — so the property those
+// cases exist to prove is unreachable without the caller owning the workspace.
+func runRootedGraphIn(
+  t *testing.T,
+  workspace string,
+  files map[string]string,
+  config string,
+) []string {
+  t.Helper()
   root := filepath.Join(workspace, "project")
   if err := os.MkdirAll(root, 0o755); err != nil {
     t.Fatal(err)
@@ -709,7 +725,7 @@ func TestAResolvableTypeScriptRootSelectingNothingStaysSilent(t *testing.T) {
  * Verifies a resolvable declared root stays quiet while its reference speaks.
  *
  * Both halves need a declared root to mean anything. A claim with no `root` has
- * the default base, which `missingBaseDirectoryProblem` returns on before it
+ * the default base, which `baseDirectoryProblem` returns on before it
  * stats anything and which `Check` has already validated, so an absence
  * assertion there could not fail however the new pass behaved. With a declared
  * root that exists, the pass genuinely evaluates it and produces nothing — while

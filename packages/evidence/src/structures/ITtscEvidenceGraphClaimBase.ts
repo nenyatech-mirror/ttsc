@@ -42,12 +42,16 @@ export interface ITtscEvidenceGraphClaimBase<Type extends string> {
    * is where every population resolved before this property existed.
    *
    * The value names one directory, never a glob. It may sit inside the project,
-   * above it (`../../docs`), or on an absolute path. A drive-relative Windows
-   * path such as `C:docs` is refused, because it resolves against whatever
-   * directory that drive currently sits on rather than against a stable base.
+   * above it (`../../docs`), or on an absolute path, and it may itself be a
+   * symbolic link or a Windows junction to a directory, which is read through.
+   * A drive-relative Windows path such as `C:docs` is refused, because it
+   * resolves against whatever directory that drive currently sits on rather
+   * than against a stable base.
    *
-   * Diagnostics name the resolved base, and the resolved patterns are published
-   * to the `ttsc` host as watched inputs.
+   * A diagnostic that asks you to correct this property quotes the spelling you
+   * declared, while a file location beside it is spelled the way you would open
+   * the file. The resolved patterns are published to the `ttsc` host as watched
+   * inputs.
    */
   root?: string;
 
