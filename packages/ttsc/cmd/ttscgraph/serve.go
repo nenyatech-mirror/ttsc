@@ -118,6 +118,21 @@ type serveRequest struct {
   // GraphSnapshotVersion opts into the incremental shard protocol. Omitted
   // requests retain the full-dump response for existing @ttsc/graph clients.
   GraphSnapshotVersion int `json:"graphSnapshotVersion,omitempty"`
+  // Artifacts is the path to the set a plugin published for this request, which
+  // the client re-derives when the documents or lint configuration behind it
+  // moved. It rides every request rather than only the changed ones: the client
+  // is the only side that can see those inputs, and the server is the only side
+  // that knows what it last applied, so the honest exchange is the client
+  // stating what it currently has and the server comparing it with its own.
+  //
+  // Three states, which is why it is a pointer. Absent is a client with no
+  // opinion — one predating this field, or one driving a session through the
+  // startup flag — and the set already applied stands. Empty is a client
+  // stating it now has none, which withdraws that set: a project whose
+  // publisher was removed must stop being answered with its artifacts, and
+  // without a way to say so it would be answered with them until the editor
+  // restarted. A path is the set to apply.
+  Artifacts *string `json:"artifacts,omitempty"`
 }
 
 type serveResponse struct {
@@ -161,12 +176,28 @@ func errorResponse(id int, message string) serveResponse {
 type graphSession struct {
   cwd      string
   tsconfig string
-  // artifacts is the set a plugin published, read once at startup. It is a
-  // second producer's facts about documents this Program never read, so a
-  // refresh of it is not a refresh of the graph: editing a Markdown heading
-  // moves the artifact and not one compiler fact, and the two invalidations are
-  // therefore separate questions. Only the first is answered today.
-  artifacts    []graph.Artifact
+  // artifacts is the set a plugin published: a second producer's facts about
+  // documents this Program never read. Refreshing it is therefore not a refresh
+  // of the graph — editing a Markdown heading moves the artifact and not one
+  // compiler fact — so the two invalidations stay separate questions, and this
+  // one is answered by adoptArtifacts rather than by the build universe.
+  artifacts []graph.Artifact
+  // artifactsDigest is the content of the set currently applied. Content, and
+  // not the path or its modification time: the client overwrites one file per
+  // process and project, so the path never moves for a given session, and a
+  // republish triggered by a document whose headings did not actually change
+  // writes the same bytes and must therefore cost nothing.
+  artifactsDigest [sha256.Size]byte
+  // artifactsFile and artifactsStat are what the digest was taken from, kept so
+  // an unchanged file need not be read at all. The set is one entry per
+  // document section, model field, and operation, so it is bounded by the
+  // project's documentation rather than by anything small — and this comparison
+  // runs before every graph request, where reading and hashing that whole file
+  // to learn it did not move is the kind of cost a resident session pays
+  // forever.
+  artifactsFile string
+  artifactsStat artifactsFileState
+
   compiler     *driver.Session
   configHashes map[string][sha256.Size]byte
   auxStates    map[string]diskState
@@ -186,10 +217,12 @@ type graphSession struct {
   graphStore              *serveGraphStore
   requestProtocol         int
   requestProtocolSelected bool
-  // pending remembers a generation whose state was captured but whose selected
-  // projection failed. Until an input change lets the session rebuild, an
-  // unchanged request retries the same full or partial invalidation instead of
-  // falsely confirming the older client graph.
+  // pending remembers work the next request owes regardless of what the build
+  // universe says: a generation whose state was captured but whose selected
+  // projection failed, or an artifact set adopted after the graph carrying the
+  // previous one was built. Until it is discharged, an otherwise unchanged
+  // request retries the recorded invalidation instead of falsely confirming the
+  // older client graph.
   pending *graphChange
 }
 
@@ -211,6 +244,105 @@ func newGraphSessionWithArtifacts(
     return nil, err
   }
   return session, nil
+}
+
+// adoptArtifacts makes what the request states the set this session applies,
+// and reports whether that replaced a set some already-built graph carries.
+//
+// A nil statement is a client with no opinion, and the set already applied
+// stands: dropping it on the say-so of a client that never mentioned artifacts
+// would delete them from the graph of every session driven through the startup
+// flag alone.
+//
+// A read failure is returned rather than swallowed. The client wrote this file
+// moments ago and named it in the same request, so a file that cannot be read
+// is a broken exchange, not a project without artifacts — and answering with a
+// silently artifact-free graph would look exactly like a correct answer.
+func (s *graphSession) adoptArtifacts(named *string) (bool, error) {
+  if named == nil {
+    return false, nil
+  }
+  path := strings.TrimSpace(*named)
+  if path == "" {
+    return s.applyArtifacts(nil, withdrawnArtifactsDigest), nil
+  }
+  stat, err := os.Stat(path)
+  if err != nil {
+    return false, err
+  }
+  state := artifactsFileState{size: stat.Size(), modTime: stat.ModTime().UnixNano()}
+  if path == s.artifactsFile && state == s.artifactsStat {
+    return false, nil
+  }
+  // One read, hashed and decoded from the same bytes. Reading twice would let
+  // an overwrite land between them and leave this session recording an identity
+  // for a set it is not holding — after which a later request naming the file
+  // it recorded would be answered as unchanged.
+  contents, err := os.ReadFile(path)
+  if err != nil {
+    return false, err
+  }
+  next, err := graph.ParseArtifacts(contents)
+  if err != nil {
+    return false, err
+  }
+  s.artifactsFile = path
+  s.artifactsStat = state
+  return s.applyArtifacts(next, sha256.Sum256(contents)), nil
+}
+
+// artifactsFileState is what an unchanged published file looks like from the
+// outside: size and modification time, never contents. It exists only to decide
+// whether the file is worth reading, and the digest taken from those contents is
+// still what decides whether the set is worth applying.
+type artifactsFileState struct {
+  size int64
+  // modTime is nanoseconds since the epoch rather than a time.Time, so the
+  // struct compares with == and means it. A time.Time carries a location
+  // pointer and an optional monotonic reading, and comparing two of those with
+  // == is a well-known way to get a false inequality that reads as a changed
+  // file forever.
+  modTime int64
+}
+
+// applyArtifacts installs a set and reports whether it differs from the applied
+// one. The first application of a session reports a change like any other and
+// costs nothing: no graph has been projected yet, so the invalidation it
+// records is discharged by the initial projection that was going to happen
+// regardless.
+func (s *graphSession) applyArtifacts(next []graph.Artifact, digest [sha256.Size]byte) bool {
+  if digest == s.artifactsDigest {
+    return false
+  }
+  s.artifacts = next
+  s.artifactsDigest = digest
+  return true
+}
+
+// withdrawnArtifactsDigest stands for "the client states it has none".
+//
+// A constant rather than the hash of an empty file, so that the withdrawn state
+// and a file whose contents happen to hash to the same value cannot be confused
+// — and domain-separated so it is not the digest of anything a producer writes.
+var withdrawnArtifactsDigest = sha256.Sum256([]byte("ttscgraph:artifacts:none"))
+
+// invalidateArtifacts records that the next projection must be a full one.
+//
+// Full, because replacing the published set is not a per-file delta: it moves
+// the artifact nodes and every citation edge into them at once, and the
+// incremental path is built to answer a different question — which sources
+// changed. It happens to reach the same answer here, through the closure
+// expansion that pulls a citing source back in, but that is a property of
+// machinery aimed elsewhere and not a guarantee this depends on.
+//
+// Full, but not a reload: the Program is reused untouched, because no compiler
+// input moved. That is the whole point of keeping documents out of the build
+// universe — a Markdown edit costs one projection, never one typecheck.
+func (s *graphSession) invalidateArtifacts() {
+  if s.pending != nil && s.pending.full {
+    return
+  }
+  s.pending = &graphChange{mode: serveModeRebuild, full: true}
 }
 
 func (s *graphSession) Close() error {
@@ -1040,6 +1172,18 @@ func serveSnapshotsWithArtifacts(
     }
     session.requestProtocol = request.GraphSnapshotVersion
     session.requestProtocolSelected = true
+    if replaced, err := session.adoptArtifacts(request.Artifacts); err != nil {
+      if err := encodeServeResponseWithTrace(encoder, errorResponse(
+        request.ID,
+        fmt.Sprintf("ttscgraph: could not read the published artifacts: %v", err),
+      ), requestStarted, loadDuration, 0, 0); err != nil {
+        fmt.Fprintf(stderr, "ttscgraph: write serve response: %v\n", err)
+        return 1
+      }
+      continue
+    } else if replaced {
+      session.invalidateArtifacts()
+    }
     var dump *graph.Dump
     var snapshot *serveGraphSnapshot
     var mode string

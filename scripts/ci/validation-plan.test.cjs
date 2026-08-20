@@ -101,6 +101,17 @@ test("a leaf package selects shared quality and its own executor", () => {
     ids(["benchmarks/evidence/src/EvidenceBenchmarkWorkspace.ts"]),
     ["typecheck", "evidence"],
   );
+  // `tests/test-evidence` drives a resident graph session over a real evidence
+  // project, and that is the only place the chain from a rule's published units
+  // to a graph node runs end to end. Its failure mode is an empty answer, which
+  // is also what a correct project with no publisher produces, so no other lane
+  // can tell the two apart — the mapping is pinned rather than left to whoever
+  // next tidies the graph entry.
+  assert.deepEqual(ids(["packages/graph/src/index.ts"]), [
+    "typecheck",
+    "graph",
+    "evidence",
+  ]);
   // The two ttsc harnesses have their own workflow and no lane in this plan.
   // Without an explicit skip they fall through to the unknown-input branch and
   // every graph edit silently plans full CI, which reads as a flake rather
@@ -365,6 +376,16 @@ test("lane identities and workflow matrix names stay unique", () => {
   assert.equal(PLATFORM_TARGETS["plugin-cache"], "ttsc");
   assert.equal(PLATFORM_TARGETS["test-packages"], "ttsc");
   assert.equal(PLATFORM_TARGETS["test-graph"], "ttsc,ttscgraph");
+  // The evidence suite is the only one that drives a resident graph session
+  // over a real evidence project, and it resolves both the package's built lib
+  // and the native binary at runtime. Neither is inferable from the suite's
+  // name, and dropping either fails the case with a module-resolution error
+  // rather than with anything about the graph.
+  assert.equal(PLATFORM_TARGETS["test-evidence"], "ttsc,ttscgraph");
+  assert.ok(
+    SCOPES["test-evidence"].includes("@ttsc/graph"),
+    "evidence defenses drive a resident graph session and need its built lib",
+  );
   for (const prerequisite of [
     "@ttsc/factory",
     "@ttsc/banner",
