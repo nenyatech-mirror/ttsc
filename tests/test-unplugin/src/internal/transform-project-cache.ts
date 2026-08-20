@@ -69,6 +69,17 @@ interface ICacheProjectOptions {
   graphCandidates?: number;
   graphGlobals?: number;
   /**
+   * Stamp one extra resolution candidate at this absolute spelling, which the
+   * caller places outside the project root.
+   *
+   * The bound the absent-candidate watch declines at: the chain that proves a
+   * candidate absent stops at the project's own root, so a spelling that leaves
+   * the subtree before reaching it cannot be covered and is not claimed at all.
+   * Only an absolute path exercises it, since a project-relative one can never
+   * leave.
+   */
+  outOfProjectCandidate?: string;
+  /**
    * Project-relative path the fixture transform writes while the compile runs,
    * for a file that is not an input of that compile (a build log, a coverage
    * report, a framework's generated artifact). It must not cost the
@@ -342,6 +353,451 @@ async function assertAppearingCandidateInvalidatesGeneration(): Promise<void> {
   fs.writeFileSync(candidate, "export const superseding = 1;\n", "utf8");
   await deliver(modules[1]!);
   assert.equal(fs.readFileSync(project.runLog, "utf8").length, 2);
+}
+
+/**
+ * Asserts samchon/ttsc#1272: a membership change made between two deliveries is
+ * seen by the second one.
+ *
+ * This is what the mutation-settle barrier exists for. A write returns before
+ * its watch event is applied, so a delivery that read the tracker's verdict
+ * immediately would validate against a watcher that had not been told, and
+ * serve a generation the new file already invalidated. The barrier used to be a
+ * fixed wait guessing at that crossing; it is now the watcher's own
+ * acknowledgement, and this case pins that the guarantee did not move with it.
+ *
+ * 1. Deliver one module so the generation is captured.
+ * 2. Write a new source file into the project, synchronously.
+ * 3. Deliver another module and assert the project was recompiled.
+ */
+async function assertSynchronousMembershipChangeReachesTheNextDelivery(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const project = createCacheProject({ fileCount: 4, graphFanout: 2 });
+  const cache = createTtscTransformCache();
+  const modules = projectModules(project.root);
+  const options = resolveOptions();
+  const deliver = async (file: string): Promise<void> => {
+    const result = await transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(result, `expected transformed output for ${file}`);
+  };
+
+  await deliver(modules[0]!);
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+
+  fs.writeFileSync(
+    path.join(project.root, "src", "added.ts"),
+    'export const added: string = "PROBE";\n',
+    "utf8",
+  );
+  await deliver(modules[1]!);
+
+  assert.equal(
+    fs.readFileSync(project.runLog, "utf8").length,
+    2,
+    "a file created between two deliveries must reach the watcher before the second one validates",
+  );
+}
+
+/**
+ * Asserts a candidate whose spelling leaves the project subtree is still
+ * probed.
+ *
+ * The negative twin of the notification proof at the boundary it declines at.
+ * The chain that proves an absent candidate stops at the project's own root:
+ * above that line the components belong to the machine rather than the project,
+ * and a link along the part outside the subtree could move the candidate's
+ * answer with nothing inside the bound to report it. Such a candidate therefore
+ * keeps the probe it always had, and claiming it anyway would serve a
+ * generation the appearance already superseded (samchon/ttsc#1261).
+ *
+ * 1. Stamp one candidate at an absolute spelling outside the project root, with
+ *    watch registration left working so only the bound decides.
+ * 2. Deliver one module to capture the generation, then reset the counters.
+ * 3. Deliver the rest and assert that spelling was checked every time.
+ */
+async function assertOutOfProjectCandidateIsStillProbed(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const outside = path.join(
+    TestProject.tmpdir("ttsc-unplugin-outside-candidate-"),
+    "index.ts",
+  );
+  const project = createCacheProject({
+    fileCount: 4,
+    graphFanout: 4,
+    outOfProjectCandidate: outside,
+  });
+  const probes = { calls: 0 };
+  const count = (location: string): void => {
+    if (path.resolve(location) === path.resolve(outside)) probes.calls += 1;
+  };
+  const cache = createTtscTransformCache({
+    exists: (location: string) => {
+      count(location);
+      return fs.existsSync(location);
+    },
+    lstat: (location: string) => {
+      count(location);
+      return fs.lstatSync(location, { bigint: true });
+    },
+    readFile: (location: string) => {
+      count(location);
+      return fs.readFileSync(location);
+    },
+    stat: (location: string) => {
+      count(location);
+      return fs.statSync(location);
+    },
+    statBigInt: (location: string) => {
+      count(location);
+      return fs.statSync(location, { bigint: true });
+    },
+  });
+  const modules = projectModules(project.root);
+  const options = resolveOptions();
+  const deliver = async (file: string): Promise<void> => {
+    const result = await transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(result, `expected transformed output for ${file}`);
+  };
+
+  await deliver(modules[0]!);
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+
+  probes.calls = 0;
+  for (const file of modules.slice(1)) {
+    await deliver(file);
+  }
+
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+  assert.ok(
+    probes.calls > 0,
+    "a candidate outside the project subtree must keep being checked on the filesystem",
+  );
+}
+
+/**
+ * Asserts a candidate whose watch could not be opened is still probed.
+ *
+ * The bound samchon/ttsc#1261 rests on: only a candidate the tracker actually
+ * covers may skip its own check. A host that refuses watch registrations —
+ * inotify exhausted, a network filesystem, a sandbox — has no notification to
+ * offer, so the delivery must go back to asking the filesystem rather than
+ * trusting a channel that was never opened.
+ *
+ * 1. Build a project whose envelope stamps missing candidates, with a cache whose
+ *    watch registration always fails.
+ * 2. Deliver one module to capture the generation, then reset the counters.
+ * 3. Deliver the rest and assert the candidate paths were checked.
+ */
+async function assertUnwatchedAbsentCandidateIsStillProbed(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const graphCandidates = 3;
+  const project = createCacheProject({
+    fileCount: 4,
+    graphCandidates,
+    graphFanout: 4,
+  });
+  const candidates = new Set(
+    Array.from({ length: graphCandidates }, (_, index) =>
+      path.resolve(
+        path.join(project.root, "node_modules", `dep${index}`, "index.ts"),
+      ),
+    ),
+  );
+  const probes = { calls: 0 };
+  const count = (location: string): void => {
+    if (candidates.has(path.resolve(location))) probes.calls += 1;
+  };
+  const cache = createTtscTransformCache({
+    exists: (location: string) => {
+      count(location);
+      return fs.existsSync(location);
+    },
+    lstat: (location: string) => {
+      count(location);
+      return fs.lstatSync(location, { bigint: true });
+    },
+    readFile: (location: string) => {
+      count(location);
+      return fs.readFileSync(location);
+    },
+    stat: (location: string) => {
+      count(location);
+      return fs.statSync(location);
+    },
+    statBigInt: (location: string) => {
+      count(location);
+      return fs.statSync(location, { bigint: true });
+    },
+    watch: () => {
+      const error = new Error(
+        "watch registration refused",
+      ) as NodeJS.ErrnoException;
+      error.code = "ENOSPC";
+      throw error;
+    },
+  });
+  const modules = projectModules(project.root);
+  const options = resolveOptions();
+  const deliver = async (file: string): Promise<void> => {
+    const result = await transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(result, `expected transformed output for ${file}`);
+  };
+
+  await deliver(modules[0]!);
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+
+  probes.calls = 0;
+  for (const file of modules.slice(1)) {
+    await deliver(file);
+  }
+
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+  assert.ok(
+    probes.calls > 0,
+    "a candidate no watcher covers must still be checked on the filesystem",
+  );
+}
+
+/**
+ * Asserts a candidate's directory being replaced still invalidates.
+ *
+ * The case the chain watch exists for beside the retarget: a package manager
+ * removes `node_modules/<package>` and lays a new tree down in its place, and
+ * the new tree carries a spelling the resolver would now prefer. The watch the
+ * candidate itself opened dies with the directory it was opened on, and a dead
+ * watch reports nothing, so only the name being watched in the _parent_ says
+ * that anything happened (samchon/ttsc#1261).
+ *
+ * 1. Create the candidate's directory empty, so the candidate is absent through a
+ *    directory that exists and carries no realized input.
+ * 2. Deliver one module to capture the generation.
+ * 3. Remove that directory and recreate it with the candidate inside, then assert
+ *    the next delivery recompiled.
+ */
+async function assertRecreatedCandidateDirectoryInvalidatesGeneration(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  // Fanout 1 keeps every realized edge target under `dep0`; the second
+  // candidate points at `dep1`, which the fixture never creates, so the
+  // directory below is the only thing between the candidate and its answer.
+  const project = createCacheProject({
+    fileCount: 3,
+    graphCandidates: 2,
+    graphFanout: 1,
+  });
+  const directory = path.join(project.root, "node_modules", "dep1");
+  fs.mkdirSync(directory, { recursive: true });
+
+  const cache = createTtscTransformCache();
+  const modules = projectModules(project.root);
+  const options = resolveOptions();
+  const deliver = async (file: string): Promise<void> => {
+    const result = await transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(result, `expected transformed output for ${file}`);
+  };
+
+  await deliver(modules[0]!);
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+
+  fs.rmSync(directory, { force: true, recursive: true });
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "index.ts"),
+    "export const superseding = 1;\n",
+    "utf8",
+  );
+  await deliver(modules[1]!);
+
+  assert.equal(
+    fs.readFileSync(project.runLog, "utf8").length,
+    2,
+    "replacing the directory a candidate lives in must replace the generation",
+  );
+}
+
+/**
+ * Asserts an absent candidate reached through a link still invalidates when the
+ * link is retargeted.
+ *
+ * The proof samchon/ttsc#1261 rests on is a watcher, and a watcher opened on a
+ * spelling that traverses a link follows it to a physical directory:
+ * retargeting the link moves the answer without touching what is watched. That
+ * is the pnpm layout exactly, where `node_modules/<package>` is a link into a
+ * store, so a reinstall makes a superseding candidate appear behind a watch
+ * still looking at the old store directory. Watching each component of the
+ * spelling by the name it carries in its own parent is what reports it.
+ *
+ * 1. Point a candidate's directory at an empty target through a link, so no
+ *    realized input lives under it and only the candidate is at stake.
+ * 2. Deliver one module to capture the generation.
+ * 3. Retarget the link at a directory that does carry the candidate, and assert
+ *    the next delivery recompiled.
+ */
+async function assertRetargetedCandidateLinkInvalidatesGeneration(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  // Fanout 1 keeps every realized edge target under `dep0`, while the second
+  // candidate points at `dep1`, which the fixture never creates: the link below
+  // is therefore the only thing standing between the candidate and its answer.
+  const project = createCacheProject({
+    fileCount: 3,
+    graphCandidates: 2,
+    graphFanout: 1,
+  });
+  const store = TestProject.tmpdir("ttsc-unplugin-candidate-store-");
+  const before = path.join(store, "before");
+  const after = path.join(store, "after");
+  fs.mkdirSync(before, { recursive: true });
+  fs.mkdirSync(after, { recursive: true });
+  fs.writeFileSync(
+    path.join(after, "index.ts"),
+    "export const superseding = 1;\n",
+    "utf8",
+  );
+  const link = path.join(project.root, "node_modules", "dep1");
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(before, link, "junction");
+
+  const cache = createTtscTransformCache();
+  const modules = projectModules(project.root);
+  const options = resolveOptions();
+  const deliver = async (file: string): Promise<void> => {
+    const result = await transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(result, `expected transformed output for ${file}`);
+  };
+
+  await deliver(modules[0]!);
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+
+  fs.rmSync(link, { force: true, recursive: true });
+  fs.symlinkSync(after, link, "junction");
+  await deliver(modules[1]!);
+
+  assert.equal(
+    fs.readFileSync(project.runLog, "utf8").length,
+    2,
+    "retargeting the link a candidate is reached through must replace the generation",
+  );
+}
+
+/**
+ * Asserts samchon/ttsc#1261: a delivery stops probing an absent resolution
+ * candidate the generation's watcher already covers.
+ *
+ * A missing candidate is the one input no proof can be memoized for. Its
+ * metadata cannot be read, so the signature that stands in for every other
+ * input's comparison never applies, and each delivery that reaches it probes
+ * the filesystem again — `modules x candidates` for one build, and the only
+ * per-delivery filesystem work a declaring producer has left. Watching the name
+ * answers it once for the whole generation instead, through the channel that
+ * already proves project membership.
+ *
+ * 1. Build a project whose envelope stamps missing candidates.
+ * 2. Deliver one module so the generation is captured, then reset the counters.
+ * 3. Deliver the remaining modules and assert nothing touched a candidate path.
+ */
+async function assertNotifiedAbsentCandidateIsNotReprobed(): Promise<void> {
+  const { createTtscTransformCache, resolveOptions, transformTtsc } =
+    await TestUnpluginRuntime.loadUnpluginApi();
+  const graphCandidates = 3;
+  const project = createCacheProject({
+    fileCount: 4,
+    graphCandidates,
+    graphFanout: 4,
+  });
+  const candidates = new Set(
+    Array.from({ length: graphCandidates }, (_, index) =>
+      path.resolve(
+        path.join(project.root, "node_modules", `dep${index}`, "index.ts"),
+      ),
+    ),
+  );
+  const probes = { calls: 0 };
+  const count = (location: string): void => {
+    if (candidates.has(path.resolve(location))) probes.calls += 1;
+  };
+  const cache = createTtscTransformCache({
+    exists: (location: string) => {
+      count(location);
+      return fs.existsSync(location);
+    },
+    lstat: (location: string) => {
+      count(location);
+      return fs.lstatSync(location, { bigint: true });
+    },
+    readFile: (location: string) => {
+      count(location);
+      return fs.readFileSync(location);
+    },
+    stat: (location: string) => {
+      count(location);
+      return fs.statSync(location);
+    },
+    statBigInt: (location: string) => {
+      count(location);
+      return fs.statSync(location, { bigint: true });
+    },
+  });
+  const modules = projectModules(project.root);
+  const options = resolveOptions();
+  const deliver = async (file: string): Promise<void> => {
+    const result = await transformTtsc(
+      file,
+      fs.readFileSync(file, "utf8"),
+      options,
+      undefined,
+      cache,
+    );
+    assert.ok(result, `expected transformed output for ${file}`);
+  };
+
+  await deliver(modules[0]!);
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+
+  probes.calls = 0;
+  for (const file of modules.slice(1)) {
+    await deliver(file);
+  }
+
+  assert.equal(fs.readFileSync(project.runLog, "utf8").length, 1);
+  assert.equal(
+    probes.calls,
+    0,
+    "a candidate the generation watches must cost no filesystem call per delivery",
+  );
 }
 
 /**
@@ -2549,6 +3005,7 @@ function createCacheProject(options: ICacheProjectOptions): {
               graphFanout: options.graphFanout ?? 0,
               graphGlobals: options.graphGlobals ?? 0,
               graphCandidates: options.graphCandidates ?? 0,
+              outOfProjectCandidate: options.outOfProjectCandidate ?? "",
               nonInputRaceFile: options.nonInputRaceFile ?? "",
               unhashedGraphInput: options.unhashedGraphInput === true,
               unprovenGraphInput: options.unprovenGraphInput === true,
@@ -2873,13 +3330,17 @@ function writeGoPlugin(root: string): void {
       // therefore never read, so no compiler proof exists for them. The host
       // enumerates them speculatively (driver/resolution_candidates.go), which
       // is why addGraphInputProof is deliberately not called here.
-      '    if probes := int(numberValue(cfg, "graphCandidates")); probes > 0 {',
+      '    outside := stringValue(cfg, "outOfProjectCandidate")',
+      '    if probes := int(numberValue(cfg, "graphCandidates")); probes > 0 || outside != "" {',
       "      result.Graph.Candidates = map[string][]string{}",
       "      for _, name := range names {",
-      "        spellings := make([]string, 0, probes)",
+      "        spellings := make([]string, 0, probes+1)",
       "        for j := 0; j < probes; j++ {",
       '          spellings = append(spellings, fmt.Sprintf("node_modules/dep%d/index.ts", j))',
       "        }",
+      // An absolute spelling outside the project root, which the adapter keeps
+      // probing because no watch of its chain can stay inside the bound.
+      '        if outside != "" { spellings = append(spellings, outside) }',
       '        result.Graph.Candidates["src/"+name] = spellings',
       "      }",
       "    }",
@@ -2959,6 +3420,12 @@ export {
   projectModules,
   assertCacheHitsDespiteOutOfWalkOutputKey,
   assertAppearingCandidateInvalidatesGeneration,
+  assertNotifiedAbsentCandidateIsNotReprobed,
+  assertOutOfProjectCandidateIsStillProbed,
+  assertRecreatedCandidateDirectoryInvalidatesGeneration,
+  assertRetargetedCandidateLinkInvalidatesGeneration,
+  assertUnwatchedAbsentCandidateIsStillProbed,
+  assertSynchronousMembershipChangeReachesTheNextDelivery,
   assertCacheTransformsMultiFileProjectOnce,
   assertNonInputWriteDuringCompileKeepsGeneration,
   assertUnprovenCandidatesKeepOneCompile,

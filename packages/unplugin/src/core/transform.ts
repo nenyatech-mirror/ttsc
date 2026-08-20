@@ -56,6 +56,27 @@ interface TtscProjectDirectorySnapshot {
 /** Generation-scoped directory watchers used to detect membership changes. */
 interface TtscProjectMutationTracker {
   close: () => void;
+  /**
+   * Absolute spellings whose creation, change or removal this tracker would
+   * report, when it watches exact names rather than whole directories.
+   *
+   * A validation that finds an input here needs no filesystem call of its own:
+   * the tracker is the evidence, and every path that leaves this set falls back
+   * to being proven by hand. Empty for a tracker that watches directories as a
+   * whole, which cannot answer for one name.
+   */
+  covered?: ReadonlySet<string>;
+  /**
+   * Wait until every event this tracker's watcher has already dispatched has
+   * been applied to it.
+   *
+   * An in-process watcher drains on the next macrotask turn, because its
+   * callbacks are already queued on this loop. A watcher living in the Windows
+   * broker drains by round-trip instead: the child replies after its own turn,
+   * and IPC preserves order, so the reply cannot overtake an event the child
+   * had already sent (samchon/ttsc#1272).
+   */
+  drain?: () => Promise<void>;
   failed: boolean;
   membershipChanged: boolean;
   settle?: Promise<void>;
@@ -132,6 +153,24 @@ export interface TtscCachedProjectTransform {
   projectDirectories?: TtscProjectDirectorySnapshot[];
   /** Live notification state for universal host-input changes. */
   hostInputMutationTracker?: TtscProjectMutationTracker;
+  /**
+   * Live notification state for the generation's absent resolution candidates
+   * and the directories that carry them.
+   *
+   * Separate from the universal-input tracker because it listens for a
+   * different thing. Every event that can make an absent candidate present is a
+   * rename — the file appearing, a component of the path being created,
+   * replaced, or retargeted — so a change event on one of these names is never
+   * evidence this tracker exists to collect. What it is, on a backend that
+   * reports a write below a directory as a change to that directory's own entry
+   * (Windows does), is a dev server's steady traffic: listening for every event
+   * would replace the generation each time a bundler wrote inside
+   * `node_modules`. The filter therefore drops noise without dropping proof.
+   * The one appearance it cannot see is a Windows junction retargeted in place
+   * through `FSCTL_SET_REPARSE_POINT`, which no mainstream tool does; every
+   * package manager replaces the entry instead, which is a rename.
+   */
+  candidateMutationTracker?: TtscProjectMutationTracker;
   /**
    * Universal descriptor/config inputs proven once at generation time, then by
    * metadata.
@@ -603,9 +642,11 @@ function disposeCachedTransform(cached: TtscCachedProjectTransform): void {
   const trackers = [
     cached.projectMutationTracker,
     cached.hostInputMutationTracker,
+    cached.candidateMutationTracker,
   ];
   cached.projectMutationTracker = undefined;
   cached.hostInputMutationTracker = undefined;
+  cached.candidateMutationTracker = undefined;
   for (const tracker of trackers) tracker?.close();
 }
 
@@ -1588,6 +1629,14 @@ function matchesProvenInput(
   if (slot === undefined) {
     return matchesRecordedInput(cached, input);
   }
+  if (slot.recorded === MISSING_INPUT_STATE && notifiesAbsence(cached, input)) {
+    // The generation's watcher holds this exact name, and the caller already
+    // established that neither tracker failed and neither reported a change.
+    // The path is therefore still absent, proven by the same channel that
+    // proves project membership, and probing it again would only repeat what
+    // the notification already answered.
+    return true;
+  }
   const filesystem = resultFilesystem(cached.result);
   const before = inputMetadataEvidence(input, filesystem);
   if (before !== undefined && slot.signatures[slot.key] === before.signature) {
@@ -1610,6 +1659,26 @@ function matchesProvenInput(
     delete slot.signatures[slot.key];
   }
   return true;
+}
+
+/**
+ * Report whether the generation's live watcher would announce a creation at
+ * this absent input's exact spelling.
+ *
+ * Losing the watcher is not evidence of anything, so a failed tracker sends the
+ * input back to being probed by hand, exactly as a failed tracker already sends
+ * the whole generation back to complete-snapshot validation.
+ */
+function notifiesAbsence(
+  cached: TtscCachedProjectTransform,
+  input: string,
+): boolean {
+  const tracker = cached.candidateMutationTracker;
+  return (
+    tracker !== undefined &&
+    !tracker.failed &&
+    tracker.covered?.has(path.resolve(input)) === true
+  );
 }
 
 /**
@@ -2835,7 +2904,9 @@ async function createProjectMutationTracker(
 /** Watch exact universal inputs, or their nearest existing parent if missing. */
 async function createHostInputMutationTracker(
   inputs: readonly string[],
-  filesystem: TtscTransformFilesystemOperations = DEFAULT_FILESYSTEM_OPERATIONS,
+  filesystem: TtscTransformFilesystemOperations,
+  covered: ReadonlySet<string>,
+  events: "all" | "rename" = "all",
 ): Promise<TtscProjectMutationTracker> {
   const identities = createHostPathIdentityContext(filesystem);
   const namesByDirectory = new Map<
@@ -2869,6 +2940,13 @@ async function createHostInputMutationTracker(
   }));
   const tracker: TtscProjectMutationTracker = {
     close: () => undefined,
+    // Coverage is the caller's claim, and it is required rather than derived
+    // from the input list: an input is watched by its exact name here, but only
+    // the caller knows whether the path leading to it is watched as well, which
+    // is what a later validation needs before it trusts the watcher instead of
+    // probing the path again. Deriving it here would hand that claim to every
+    // future caller by default (samchon/ttsc#1261).
+    covered,
     failed: false,
     membershipChanged: false,
   };
@@ -2876,7 +2954,7 @@ async function createHostInputMutationTracker(
     await registerWindowsProjectMutationTracker(
       tracker,
       locations,
-      true,
+      events === "all",
       filesystem,
     );
     return tracker;
@@ -2894,7 +2972,10 @@ async function createHostInputMutationTracker(
         openDirectoryWatch(
           filesystem,
           location.directory,
-          (_eventType, filename) => {
+          (eventType, filename) => {
+            if (events === "rename" && eventType !== "rename") {
+              return;
+            }
             const reported =
               filename === null
                 ? null
@@ -2917,7 +2998,12 @@ async function createHostInputMutationTracker(
 
 interface WindowsProjectMutationBroker {
   child: ChildProcess;
+  /** Round-trips awaiting the child's reply, by request id. */
+  drains: Map<number, () => void>;
+  /** The acknowledgement currently in flight, shared by every waiter. */
+  draining?: Promise<void>;
   nextId: number;
+  pendingDrains: number;
   pendingRegistrations: number;
   trackers: Map<
     number,
@@ -2970,6 +3056,7 @@ async function registerWindowsProjectMutationTracker(
     resolveReady = resolve;
   });
   broker.trackers.set(id, { ready: resolveReady, tracker });
+  tracker.drain = () => drainWindowsProjectMutationBroker(broker);
   tracker.close = () => {
     const active = broker.trackers.get(id);
     if (active === undefined) return;
@@ -2994,7 +3081,11 @@ async function registerWindowsProjectMutationTracker(
     await ready;
   } finally {
     broker.pendingRegistrations -= 1;
-    if (broker.pendingRegistrations === 0) {
+    // `ref`/`unref` is a flag rather than a counter, so this must not clear a
+    // reference an in-flight acknowledgement is holding: a delivery waiting on
+    // a reply over an unreferenced channel lets the loop empty and the process
+    // exit mid-build.
+    if (broker.pendingRegistrations === 0 && broker.pendingDrains === 0) {
       broker.child.unref();
       broker.child.channel?.unref();
     }
@@ -3011,7 +3102,9 @@ function getWindowsProjectMutationBroker(): WindowsProjectMutationBroker {
   });
   const broker: WindowsProjectMutationBroker = {
     child,
+    drains: new Map(),
     nextId: 1,
+    pendingDrains: 0,
     pendingRegistrations: 0,
     trackers: new Map(),
   };
@@ -3021,6 +3114,11 @@ function getWindowsProjectMutationBroker(): WindowsProjectMutationBroker {
       registration.ready();
     }
     broker.trackers.clear();
+    // A broker that died answers no round-trip. Release every waiter instead of
+    // stalling the deliveries behind them; their trackers are failed now, so
+    // validation falls back to proving the generation from its own state.
+    for (const release of broker.drains.values()) release();
+    broker.drains.clear();
     if (windowsProjectMutationBroker === broker) {
       windowsProjectMutationBroker = undefined;
     }
@@ -3030,11 +3128,20 @@ function getWindowsProjectMutationBroker(): WindowsProjectMutationBroker {
   child.on("message", (message: unknown) => {
     if (message === null || typeof message !== "object") return;
     const record = message as {
+      drained?: boolean;
       failed?: boolean;
       id?: number;
       ready?: boolean;
     };
     if (typeof record.id !== "number") return;
+    if (record.drained === true) {
+      // Every event the child had already sent arrived before this reply, since
+      // one IPC channel delivers in order.
+      const release = broker.drains.get(record.id);
+      broker.drains.delete(record.id);
+      release?.();
+      return;
+    }
     const registration = broker.trackers.get(record.id);
     if (registration === undefined) return;
     if (record.failed === true) registration.tracker.failed = true;
@@ -3047,10 +3154,78 @@ function getWindowsProjectMutationBroker(): WindowsProjectMutationBroker {
   return broker;
 }
 
+/**
+ * Ask the Windows broker to acknowledge, and resolve when it does.
+ *
+ * The child answers after a turn of its own loop, so a watch callback it had
+ * already queued has run, and the ordered IPC channel puts every message it
+ * sent before the reply ahead of the reply. That is the same proof an
+ * in-process watcher gets from a macrotask turn, rather than the fixed wait
+ * this replaces, which guessed at the crossing (samchon/ttsc#1272).
+ *
+ * A broker that never answers must not hold a delivery: the wait falls back to
+ * the previous fixed grace, after which validation proceeds against whatever
+ * the tracker knows, exactly as it did before.
+ */
+function drainWindowsProjectMutationBroker(
+  broker: WindowsProjectMutationBroker,
+): Promise<void> {
+  // Every tracker of a generation lives in one broker, so one acknowledgement
+  // answers for all of them. Sharing the in-flight round-trip keeps a settle to
+  // a single crossing.
+  broker.draining ??= startWindowsProjectMutationDrain(broker).finally(() => {
+    broker.draining = undefined;
+  });
+  return broker.draining;
+}
+
+function startWindowsProjectMutationDrain(
+  broker: WindowsProjectMutationBroker,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const id = broker.nextId++;
+    let settled = false;
+    const release = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      broker.drains.delete(id);
+      broker.pendingDrains -= 1;
+      if (broker.pendingDrains === 0 && broker.pendingRegistrations === 0) {
+        broker.child.unref();
+        broker.child.channel?.unref();
+      }
+      resolve();
+    };
+    // Hold the channel open while the acknowledgement is outstanding. The
+    // broker is unreferenced between requests so it never keeps a host alive,
+    // and a reply is the only thing this promise can be resolved by: without
+    // the reference the loop can empty while a delivery waits here, and the
+    // process exits mid-build with nothing to report.
+    broker.pendingDrains += 1;
+    broker.child.ref();
+    broker.child.channel?.ref();
+    const timer = setTimeout(release, WINDOWS_MUTATION_DRAIN_FALLBACK_MS);
+    broker.drains.set(id, release);
+    if (broker.child.send?.({ id, op: "drain" }) !== true) {
+      release();
+    }
+  });
+}
+
+/** The wait a broker that stopped answering degrades to. */
+const WINDOWS_MUTATION_DRAIN_FALLBACK_MS = 10;
+
 const WINDOWS_WATCH_BROKER_SOURCE = [
   'const fs = require("node:fs");',
   "const groups = new Map();",
   'process.on("message", (message) => {',
+  '  if (message.op === "drain") {',
+  // Two turns, not one: the first lets the loop poll for watch completions the
+  // kernel had already queued, the second answers after their callbacks ran.
+  "    setImmediate(() => setImmediate(() => process.send?.({ drained: true, id: message.id })));",
+  "    return;",
+  "  }",
   '  if (message.op === "remove") {',
   "    close(message.id);",
   "    return;",
@@ -3092,12 +3267,13 @@ const WINDOWS_WATCH_BROKER_SOURCE = [
 function reportsMembershipChange(cached: TtscCachedProjectTransform): boolean {
   return (
     cached.projectMutationTracker?.membershipChanged === true ||
-    cached.hostInputMutationTracker?.membershipChanged === true
+    cached.hostInputMutationTracker?.membershipChanged === true ||
+    cached.candidateMutationTracker?.membershipChanged === true
   );
 }
 
 /**
- * Report whether both live notifications can still prove membership. A watcher
+ * Report whether the live notifications can still prove membership. A watcher
  * that failed to register, or that errored after the generation was produced,
  * proves nothing either way — it never proves the generation stale.
  */
@@ -3112,13 +3288,34 @@ function notificationsProveMembership(
       return false;
     }
   }
-  return true;
+  // The candidate tracker is optional: a generation with no absent candidate
+  // opens none, and one that declined to watch them left the per-delivery probe
+  // in place. Only a tracker that exists and has failed withdraws the proof.
+  return cached.candidateMutationTracker?.failed !== true;
 }
 
 /**
- * Yield once before persistent validation so synchronous edits can reach the
- * directory watchers that guard membership. Concurrent sibling deliveries share
- * the same barrier.
+ * Yield to the loop the tracker's own watcher callbacks are queued on.
+ *
+ * Two turns for the same reason the broker takes two: the first gives the loop
+ * a poll phase for completions the kernel had already queued, the second runs
+ * after the callbacks they produced.
+ */
+function drainOnNextTurn(): Promise<void> {
+  return new Promise<void>((resolve) =>
+    setImmediate(() => setImmediate(resolve)),
+  );
+}
+
+/**
+ * Settle every notification the trackers' watchers have already dispatched,
+ * before persistent validation reads their verdict.
+ *
+ * A synchronous edit returns before its watch event is applied, so without this
+ * a delivery could validate against a tracker that has not been told yet. Each
+ * tracker drains through its own channel, which is a macrotask turn for a
+ * watcher on this loop and an ordered round-trip for one inside the Windows
+ * broker. Concurrent sibling deliveries share the barrier one of them started.
  */
 async function settleProjectMutationEvents(
   cached: TtscCachedProjectTransform,
@@ -3126,18 +3323,14 @@ async function settleProjectMutationEvents(
   const trackers = [
     cached.projectMutationTracker,
     cached.hostInputMutationTracker,
+    cached.candidateMutationTracker,
   ].filter(
     (tracker): tracker is TtscProjectMutationTracker => tracker !== undefined,
   );
   await Promise.all(
     trackers.map(async (tracker) => {
-      tracker.settle ??= new Promise<void>((resolve) => {
-        const settled = () => {
-          tracker.settle = undefined;
-          resolve();
-        };
-        if (process.platform === "win32") setTimeout(settled, 10);
-        else setImmediate(settled);
+      tracker.settle ??= (tracker.drain ?? drainOnNextTurn)().finally(() => {
+        tracker.settle = undefined;
       });
       await tracker.settle;
     }),
@@ -3393,6 +3586,175 @@ function selectExternalInputPaths(props: {
   return output;
 }
 
+/**
+ * The generation's resolution candidates that do not exist, so its host-input
+ * watcher can be told to announce their creation.
+ *
+ * A missing candidate is the one input class no proof can be memoized for: its
+ * metadata cannot be read, so the signature shortcut that stands in for every
+ * other input's comparison never applies, and every delivery that reaches it
+ * probes the filesystem again. Watching the name instead turns that repeated
+ * probe into one notification for the whole generation, using the same channel
+ * and the same failure rules the universal inputs already run under
+ * (samchon/ttsc#1261).
+ *
+ * Only absent candidates qualify. One that exists is validated by content and
+ * physical identity like any other input, and adding it here would replace the
+ * generation for a change that cannot affect a resolution the compiler already
+ * declined to take.
+ */
+function selectNotifiableAbsentInputs(props: {
+  filesystem: TtscTransformFilesystemOperations;
+  projectRoot: string;
+  result: ITtscCompilerTransformation;
+  temporaryTsconfig?: string;
+}): { candidates: string[]; watched: string[] } {
+  const empty = { candidates: [], watched: [] };
+  if (props.result.type === "exception") {
+    return empty;
+  }
+  const graph = props.result.graph;
+  if (graph === undefined) {
+    return empty;
+  }
+  const identities = createHostPathIdentityContext(props.filesystem);
+  const excluded =
+    props.temporaryTsconfig === undefined
+      ? undefined
+      : pathIdentityKey(props.temporaryTsconfig, identities);
+  const resolvedProjectRoot = path.resolve(props.projectRoot);
+  const output: string[] = [];
+  const watched: string[] = [];
+  const directories = new Set<string>();
+  // Two namespaces, deliberately not one set: candidates are the paths a
+  // delivery may stop probing, while the chain holds the directories that carry
+  // them. Sharing a set would let one silently answer for the other.
+  const seen = new Set<string>();
+  const chain = new Set<string>();
+  for (const candidates of Object.values(graph.candidates ?? {})) {
+    if (!Array.isArray(candidates)) {
+      continue;
+    }
+    for (const candidate of candidates) {
+      if (typeof candidate !== "string" || candidate.length === 0) {
+        continue;
+      }
+      const absolute = path.resolve(props.projectRoot, candidate);
+      const spelling = path.resolve(absolute);
+      if (
+        seen.has(spelling) ||
+        (excluded !== undefined &&
+          pathIdentityKey(absolute, identities) === excluded) ||
+        props.filesystem.exists(absolute)
+      ) {
+        continue;
+      }
+      seen.add(spelling);
+      // Collect the components of the lexical path, by the name each carries in
+      // its own parent. The watcher a missing path opens follows the spelling
+      // to a physical directory, so retargeting a link along the way moves the
+      // answer without touching what is watched: in a pnpm layout
+      // `node_modules/<pkg>` is exactly such a link, and reinstalling it makes
+      // a candidate appear behind a watch still looking at the old store
+      // directory. Watching `<pkg>` inside `node_modules` is what reports that.
+      //
+      // The collection stops at the project root, and a spelling that leaves
+      // the project subtree before reaching it is not claimed at all. Above
+      // that line the components are the machine's own layout rather than the
+      // project's, and watching those entries costs a generation whenever an
+      // unrelated process touches anything inside them; a candidate whose path
+      // runs outside the subtree therefore keeps the probe it always had rather
+      // than a proof this cannot complete.
+      const components: string[] = [];
+      let reachedProject = false;
+      for (
+        let child = path.dirname(spelling), parent = path.dirname(child);
+        parent !== child;
+        child = parent, parent = path.dirname(child)
+      ) {
+        if (insideProject(child, resolvedProjectRoot)) {
+          components.push(child);
+          continue;
+        }
+        // Compared through `path.relative` rather than by string, so a
+        // spelling that differs from the root only in case still counts as
+        // having arrived where the platform says it has.
+        reachedProject = path.relative(child, resolvedProjectRoot).length === 0;
+        break;
+      }
+      if (!reachedProject) {
+        continue;
+      }
+      output.push(absolute);
+      watched.push(absolute);
+      for (const component of components) {
+        if (chain.has(component)) break;
+        chain.add(component);
+        watched.push(component);
+        directories.add(path.dirname(component));
+      }
+      directories.add(path.dirname(spelling));
+    }
+  }
+  if (directories.size > NOTIFIABLE_ABSENCE_DIRECTORY_LIMIT) {
+    // Past this many distinct directories the watch registration is the more
+    // expensive half: a host that runs out of watch descriptors fails the
+    // tracker, and a failed tracker sends every delivery to complete-snapshot
+    // validation, which re-hashes the whole project. Declining to watch leaves
+    // the per-delivery probe in place, which is what this replaces and is far
+    // cheaper than that.
+    return empty;
+  }
+  output.sort();
+  watched.sort();
+  return { candidates: output, watched };
+}
+
+/**
+ * Report whether a directory lies strictly below the project root.
+ *
+ * The boundary of what a generation may watch on a candidate's behalf: what the
+ * project contains is its own layout, while the project root and everything
+ * above it belongs to the machine, which nobody retargets and which changes for
+ * reasons no generation should hear about.
+ */
+function insideProject(directory: string, projectRoot: string): boolean {
+  const relative = path.relative(
+    path.resolve(projectRoot),
+    path.resolve(directory),
+  );
+  // An empty result is the platform saying the two name the same directory,
+  // which it answers for spellings that differ only in case where the path
+  // module folds case. The root itself is not below itself, so the walk stops
+  // there rather than one level past it.
+  if (relative.length === 0) {
+    return false;
+  }
+  // `..` alone and `../` climb out, and an absolute answer means another drive
+  // or share entirely; a directory literally named `..x` does neither, which a
+  // plain prefix test would misread. The project walk's own containment check
+  // spells it the same way.
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+/**
+ * Distinct directories the absent-candidate watch may open before it declines.
+ *
+ * Sized well below the inotify per-user default so a project's own walk keeps
+ * its share, and far above the distinct `node_modules` package directories a
+ * real dependency graph produces.
+ *
+ * Counted lexically, over the parents of every watched name. A missing subtree
+ * collapses onto the one watch its nearest existing ancestor carries, so the
+ * count is an upper bound on the watches actually opened rather than their
+ * number; the bound stays sound and is merely not tight.
+ */
+const NOTIFIABLE_ABSENCE_DIRECTORY_LIMIT = 512;
+
 function isIgnoredProjectDirectory(name: string): boolean {
   return (
     name === ".git" ||
@@ -3613,6 +3975,9 @@ async function transformProject(props: {
   let tracker: TtscProjectMutationTracker | undefined;
   let retainTracker = false;
   let hostInputTracker: TtscProjectMutationTracker | undefined;
+  let candidateTracker: TtscProjectMutationTracker | undefined;
+  let retainHostInputTracker = false;
+  let retainCandidateTracker = false;
   try {
     const configured = createTransformTsconfig(props, scratchDirectory);
     const temporaryTsconfig =
@@ -3656,12 +4021,48 @@ async function transformProject(props: {
       result,
       temporaryTsconfig,
     });
+    // The generation's absent resolution candidates, which get a watcher of
+    // their own below; watching one is what lets a delivery stop probing it
+    // (samchon/ttsc#1261). The validation manifest stays built from the
+    // universal inputs alone, so nothing else about a candidate changes.
+    //
+    // Derived only where a tracker could carry it: a build-scoped adapter opens
+    // no watcher, so probing every candidate's existence here would be work
+    // whose answer nothing can read.
+    const notifiableAbsence = props.trackProjectMembership
+      ? selectNotifiableAbsentInputs({
+          filesystem: props.filesystem,
+          projectRoot,
+          result,
+          temporaryTsconfig,
+        })
+      : { candidates: [], watched: [] };
     hostInputTracker = props.trackProjectMembership
       ? await createHostInputMutationTracker(
           persistentHostInputs,
           props.filesystem,
+          // A universal input never reaches the per-input loop that consults a
+          // coverage claim: an absent one is proven by its directory listing
+          // instead, which re-resolves the spelling every delivery.
+          new Set(),
         )
       : undefined;
+    // The candidates and the directories carrying them get their own tracker,
+    // listening for renames alone. Every event that can make one of these
+    // paths appear is a rename — the file itself, or a component of the path
+    // being created, replaced, or retargeted — so nothing is given up, while a
+    // backend that reports a write below a directory as a change to that
+    // directory's entry (Windows does) would otherwise replace the generation
+    // every time a bundler wrote inside `node_modules`.
+    candidateTracker =
+      notifiableAbsence.watched.length !== 0
+        ? await createHostInputMutationTracker(
+            notifiableAbsence.watched,
+            props.filesystem,
+            new Set(notifiableAbsence.candidates),
+            "rename",
+          )
+        : undefined;
     const externalInputPaths = selectExternalInputPaths({
       filesystem: props.filesystem,
       projectRoot,
@@ -3697,9 +4098,12 @@ async function transformProject(props: {
         inputSnapshot.projectDirectories,
       ) &&
       tracker?.membershipChanged !== true &&
-      hostInputTracker?.membershipChanged !== true;
+      hostInputTracker?.membershipChanged !== true &&
+      candidateTracker?.membershipChanged !== true;
     const notificationsAvailable =
-      tracker?.failed !== true && hostInputTracker?.failed !== true;
+      tracker?.failed !== true &&
+      hostInputTracker?.failed !== true &&
+      candidateTracker?.failed !== true;
     // Overlay the in-memory source only after proving the two on-disk snapshots
     // stable; an unsaved editor buffer must not look like a compile-time race.
     const currentFileKey = toProjectKey(
@@ -3771,8 +4175,16 @@ async function transformProject(props: {
     if (notifying && hostInputTracker !== undefined) {
       cached.hostInputMutationTracker = hostInputTracker;
     }
-    retainTracker =
-      notifying && tracker !== undefined && hostInputTracker !== undefined;
+    if (notifying && candidateTracker !== undefined) {
+      cached.candidateMutationTracker = candidateTracker;
+    }
+    // Every tracker the generation published is retained, and every tracker it
+    // did not is closed below. Naming only two of the three would close a
+    // published candidate tracker the moment either of the others was absent,
+    // and that is the one tracker whose silence is read as evidence.
+    retainTracker = notifying && tracker !== undefined;
+    retainHostInputTracker = notifying && hostInputTracker !== undefined;
+    retainCandidateTracker = notifying && candidateTracker !== undefined;
     return cached;
   } finally {
     try {
@@ -3781,11 +4193,17 @@ async function transformProject(props: {
       }
     } finally {
       try {
-        if (!retainTracker && hostInputTracker !== undefined) {
+        if (!retainHostInputTracker && hostInputTracker !== undefined) {
           hostInputTracker.close();
         }
       } finally {
-        fs.rmSync(scratchDirectory, { force: true, recursive: true });
+        try {
+          if (!retainCandidateTracker && candidateTracker !== undefined) {
+            candidateTracker.close();
+          }
+        } finally {
+          fs.rmSync(scratchDirectory, { force: true, recursive: true });
+        }
       }
     }
   }
