@@ -144,8 +144,8 @@ style: |
   .narrative-node.scenarios,
   .narrative-node.storylines,
   .narrative-node.manuscripts { position: absolute; width: 25%; }
-  .narrative-node.scenarios { left: 41%; top: 25px; }
-  .narrative-node.storylines { left: 41%; top: 181px; }
+  .narrative-node.scenarios { left: 41%; top: 181px; }
+  .narrative-node.storylines { left: 41%; top: 25px; }
   .narrative-node.manuscripts { left: 72%; top: 316px; }
   .narrative-edge {
     position: absolute;
@@ -169,15 +169,14 @@ style: |
     border-right: 12px solid currentColor;
     border-bottom: 7px solid transparent;
   }
-  .narrative-edge.scenarios-foundations { top: 67px; }
-  .narrative-edge.storylines-foundations { top: 223px; }
+  .narrative-edge.scenarios-foundations { top: 223px; }
+  .narrative-edge.storylines-foundations { top: 67px; }
   .narrative-edge.storylines-scenarios {
     left: 53.5%;
     top: 109px;
     height: 72px;
     border-left: 3px solid currentColor;
   }
-  .narrative-edge.storylines-scenarios::after,
   .narrative-edge.manuscripts-foundations::after {
     content: "";
     position: absolute;
@@ -185,6 +184,15 @@ style: |
     left: -8px;
     border-right: 7px solid transparent;
     border-bottom: 12px solid currentColor;
+    border-left: 7px solid transparent;
+  }
+  .narrative-edge.storylines-scenarios::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: -8px;
+    border-top: 12px solid currentColor;
+    border-right: 7px solid transparent;
     border-left: 7px solid transparent;
   }
   .narrative-edge.settings-principles {
@@ -209,13 +217,13 @@ style: |
   }
   .narrative-edge.manuscripts-scenarios {
     left: 66%;
-    top: 67px;
+    top: 223px;
     width: 18.5%;
     border-top: 3px solid currentColor;
   }
   .narrative-edge.manuscripts-storylines {
     left: 66%;
-    top: 223px;
+    top: 67px;
     width: 18.5%;
     border-top: 3px solid currentColor;
   }
@@ -573,7 +581,7 @@ style: |
 - **Spec Driven Development**
   - Write and review only the requirements
   - AI builds everything with 100% coverage
-  - Not only programming, but also lectures
+  - Applies to programming, documents, and literature
 
 </div>
 <div class="benchmark-graphs">
@@ -617,23 +625,23 @@ style: |
 
 # Saying yes is not doing it
 
-- Six top models, given one simple rule: **none** kept it
-- Answered "understood" **10 of 10**, skipped it **10 of 10**
-- People reading the result spotted **0 of 15** honest runs
-- Made to **write down its reason**: **97%** kept it
+- Six frontier models: **0/60** actual process compliance under default framing
+- Verbal compliance in the same runs exceeded **90%**
+- At 8 constraints: about 41% passed individually, only **5.7% passed all eight**
+- The strongest model fell below **50%** whole-response success at 7 constraints
 
-<span class="note">Measured on tool logs, not on answers ([2605.01771](https://arxiv.org/abs/2605.01771))</span>
+<span class="note">Measured with tool logs and deterministic verifiers ([2605.01771](https://arxiv.org/abs/2605.01771)) ([2608.12426](https://arxiv.org/abs/2608.12426))</span>
 
 ---
 
 <!-- _class: stat-list -->
 
-# The longer it runs, the worse it gets
+# Split specs and long runs both degrade
 
-- Goal given in pieces, not at once: worse **16 of 20**
-- Long build: **14.8%** of steps done, **no project finished**
-- In **77%** of runs, code that was already right got worse
-- What is left is **2.3× longer** and **2× messier** than human work
+- Split across about 60 requests, single-shot was more faithful on **16/20** papers for Claude Code and **14/20** for Codex
+- Of 15 agents on 36 iterative problems, none finished one end-to-end; best strict rate: **14.8%**
+- Structural erosion rose in <strong>77%</strong> of trajectories; verbosity in **75.5%**
+- Versus 473 open-source Python repositories: **2.3× more verbose, 2× more eroded**
 
 <span class="note">Two 2026 coding-agent benchmarks ([2603.17104](https://arxiv.org/abs/2603.17104)) ([2603.24755](https://arxiv.org/abs/2603.24755))</span>
 
@@ -811,7 +819,7 @@ export function CouponStackingNotice(props: IProps): JSX.Element;
 | Loop      | Restart every round | Follow the tag list   |
 | Omissions | Search manually     | Compiler reports them |
 
-> **The compiler handles omissions. Humans handle falsehoods.**
+> **The compiler catches omissions. Review catches falsehoods.**
 
 ---
 
@@ -1021,14 +1029,73 @@ Plain coverage falls with scope. **Evidence remains at 100%.**
 
 ---
 
+# Method D: Hand over principles only
+
+- The project already exists, so **a full document hierarchy is hard to introduce**
+- You want to **develop directly** instead of delegating requirements and specifications
+- You are not ready to design the whole graph yet
+
+> Start with one `docs/principles.md` and one claim.
+
+---
+
+# Every principle must be followed
+
+```md
+## Do not hardcode {#no-hardcoding}
+Derive behavior from inputs and models. Never special-case a fixture.
+
+## Do not monkey patch {#no-monkey-patching}
+Use public extension points. Never replace prototypes or module state.
+
+## Use the conventional solution {#conventional-solution}
+Avoid unmeasured optimization. Prefer standard structures and clear algorithms.
+
+## Fix the root cause {#fix-the-root-cause}
+Do not route around one visible failure. Trace the cause and solve the whole class.
+```
+
+---
+
+# Every function answers every rule
+
+- Each selected function checks **every H2 rule**
+- Every answer records **how and why** the rule was followed
+- "Not applicable" can be closed as an escape hatch
+- One missing answer becomes **a compile error**
+
+> Add one rule, and every function immediately gains one obligation.
+
+---
+
+# Every answer explains how
+
+```ts
+/**
+ * @evidence docs/principles.md#no-hardcoding
+ *   Builds the lookup from registered handlers, with no case-specific branch.
+ * @evidence docs/principles.md#no-monkey-patching
+ *   Uses the public adapter without replacing prototypes or module state.
+ * @evidence docs/principles.md#conventional-solution
+ *   Uses a standard Map and linear pass, with no speculative index or cache.
+ * @evidence docs/principles.md#fix-the-root-cause
+ *   Rejects invalid names at registration instead of retrying failed lookups.
+ */
+export function resolveHandler(name: string): Handler;
+```
+
+Both the target and a non-empty reason are required. Miss one and the build breaks.
+
+---
+
 <!-- _class: dark -->
 
 # Summary
 
 - Missing specification coverage becomes **a compile error**
-- Requirements are **the handoff**
+- Requirements are **the handoff**, and a principles list is enough to start
 - Coverage rises from **51.6–85.5% to 100%**
-- Human review checks **citation truth**
+- Review checks **the truth of the evidence**
 
 ---
 
@@ -1101,8 +1168,8 @@ Plain coverage falls with scope. **Evidence remains at 100%.**
 <div class="narrative-edge settings-principles"></div>
 <div class="narrative-node settings">Settings</div>
 </div>
-<div class="narrative-node scenarios">Scenarios</div>
 <div class="narrative-node storylines">Storylines</div>
+<div class="narrative-node scenarios">Scenarios</div>
 <div class="narrative-node manuscripts">Manuscripts</div>
 <div class="narrative-edge to-foundations scenarios-foundations"></div>
 <div class="narrative-edge to-foundations storylines-foundations"></div>

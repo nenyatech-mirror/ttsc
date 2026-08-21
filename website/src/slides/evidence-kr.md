@@ -144,8 +144,8 @@ style: |
   .narrative-node.scenarios,
   .narrative-node.storylines,
   .narrative-node.manuscripts { position: absolute; width: 25%; }
-  .narrative-node.scenarios { left: 41%; top: 25px; }
-  .narrative-node.storylines { left: 41%; top: 181px; }
+  .narrative-node.scenarios { left: 41%; top: 181px; }
+  .narrative-node.storylines { left: 41%; top: 25px; }
   .narrative-node.manuscripts { left: 72%; top: 316px; }
   .narrative-edge {
     position: absolute;
@@ -169,15 +169,14 @@ style: |
     border-right: 12px solid currentColor;
     border-bottom: 7px solid transparent;
   }
-  .narrative-edge.scenarios-foundations { top: 67px; }
-  .narrative-edge.storylines-foundations { top: 223px; }
+  .narrative-edge.scenarios-foundations { top: 223px; }
+  .narrative-edge.storylines-foundations { top: 67px; }
   .narrative-edge.storylines-scenarios {
     left: 53.5%;
     top: 109px;
     height: 72px;
     border-left: 3px solid currentColor;
   }
-  .narrative-edge.storylines-scenarios::after,
   .narrative-edge.manuscripts-foundations::after {
     content: "";
     position: absolute;
@@ -185,6 +184,15 @@ style: |
     left: -8px;
     border-right: 7px solid transparent;
     border-bottom: 12px solid currentColor;
+    border-left: 7px solid transparent;
+  }
+  .narrative-edge.storylines-scenarios::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: -8px;
+    border-top: 12px solid currentColor;
+    border-right: 7px solid transparent;
     border-left: 7px solid transparent;
   }
   .narrative-edge.settings-principles {
@@ -209,13 +217,13 @@ style: |
   }
   .narrative-edge.manuscripts-scenarios {
     left: 66%;
-    top: 67px;
+    top: 223px;
     width: 18.5%;
     border-top: 3px solid currentColor;
   }
   .narrative-edge.manuscripts-storylines {
     left: 66%;
-    top: 223px;
+    top: 67px;
     width: 18.5%;
     border-top: 3px solid currentColor;
   }
@@ -573,7 +581,7 @@ style: |
 - **Spec Driven Development**
   - 사람은 요구사항만 쓰고 검토한다
   - 나머지는 AI가 100% 커버리지로 만든다
-  - 프로그래밍뿐 아니라 강의 자료에도 적용된다
+  - 프로그래밍과 문서/문학에 적용된다
 
 </div>
 <div class="benchmark-graphs">
@@ -617,23 +625,23 @@ style: |
 
 # 알겠다고 답하는 것과 지키는 것은 다르다
 
-- 최상위 모델 6종에 규칙 하나를 줬더니 **아무도** 지키지 않았다
-- **10번 중 10번** 알겠다고 답하고, **10번 중 10번** 건너뛰었다
-- 결과물만 본 사람은 정직한 실행을 **15건 중 0건** 골라냈다
-- <strong>이유를 적게 했더니 97%</strong>가 지켰다
+- 기본 조건에서 프런티어 모델 6종의 실제 절차 준수율은 **60건 중 0건**이었다
+- 같은 실행에서 말로 답한 준수율은 **90% 이상**이었다
+- 규칙 8개 조건에서는 개별 준수율이 약 41%여도 <strong>전부 지킨 응답은 5.7%</strong>였다
+- 최상위 모델도 규칙 7개부터 전체 준수율이 **50% 아래**로 떨어졌다
 
-<span class="note">답변이 아니라 도구 실행 로그로 측정했다 ([2605.01771](https://arxiv.org/abs/2605.01771))</span>
+<span class="note">도구 실행 로그와 결정론적 검사기로 측정했다 ([2605.01771](https://arxiv.org/abs/2605.01771)) ([2608.12426](https://arxiv.org/abs/2608.12426))</span>
 
 ---
 
 <!-- _class: stat-list -->
 
-# 오래 돌릴수록 나빠진다
+# 명세가 쪼개지고 작업이 길어지면 나빠진다
 
-- 목표를 한 번에 안 주고 쪼개 줬더니 **20건 중 16건**이 더 나빴다
-- 장기 작업에서 단계 **14.8%** 완료, **끝낸 프로젝트는 없음**
-- 실행의 <strong>77%</strong>에서 이미 맞던 코드가 나빠졌다
-- 남은 코드는 사람 것보다 **2.3배 길고 2배 지저분하다**
+- 명세를 약 60개 요청으로 나누면 일괄 전달보다 충실도가 낮았다: Claude Code **16/20**, Codex **14/20**
+- 15개 에이전트 중 누구도 36개 반복 확장 문제를 끝까지 풀지 못했다. 최고 엄격 통과율은 <strong>14.8%</strong>였다
+- 구조 침식은 실행 궤적의 <strong>77%</strong>, 장황성은 <strong>75.5%</strong>에서 증가했다
+- 오픈소스 Python 저장소 473개보다 에이전트 코드는 **2.3배 장황하고 2배 더 침식**됐다
 
 <span class="note">2026년 코딩 에이전트 벤치마크 두 편 ([2603.17104](https://arxiv.org/abs/2603.17104)) ([2603.24755](https://arxiv.org/abs/2603.24755))</span>
 
@@ -811,7 +819,7 @@ export function CouponStackingNotice(props: IProps): JSX.Element;
 | 루프 | 매 회차 재시작 | 태그 목록만     |
 | 누락 | 직접 찾는다    | 컴파일러가 보고 |
 
-> **누락은 컴파일러가, 거짓은 사람이 잡는다.**
+> **누락은 컴파일러가, 거짓은 리뷰가 잡는다.**
 
 ---
 
@@ -1021,14 +1029,73 @@ Plain은 규모가 커질수록 커버리지가 떨어진다. **Evidence는 100%
 
 ---
 
+# 방법 D: 원칙만 건넨다
+
+- 기존 프로젝트라 **문서 계층 전체를 도입하기 어렵다**
+- 요구사항과 설계 명세는 위임하지 않고 **직접 개발하고 싶다**
+- 그래프 전체를 설계할 준비는 아직 안 됐다
+
+> `docs/principles.md` 하나와 claim 하나로 시작한다.
+
+---
+
+# 모든 원칙을 반드시 준수한다
+
+```md
+## 하드코딩하지 마라 {#no-hardcoding}
+입력과 모델에서 동작을 도출하고 특정 사례를 예외 처리하지 않는다.
+
+## 몽키 패칭하지 마라 {#no-monkey-patching}
+공개된 확장 지점을 쓰고 프로토타입이나 모듈 상태를 바꾸지 않는다.
+
+## 보편적인 정석으로 구현하라 {#conventional-solution}
+측정 없는 과최적화를 피하고 표준 자료구조와 명료한 알고리즘을 우선한다.
+
+## 문제를 본질적으로 해결하라 {#fix-the-root-cause}
+눈앞의 실패 사례만 우회하지 말고 원인을 추적해 같은 부류의 문제 전체를 해결한다.
+```
+
+---
+
+# 모든 함수가 모든 원칙에 답한다
+
+- 선택된 함수마다 **H2 원칙 전부**를 확인한다
+- 각 답에는 원칙을 지킨 **방법과 이유**를 남긴다
+- "해당 없음"으로 빠져나가지 못하게 할 수 있다
+- 한 항목이라도 답이 없으면 **컴파일 에러**가 된다
+
+> 원칙을 하나 추가하면 모든 함수에 새 의무가 즉시 생긴다.
+
+---
+
+# 모든 답은 어떻게 지켰는지 설명한다
+
+```ts
+/**
+ * @evidence docs/principles.md#no-hardcoding
+ *   등록된 핸들러로 조회표를 만들며 특정 사례를 분기하지 않는다.
+ * @evidence docs/principles.md#no-monkey-patching
+ *   공개 어댑터를 쓰며 프로토타입이나 모듈 상태를 바꾸지 않는다.
+ * @evidence docs/principles.md#conventional-solution
+ *   표준 Map과 선형 순회를 쓰며 추측성 인덱스나 캐시를 두지 않는다.
+ * @evidence docs/principles.md#fix-the-root-cause
+ *   핸들러 등록 단계에서 잘못된 이름을 차단해 조회 실패만 재시도하지 않는다.
+ */
+export function resolveHandler(name: string): Handler;
+```
+
+대상과 비어 있지 않은 이유가 모두 필요하다. 하나라도 빠지면 빌드가 깨진다.
+
+---
+
 <!-- _class: dark -->
 
 # 요약
 
 - 명세 커버리지 누락은 **컴파일 에러**가 된다
-- 요구사항이 **인계 지점**이다
+- 요구사항이 **인계 지점**이고, 원칙 목록만으로도 시작할 수 있다
 - 커버리지가 **51.6–85.5%에서 100%로** 오른다
-- 사람의 검토는 **인용의 진위**를 본다
+- 리뷰는 **증거의 진실성**을 본다
 
 ---
 
@@ -1101,8 +1168,8 @@ Plain은 규모가 커질수록 커버리지가 떨어진다. **Evidence는 100%
 <div class="narrative-edge settings-principles"></div>
 <div class="narrative-node settings">설정</div>
 </div>
-<div class="narrative-node scenarios">시나리오</div>
 <div class="narrative-node storylines">스토리라인</div>
+<div class="narrative-node scenarios">시나리오</div>
 <div class="narrative-node manuscripts">원고</div>
 <div class="narrative-edge to-foundations scenarios-foundations"></div>
 <div class="narrative-edge to-foundations storylines-foundations"></div>
